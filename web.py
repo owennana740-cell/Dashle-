@@ -1,7 +1,8 @@
 import os
 import io
+import base64
 from flask import Flask, request, render_template_string, redirect, url_for, session, jsonify
-from app import traiter_message
+from app import traiter_message, traiter_message_image
 from history import charger_conversations, sauvegarder_conversations
 
 try:
@@ -85,6 +86,8 @@ if ('serviceWorker' in navigator) {
 </div>
 
 <form class="bas" id="form-message" autocomplete="off">
+  <input type="file" id="image-input" accept="image/*" style="display:none;">
+  <button type="button" id="btn-attach" style="background:none;border:none;font-size:20px;cursor:pointer;flex-shrink:0;" onclick="document.getElementById('image-input').click();">📎</button>
   <textarea id="message" name="message" rows="1" placeholder="Écris à Dashle..." required></textarea>
   <button class="envoyer" type="submit" id="btn-envoyer">&#10148;</button>
 </form>
@@ -94,6 +97,10 @@ const chat = document.getElementById('chat');
 const form = document.getElementById('form-message');
 const champ = document.getElementById('message');
 const btnEnvoyer = document.getElementById('btn-envoyer');
+let fichierImage = null;
+document.getElementById('image-input').addEventListener('change', function(e) {
+  fichierImage = e.target.files[0] || null;
+});
 
 function bloquerEnvoi(dureeSecondes) {
   champ.disabled = true;
@@ -151,6 +158,29 @@ function retirerReflexion() {
 form.addEventListener('submit', async function(e) {
   e.preventDefault();
   const texte = champ.value.trim();
+  if (!texte && !fichierImage) return;
+
+  if (fichierImage) {
+    ajouterMessage(texte || '📷 Image envoyée', 'user');
+    champ.value = '';
+    champ.style.height = 'auto';
+    afficherReflexion();
+    const formData = new FormData();
+    formData.append('message', texte);
+    formData.append('image', fichierImage);
+    try {
+      const res = await fetch("{{ url_for('repondre_image') }}", { method: 'POST', body: formData });
+      const data = await res.json();
+      retirerReflexion();
+      ajouterMessage(data.reponse, 'bot');
+    } catch (err) {
+      retirerReflexion();
+      ajouterMessage("Erreur d'envoi de l'image. Réessaie.", 'bot');
+    }
+    fichierImage = null;
+    document.getElementById('image-input').value = '';
+    return;
+  }
   if (!texte) return;
 
   ajouterMessage(texte, 'user');
@@ -261,6 +291,26 @@ def repondre():
     ajouter_message(conversations, index, reponse, "bot")
 
     return jsonify({"reponse": reponse})
+
+@app.route("/repondre_image", methods=["POST"])
+def repondre_image():
+    conversations, index = _conv_courante()
+    message = request.form.get("message", "").strip()
+    fichier = request.files.get("image")
+    if not fichier:
+        return jsonify({"reponse": "Aucune image reçue."})
+
+    image_bytes = fichier.read()
+    image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+    mime_type = fichier.mimetype or "image/jpeg"
+
+    ajouterMessage_texte = message or "[Image envoyée]"
+    ajouter_message(conversations, index, ajouterMessage_texte, "user")
+    reponse = traiter_message_image(message, image_b64, mime_type)
+    ajouter_message(conversations, index, reponse, "bot")
+
+    return jsonify({"reponse": reponse})
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))

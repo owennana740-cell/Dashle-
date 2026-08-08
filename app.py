@@ -1,6 +1,6 @@
 from dotenv import load_dotenv
 load_dotenv()
-from brain import reflechir
+from brain import reflechir, demander_a_lia_image
 from memory import retenir, se_souvenir
 from learn import apprendre
 
@@ -40,6 +40,10 @@ def traiter_message(message):
 
 # Ce bloc ne s'exécute QUE si tu lances app.py directement (mode console).
 # Il ne se déclenche pas quand interface.py importe traiter_message.
+def traiter_message_image(message, image_b64, mime_type):
+    return demander_a_lia_image(message, image_b64, mime_type)
+
+
 if __name__ == "__main__":
     print("Bonjour, je suis Dashle, ton IA personnelle.")
     while True:

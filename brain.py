@@ -71,6 +71,42 @@ def demander_a_lia(message):
         return "ERREUR RÉELLE : " + str(e)
 
 
+def demander_a_lia_image(message, image_b64, mime_type):
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        "gemini-3.5-flash-lite:generateContent?key=" + CLE_API
+    )
+    corps = {
+        "system_instruction": {
+            "parts": [{
+                "text": "Tu es Dashle, une IA personnelle créée par Owen. "
+                        "Ne dis jamais que tu es Gemini ou que tu as été créé par Google. "
+                        "Réponds toujours en tant que Dashle."
+            }]
+        },
+        "contents": [{
+            "parts": [
+                {"text": message or "Décris cette image."},
+                {"inline_data": {"mime_type": mime_type, "data": image_b64}}
+            ]
+        }]
+    }
+    try:
+        reponse = _session.post(url, json=corps, timeout=30)
+        reponse.raise_for_status()
+        resultat = reponse.json()
+        texte = resultat["candidates"][0]["content"]["parts"][0]["text"]
+        return nettoyer_reponse(texte)
+    except requests.exceptions.HTTPError as e:
+        code = e.response.status_code if e.response is not None else None
+        if code == 429:
+            return "Le quota de Dashle est dépassé pour le moment. Réessaie dans quelques minutes."
+        detail = e.response.text if e.response is not None else str(e)
+        return "ERREUR HTTP " + str(code) + " : " + detail
+    except Exception as e:
+        return "ERREUR RÉELLE : " + str(e)
+
+
 def reflechir(message):
     message_lower = message.lower().strip()
     connaissances = charger_connaissances()
