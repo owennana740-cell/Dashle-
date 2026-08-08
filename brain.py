@@ -31,9 +31,9 @@ def charger_connaissances():
 
 def nettoyer_reponse(texte):
     """Retire le Markdown brut (**, ###, *, ---, etc.) que Gemini renvoie parfois."""
-    texte = re.sub(r"#{1,6}\s*", "", texte)          # titres ###
-    texte = re.sub(r"\*\*(.*?)\*\*", r"\1", texte)    # gras **texte**
-    texte = re.sub(r"\*(.*?)\*", r"\1", texte)        # italique *texte*
+    texte = re.sub(r"#{1,6}\s*", "", texte)  # titres ###
+    texte = re.sub(r"\*\*(.*?)\*\*", r"\1", texte)  # gras **texte**
+    texte = re.sub(r"\*(.*?)\*", r"\1", texte)  # italique *texte*
     texte = re.sub(r"^-{3,}$", "", texte, flags=re.MULTILINE)  # ---
     texte = re.sub(r"^\s*[-*]\s+", "- ", texte, flags=re.MULTILINE)  # listes
     return texte.strip()
@@ -42,9 +42,16 @@ def nettoyer_reponse(texte):
 def demander_a_lia(message):
     url = (
         "https://generativelanguage.googleapis.com/v1beta/models/"
-        "gemini-2.5-flash:generateContent?key=" + CLE_API
+        "gemini-2.5-flash-lite:generateContent?key=" + CLE_API
     )
     corps = {
+        "system_instruction": {
+            "parts": [{
+                "text": "Tu es Dashle, une IA personnelle créée par Owen. "
+                        "Ne dis jamais que tu es Gemini ou que tu as été créé par Google. "
+                        "Réponds toujours en tant que Dashle."
+            }]
+        },
         "contents": [{"parts": [{"text": message}]}]
     }
 
