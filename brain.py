@@ -42,7 +42,7 @@ def nettoyer_reponse(texte):
 def demander_a_lia(message):
     url = (
         "https://generativelanguage.googleapis.com/v1beta/models/"
-        "gemini-3.6-flash:generateContent?key=" + CLE_API
+        "gemini-2.5-flash:generateContent?key=" + CLE_API
     )
     corps = {
         "contents": [{"parts": [{"text": message}]}]
