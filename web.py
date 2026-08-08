@@ -20,6 +20,14 @@ PAGE = """
 <meta charset="UTF-8">
 <title>Dashle</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="manifest" href="/static/manifest.json">
+<meta name="theme-color" content="#10A37F">
+<script>
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/static/service-worker.js');
+}
+</script>
 <style>
   * { box-sizing: border-box; }
   body { font-family: 'Segoe UI', sans-serif; margin: 0; background: #fff; height: 100vh; display: flex; flex-direction: column; }
