@@ -83,13 +83,33 @@ if ('serviceWorker' in navigator) {
 
 <form class="bas" id="form-message" autocomplete="off">
   <textarea id="message" name="message" rows="1" placeholder="Écris à Dashle..." required></textarea>
-  <button class="envoyer" type="submit">&#10148;</button>
+  <button class="envoyer" type="submit" id="btn-envoyer">&#10148;</button>
 </form>
 
 <script>
 const chat = document.getElementById('chat');
 const form = document.getElementById('form-message');
 const champ = document.getElementById('message');
+const btnEnvoyer = document.getElementById('btn-envoyer');
+
+function bloquerEnvoi(dureeSecondes) {
+  champ.disabled = true;
+  btnEnvoyer.disabled = true;
+  let restant = dureeSecondes;
+  const placeholderOriginal = champ.placeholder;
+  champ.placeholder = 'Patiente ' + restant + 's...';
+  const interval = setInterval(function() {
+    restant--;
+    if (restant <= 0) {
+      clearInterval(interval);
+      champ.disabled = false;
+      btnEnvoyer.disabled = false;
+      champ.placeholder = placeholderOriginal;
+    } else {
+      champ.placeholder = 'Patiente ' + restant + 's...';
+    }
+  }, 1000);
+}
 
 // Toujours descendre en bas au chargement
 chat.scrollTop = chat.scrollHeight;
@@ -144,6 +164,9 @@ form.addEventListener('submit', async function(e) {
     const data = await res.json();
     retirerReflexion();
     ajouterMessage(data.reponse, 'bot');
+    if (data.reponse && data.reponse.toLowerCase().includes('quota')) {
+      bloquerEnvoi(30);
+    }
   } catch (err) {
     retirerReflexion();
     ajouterMessage("Erreur de connexion au serveur. Réessaie.", 'bot');
