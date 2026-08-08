@@ -71,7 +71,10 @@ if ('serviceWorker' in navigator) {
   <h2>Dashle</h2>
   <a class="nouvelle" href="{{ url_for('nouvelle_conv') }}">+ Nouvelle conversation</a>
   {% for i, conv in enumerate(conversations) %}
-    <a href="{{ url_for('charger_conv', i=i) }}">{{ conv.titre }}</a>
+    <div style="display:flex;align-items:center;">
+      <a href="{{ url_for('charger_conv', i=i) }}" style="flex:1;">{{ conv.titre }}</a>
+      <a href="{{ url_for('supprimer_conv', i=i) }}" onclick="return confirm('Supprimer cette conversation ?');" style="color:#c00;padding:8px 12px;text-decoration:none;">&times;</a>
+    </div>
   {% endfor %}
 </div>
 
@@ -227,6 +230,20 @@ def charger_conv(i):
     conversations = charger_conversations()
     if 0 <= i < len(conversations):
         session["index"] = i
+    return redirect(url_for("accueil"))
+
+@app.route("/supprimer_conv/<int:i>")
+def supprimer_conv(i):
+    conversations = charger_conversations()
+    if 0 <= i < len(conversations):
+        del conversations[i]
+        if not conversations:
+            conversations = [{"titre": "Nouvelle conversation", "messages": []}]
+        sauvegarder_conversations(conversations)
+        index = session.get("index", 0)
+        if index >= len(conversations):
+            index = len(conversations) - 1
+        session["index"] = index
     return redirect(url_for("accueil"))
 
 
