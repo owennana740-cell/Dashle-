@@ -87,7 +87,7 @@ if ('serviceWorker' in navigator) {
 
 <form class="bas" id="form-message" autocomplete="off">
   <input type="file" id="image-input" accept="image/*" style="display:none;">
-  <button type="button" id="btn-attach" style="background:none;border:none;font-size:20px;cursor:pointer;flex-shrink:0;" onclick="document.getElementById('image-input').click();">📎</button>
+  <button type="button" id="btn-attach" style="background:none;border:none;cursor:pointer;flex-shrink:0;padding:0;width:34px;height:34px;" onclick="document.getElementById('image-input').click();"><img src="{{ url_for('static', filename='icon-attach.png') }}" style="width:34px;height:34px;display:block;border-radius:8px;"></button>
   <textarea id="message" name="message" rows="1" placeholder="Écris à Dashle..." required></textarea>
   <button class="envoyer" type="submit" id="btn-envoyer">&#10148;</button>
 </form>
@@ -260,6 +260,20 @@ def charger_conv(i):
     conversations = charger_conversations()
     if 0 <= i < len(conversations):
         session["index"] = i
+    return redirect(url_for("accueil"))
+
+@app.route("/supprimer_conv/<int:i>")
+def supprimer_conv(i):
+    conversations = charger_conversations()
+    if 0 <= i < len(conversations):
+        del conversations[i]
+        if not conversations:
+            conversations = [{"titre": "Nouvelle conversation", "messages": []}]
+        sauvegarder_conversations(conversations)
+        index = session.get("index", 0)
+        if index >= len(conversations):
+            index = len(conversations) - 1
+        session["index"] = index
     return redirect(url_for("accueil"))
 
 @app.route("/supprimer_conv/<int:i>")
