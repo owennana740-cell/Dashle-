@@ -276,20 +276,6 @@ def supprimer_conv(i):
         session["index"] = index
     return redirect(url_for("accueil"))
 
-@app.route("/supprimer_conv/<int:i>")
-def supprimer_conv(i):
-    conversations = charger_conversations()
-    if 0 <= i < len(conversations):
-        del conversations[i]
-        if not conversations:
-            conversations = [{"titre": "Nouvelle conversation", "messages": []}]
-        sauvegarder_conversations(conversations)
-        index = session.get("index", 0)
-        if index >= len(conversations):
-            index = len(conversations) - 1
-        session["index"] = index
-    return redirect(url_for("accueil"))
-
 
 @app.route("/repondre", methods=["POST"])
 def repondre():
