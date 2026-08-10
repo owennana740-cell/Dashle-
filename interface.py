@@ -21,6 +21,19 @@ def nettoyer_pour_voix(texte):
         propre = propre.replace(s, "")
     return propre
 
+def generer_audio_web(texte):
+    """Genere un mp3 dans static/audio pour lecture cote navigateur (sans pygame)."""
+    try:
+        texte_propre = nettoyer_pour_voix(texte)
+        tts = gTTS(text=texte_propre, lang="fr")
+        dossier = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "audio")
+        os.makedirs(dossier, exist_ok=True)
+        chemin = os.path.join(dossier, "dashle_voix.mp3")
+        tts.save(chemin)
+        return True
+    except Exception:
+        return False
+
 def parler(texte):
     if not VOIX_DISPONIBLE:
         return

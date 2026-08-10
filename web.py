@@ -197,6 +197,10 @@ form.addEventListener('submit', async function(e) {
     const data = await res.json();
     retirerReflexion();
     ajouterMessage(data.reponse, 'bot');
+    if (data.audio) {
+      const son = new Audio(data.audio + '?t=' + Date.now());
+      son.play().catch(function(e) { console.log('Lecture audio bloquee:', e); });
+    }
     if (data.reponse && data.reponse.toLowerCase().includes('quota')) {
       bloquerEnvoi(30);
     }
@@ -290,7 +294,15 @@ def repondre():
     reponse = traiter_message(message, conversations[index]["messages"])
     ajouter_message(conversations, index, reponse, "bot")
 
-    return jsonify({"reponse": reponse})
+    audio_url = None
+    try:
+        from interface import generer_audio_web
+        if generer_audio_web(reponse):
+            audio_url = url_for("static", filename="audio/dashle_voix.mp3")
+    except Exception:
+        audio_url = None
+
+    return jsonify({"reponse": reponse, "audio": audio_url})
 
 @app.route("/repondre_image", methods=["POST"])
 def repondre_image():
