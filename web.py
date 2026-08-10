@@ -287,7 +287,7 @@ def repondre():
         return jsonify({"reponse": ""})
 
     ajouter_message(conversations, index, message, "user")
-    reponse = traiter_message(message)
+    reponse = traiter_message(message, conversations[index]["messages"])
     ajouter_message(conversations, index, reponse, "bot")
 
     return jsonify({"reponse": reponse})

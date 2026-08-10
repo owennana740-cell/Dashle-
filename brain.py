@@ -39,11 +39,20 @@ def nettoyer_reponse(texte):
     return texte.strip()
 
 
-def demander_a_lia(message):
+def demander_a_lia(message, historique=None):
     url = (
         "https://generativelanguage.googleapis.com/v1beta/models/"
         "gemini-3.5-flash-lite:generateContent?key=" + CLE_API
     )
+
+    contents = []
+    if historique:
+        for msg in historique:
+            role = "model" if msg.get("auteur") == "bot" else "user"
+            contents.append({"role": role, "parts": [{"text": msg.get("texte", "")}]})
+    else:
+        contents.append({"role": "user", "parts": [{"text": message}]})
+
     corps = {
         "system_instruction": {
             "parts": [{
@@ -52,7 +61,7 @@ def demander_a_lia(message):
                         "Réponds toujours en tant que Dashle."
             }]
         },
-        "contents": [{"parts": [{"text": message}]}]
+        "contents": contents
     }
 
     try:
@@ -107,7 +116,7 @@ def demander_a_lia_image(message, image_b64, mime_type):
         return "ERREUR RÉELLE : " + str(e)
 
 
-def reflechir(message):
+def reflechir(message, historique=None):
     message_lower = message.lower().strip()
     connaissances = charger_connaissances()
 
@@ -122,4 +131,4 @@ def reflechir(message):
         if question.strip().lower() == message_lower:
             return reponse
 
-    return demander_a_lia(message)
+    return demander_a_lia(message, historique)

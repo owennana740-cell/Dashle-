@@ -5,7 +5,7 @@ from memory import retenir, se_souvenir
 from learn import apprendre
 
 
-def traiter_message(message):
+def traiter_message(message, historique=None):
     message_lower = message.lower()
 
     if message_lower.startswith("retiens que"):
@@ -35,7 +35,7 @@ def traiter_message(message):
         return se_souvenir("information")
 
     else:
-        return reflechir(message)
+        return reflechir(message, historique)
 
 
 # Ce bloc ne s'exécute QUE si tu lances app.py directement (mode console).
