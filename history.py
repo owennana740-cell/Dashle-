@@ -1,16 +1,12 @@
-import json
-import os
+from core.utils import BASE_DIR, ecrire_json_atomiquement, lire_json
 
-FICHIER = "conversations.json"
+FICHIER = BASE_DIR / "conversations.json"
+
+
 def charger_conversations():
-    if os.path.exists(FICHIER):
-        with open(FICHIER, "r", encoding="utf-8") as f:
-            try:
-                return json.load(f)
-            except json.JSONDecodeError:
-                return []
-    return []
+    conversations = lire_json(FICHIER, [])
+    return conversations if isinstance(conversations, list) else []
+
 
 def sauvegarder_conversations(conversations):
-    with open(FICHIER, "w", encoding="utf-8") as f:
-        json.dump(conversations, f, indent=4, ensure_ascii=False)
+    ecrire_json_atomiquement(FICHIER, conversations)

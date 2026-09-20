@@ -5,7 +5,7 @@ from memory import retenir, se_souvenir
 from learn import apprendre
 
 
-def traiter_message(message, historique=None):
+def traiter_message(message, historique=None, user_id=None):
     message_lower = message.lower()
 
     if message_lower.startswith("retiens que"):
@@ -13,29 +13,32 @@ def traiter_message(message, historique=None):
 
         if "mon nom est" in texte.lower():
             valeur = texte.lower().replace("mon nom est", "").strip()
-            retenir("nom", valeur)
+            retenir("nom", valeur, user_id)
             return "D'accord, j'ai retenu ton nom."
         else:
-            retenir("information", texte)
+            retenir("information", texte, user_id)
             return "D'accord, j'ai enregistré cette information."
 
     elif message_lower.startswith("apprends que"):
         contenu = message[len("apprends que"):].strip()
         if "=" in contenu:
             mot_cle, reponse = contenu.split("=", 1)
-            apprendre(mot_cle.strip().lower(), reponse.strip())
+            if user_id is None:
+                apprendre(mot_cle.strip().lower(), reponse.strip())
+            else:
+                retenir(mot_cle.strip().lower(), reponse.strip(), user_id)
             return "J'ai appris ça, merci !"
         else:
             return "Utilise le format : apprends que question = réponse"
 
     elif "quel est mon nom" in message_lower or "mon nom" in message_lower:
-        return se_souvenir("nom")
+        return se_souvenir("nom", user_id)
 
     elif "que retiens" in message_lower:
-        return se_souvenir("information")
+        return se_souvenir("information", user_id)
 
     else:
-        return reflechir(message, historique)
+        return reflechir(message, historique, user_id)
 
 
 # Ce bloc ne s'exécute QUE si tu lances app.py directement (mode console).

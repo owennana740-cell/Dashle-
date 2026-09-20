@@ -2,6 +2,7 @@ import json
 import os
 import re
 import requests
+from core.utils import BASE_DIR, lire_json
 from memory import se_souvenir_tout
 from config import CLE_API
 
@@ -16,17 +17,21 @@ _session = requests.Session()
 def charger_connaissances():
     global _cache_connaissances, _cache_mtime
 
-    chemin = os.path.join("data", "knowledge.json")
-    mtime_actuel = os.path.getmtime(chemin)
+    chemin = BASE_DIR / "data" / "knowledge.json"
+    try:
+        mtime_actuel = os.path.getmtime(chemin)
+    except OSError:
+        return {}
 
     # Si le fichier n'a pas changé depuis le dernier chargement, on renvoie le cache
     if _cache_connaissances is not None and _cache_mtime == mtime_actuel:
         return _cache_connaissances
 
-    with open(chemin, "r", encoding="utf-8") as fichier:
-        _cache_connaissances = json.load(fichier)
-        _cache_mtime = mtime_actuel
-        return _cache_connaissances
+    _cache_connaissances = lire_json(chemin, {})
+    if not isinstance(_cache_connaissances, dict):
+        _cache_connaissances = {}
+    _cache_mtime = mtime_actuel
+    return _cache_connaissances
 
 
 def nettoyer_reponse(texte):
@@ -40,6 +45,9 @@ def nettoyer_reponse(texte):
 
 
 def demander_a_lia(message, historique=None):
+    if not CLE_API:
+        return "La clé Gemini n'est pas configurée. Ajoute GEMINI_API_KEY dans le fichier .env."
+
     url = (
         "https://generativelanguage.googleapis.com/v1beta/models/"
         "gemini-3.5-flash-lite:generateContent?key=" + CLE_API
@@ -74,13 +82,15 @@ def demander_a_lia(message, historique=None):
         code = e.response.status_code if e.response is not None else None
         if code == 429:
             return "Le quota de Dashle est dépassé pour le moment. Réessaie dans quelques minutes."
-        detail = e.response.text if e.response is not None else str(e)
-        return "ERREUR HTTP " + str(code) + " : " + detail
+        return "Le service IA est momentanément indisponible. Réessaie dans quelques instants."
     except Exception as e:
-        return "ERREUR RÉELLE : " + str(e)
+        return "Impossible de joindre le service IA. Vérifie la connexion puis réessaie."
 
 
 def demander_a_lia_image(message, image_b64, mime_type):
+    if not CLE_API:
+        return "La clé Gemini n'est pas configurée. Ajoute GEMINI_API_KEY dans le fichier .env."
+
     url = (
         "https://generativelanguage.googleapis.com/v1beta/models/"
         "gemini-3.5-flash-lite:generateContent?key=" + CLE_API
@@ -110,13 +120,12 @@ def demander_a_lia_image(message, image_b64, mime_type):
         code = e.response.status_code if e.response is not None else None
         if code == 429:
             return "Le quota de Dashle est dépassé pour le moment. Réessaie dans quelques minutes."
-        detail = e.response.text if e.response is not None else str(e)
-        return "ERREUR HTTP " + str(code) + " : " + detail
+        return "Le service IA est momentanément indisponible. Réessaie dans quelques instants."
     except Exception as e:
-        return "ERREUR RÉELLE : " + str(e)
+        return "Impossible de joindre le service IA. Vérifie la connexion puis réessaie."
 
 
-def reflechir(message, historique=None):
+def reflechir(message, historique=None, user_id=None):
     message_lower = message.lower().strip()
     connaissances = charger_connaissances()
 
@@ -126,7 +135,7 @@ def reflechir(message, historique=None):
         if question.strip().lower() == message_lower:
             return reponse
 
-    appris = se_souvenir_tout()
+    appris = se_souvenir_tout(user_id)
     for question, reponse in appris.items():
         if question.strip().lower() == message_lower:
             return reponse
