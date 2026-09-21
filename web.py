@@ -564,7 +564,7 @@ function ajouterReponse(texte, messageId) {
   message.className = 'msg bot';
   message.dataset.messageId = messageId || '';
   message.textContent = texte;
-  enveloppe.innerHTML = '<div class="actions-reponse"><button type="button" class="action-copier" title="Copier">📋</button><button type="button" class="action-feedback" data-valeur="positif" title="J&#39;aime">👍</button><button type="button" class="action-feedback" data-valeur="negatif" title="Je n&#39;aime pas">👎</button><button type="button" class="action-partager" title="Partager">🔗</button><button type="button" class="action-regenerer" title="Régénérer">🔄</button><button type="button" class="action-lire" title="Lecture / pause">▶</button><button type="button" class="action-stop" title="Arrêter">⏹</button><span class="lecture-etat"></span></div>';
+  enveloppe.innerHTML = '<div class="actions-reponse"><button type="button" class="action-copier" title="Copier">📋</button><button type="button" class="action-feedback" data-valeur="positif" title="J&#x27;aime">👍</button><button type="button" class="action-feedback" data-valeur="negatif" title="Je n&#x27;aime pas">👎</button><button type="button" class="action-partager" title="Partager">🔗</button><button type="button" class="action-regenerer" title="Régénérer">🔄</button><button type="button" class="action-lire" title="Lecture / pause">▶</button><button type="button" class="action-stop" title="Arrêter">⏹</button><span class="lecture-etat"></span></div>';
   enveloppe.insertBefore(message, enveloppe.firstChild);
   chat.appendChild(enveloppe);
   chat.scrollTop = chat.scrollHeight;
