@@ -7,8 +7,8 @@ from flask import Flask, request, render_template_string, redirect, url_for, ses
 from werkzeug.security import check_password_hash, generate_password_hash
 from sqlalchemy.exc import IntegrityError
 from app import traiter_message, traiter_message_image
-from database import Conversation, Message, User, initialiser_base, session_base
-from voice import generer_audio_web
+from database import (Conversation, Message, MessageFeedback, ShareLink, User,
+                      UserPreference, initialiser_base, session_base)
 
 try:
     from PIL import Image
@@ -27,8 +27,8 @@ app.config.update(
 initialiser_base()
 
 
-def detecter_type_image(contenu):
-    """Détermine le type depuis la signature, même sans Pillow."""
+def detecter_type_media(contenu):
+    """Détermine le type d'image ou de vidéo depuis sa signature."""
     if contenu.startswith(b"\x89PNG\r\n\x1a\n"):
         return "image/png"
     if contenu.startswith(b"\xff\xd8\xff"):
@@ -39,6 +39,18 @@ def detecter_type_image(contenu):
         return "image/bmp"
     if len(contenu) >= 12 and contenu.startswith(b"RIFF") and contenu[8:12] == b"WEBP":
         return "image/webp"
+    if len(contenu) >= 12 and contenu[4:8] == b"ftyp":
+        marque = contenu[8:12]
+        if marque in (b"qt  ",):
+            return "video/quicktime"
+        if marque in (b"isom", b"iso2", b"mp41", b"mp42", b"avc1", b"dash"):
+            return "video/mp4"
+    if contenu.startswith(b"\x1a\x45\xdf\xa3"):
+        return "video/webm"
+    if len(contenu) >= 12 and contenu.startswith(b"RIFF") and contenu[8:12] == b"AVI ":
+        return "video/x-msvideo"
+    if contenu.startswith((b"\x00\x00\x01\xba", b"\x00\x00\x01\xb3")):
+        return "video/mpeg"
     return None
 
 
@@ -60,7 +72,7 @@ def verifier_csrf():
 
 @app.before_request
 def exiger_connexion():
-    publiques = {"static", "connexion", "inscription"}
+    publiques = {"static", "connexion", "inscription", "partage"}
     if request.endpoint not in publiques and "user_id" not in session:
         return redirect(url_for("connexion"))
     return None
@@ -81,7 +93,11 @@ if ('serviceWorker' in navigator) {
 </script>
 <style>
   * { box-sizing: border-box; }
-  body { font-family: 'Segoe UI', sans-serif; margin: 0; background: #fff; height: 100vh; display: flex; flex-direction: column; }
+  body { font-family: 'Segoe UI', sans-serif; margin: 0; background: #fff; color:#17251f; height: 100vh; display: flex; flex-direction: column; }
+  body.theme-sombre { background:#101816; color:#e8f5ef; }
+  body.theme-sombre #sidebar, body.theme-sombre .bot, body.theme-sombre #apercu-fichier { background:#17231f; color:#e8f5ef; border-color:#294238; }
+  body.theme-sombre #sidebar a, body.theme-sombre #sidebar button { color:#e8f5ef; background:#17231f; border-color:#294238; }
+  body.theme-sombre form.bas, body.theme-sombre form.bas textarea { background:#101816; color:#e8f5ef; border-color:#294238; }
   header { background: #10A37F; color: white; padding: 14px 16px; display: flex; align-items: center; }
   header .titre { font-weight: bold; font-size: 18px; margin-left: 10px; flex: 1; }
   header button { background: none; border: none; color: white; font-size: 20px; cursor: pointer; }
@@ -92,10 +108,18 @@ if ('serviceWorker' in navigator) {
   #sidebar a, #sidebar button.nouvelle { display:block; width:100%; padding:12px 18px; text-decoration:none; color:#111; border:0; border-bottom:1px solid #eee; background:#fff; font:inherit; cursor:pointer; }
   #sidebar a.nouvelle, #sidebar button.nouvelle { color:#10A37F; font-weight:bold; }
 
-  #chat { flex:1; overflow-y:auto; padding: 14px; }
+  #chat { flex:1; overflow-y:auto; padding: 14px; width:min(900px,100%); margin:0 auto; }
   .msg { max-width: 80%; padding: 10px 14px; border-radius: 14px; margin-bottom: 10px; white-space: pre-wrap; line-height:1.4; }
   .user { background:#DCF8C6; margin-left:auto; }
   .bot { background:#f0f0f0; margin-right:auto; }
+  .message-wrap { max-width:82%; margin-bottom:14px; }
+  .message-wrap.user { margin-left:auto; }
+  .message-wrap.bot { margin-right:auto; }
+  .message-wrap .msg { max-width:100%; margin-bottom:4px; }
+  .actions-reponse { display:flex; gap:3px; padding:2px 6px; }
+  .actions-reponse button { border:0; background:transparent; color:#6b7c76; border-radius:7px; padding:4px 6px; cursor:pointer; font-size:13px; }
+  .actions-reponse button:hover, .actions-reponse button.actif { background:#e5f3ed; color:#087355; }
+  .actions-reponse .lecture-etat { font-size:12px; color:#10A37F; min-width:48px; align-self:center; }
 
   /* Indicateur "Dashle réfléchit" : point qui pulse */
   .reflexion { display:flex; align-items:center; gap:6px; padding: 10px 14px; }
@@ -149,6 +173,55 @@ if ('serviceWorker' in navigator) {
 
   #statut-vocal { text-align:center; font-size:12px; color:#10A37F; padding: 0 10px 6px; display:none; }
   #statut-vocal.visible { display:block; }
+  .recherche-conversations { margin:0 14px 10px; padding:9px 11px; width:calc(100% - 28px); border:1px solid #dce7e2; border-radius:9px; }
+  .menu-section { padding:12px 18px 5px; color:#71837b; font-size:11px; text-transform:uppercase; letter-spacing:.08em; }
+
+  #mode-vocal { display:none; position:fixed; inset:0; z-index:4; overflow:hidden; color:#effff8;
+    background:radial-gradient(circle at 50% 42%, #1b8d67 0%, #07543f 36%, #032d25 72%, #011b18 100%); }
+  #mode-vocal.visible { display:flex; flex-direction:column; }
+  #mode-vocal::before { content:""; position:absolute; inset:-30%; opacity:.45; pointer-events:none;
+    background:radial-gradient(ellipse at 30% 20%, rgba(87,255,190,.22), transparent 35%),
+      radial-gradient(ellipse at 75% 78%, rgba(16,163,127,.28), transparent 38%);
+    animation: fond-vocal 14s ease-in-out infinite alternate; }
+  @keyframes fond-vocal { from { transform:translate3d(-2%, -1%, 0) scale(1); } to { transform:translate3d(2%, 1%, 0) scale(1.08); } }
+  .vocal-entete { position:relative; z-index:1; display:flex; align-items:center; justify-content:space-between; padding:18px 20px; }
+  .vocal-entete strong { font-size:16px; letter-spacing:.02em; }
+  .vocal-commandes { display:flex; gap:8px; }
+  .vocal-commandes button { border:1px solid rgba(255,255,255,.25); border-radius:20px; padding:8px 12px; color:#effff8;
+    background:rgba(0,0,0,.16); cursor:pointer; }
+  .vocal-commandes button:hover { background:rgba(255,255,255,.14); }
+  .scene-vocale { position:relative; z-index:1; display:grid; place-items:center; flex:1; min-height:0; }
+  .systeme-solaire { position:relative; width:min(78vw, 430px); aspect-ratio:1; }
+  .orbite { position:absolute; left:50%; top:50%; width:var(--taille); height:var(--taille); border:1px solid rgba(169,255,221,.24);
+    border-radius:50%; transform:translate(-50%, -50%); animation:rotation-orbite var(--vitesse) linear infinite; }
+  .orbite:nth-child(2) { animation-direction:reverse; }
+  .orbite:nth-child(3) { animation-delay:-4s; }
+  @keyframes rotation-orbite { to { transform:translate(-50%, -50%) rotate(360deg); } }
+  .planete { position:absolute; left:50%; top:50%; width:var(--diametre); height:var(--diametre); margin:calc(var(--diametre) / -2);
+    border-radius:50%; background:var(--couleur); box-shadow:0 0 12px var(--couleur); transform:translateX(calc(var(--taille) / 2)); }
+  .orbe-dashle { position:absolute; left:50%; top:50%; width:clamp(104px, 25vw, 150px); aspect-ratio:1; transform:translate(-50%, -50%);
+    border-radius:50%; background:radial-gradient(circle at 34% 28%, #d7fff0 0%, #60e4b4 13%, #10a37f 43%, #087355 72%, #023d31 100%);
+    box-shadow:0 0 22px rgba(101,255,198,.9), 0 0 72px rgba(16,163,127,.65), inset -16px -18px 28px rgba(0,45,34,.48);
+    animation:respiration-orbe 3.8s ease-in-out infinite; }
+  .orbe-dashle::after { content:""; position:absolute; inset:-14%; border:1px solid rgba(173,255,224,.48); border-radius:50%; animation:halo-orbe 2.8s ease-in-out infinite; }
+  #mode-vocal[data-etat="ecoute"] .orbe-dashle { animation-duration:1.35s; box-shadow:0 0 30px rgba(135,255,213,.95), 0 0 100px rgba(16,163,127,.8), inset -16px -18px 28px rgba(0,45,34,.48); }
+  #mode-vocal[data-etat="reflexion"] .orbe-dashle { animation-duration:1.9s; filter:hue-rotate(18deg); }
+  #mode-vocal[data-etat="parle"] .orbe-dashle { animation-duration:.85s; box-shadow:0 0 34px rgba(188,255,224,1), 0 0 120px rgba(16,163,127,.9), inset -16px -18px 28px rgba(0,45,34,.48); }
+  @keyframes respiration-orbe { 0%,100% { transform:translate(-50%, -50%) scale(.96); } 50% { transform:translate(-50%, -50%) scale(1.04); } }
+  @keyframes halo-orbe { 0%,100% { transform:scale(.92); opacity:.3; } 50% { transform:scale(1.08); opacity:.8; } }
+  .etat-vocal { position:absolute; left:50%; bottom:8%; transform:translateX(-50%); min-width:180px; text-align:center; color:#c9ffeb; font-size:14px; }
+
+  #apercu-fichier { display:none; align-items:center; gap:10px; margin:0 10px 8px; padding:8px 10px; border:1px solid #d9e5e1; border-radius:12px; background:#f7fbf9; }
+  #apercu-fichier.visible { display:flex; }
+  #apercu-fichier-media { width:58px; height:58px; flex:0 0 58px; border-radius:9px; object-fit:cover; background:#e7f2ee; }
+  video#apercu-fichier-media { object-fit:contain; }
+  #apercu-fichier-info { min-width:0; flex:1; color:#1e302b; font-size:12px; }
+  #apercu-fichier-nom { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; }
+  #apercu-fichier-type { display:block; margin-top:3px; color:#688078; }
+  #retirer-fichier { width:30px; height:30px; flex:0 0 30px; border:0; border-radius:50%; background:transparent; color:#6b7c76; cursor:pointer; font-size:20px; }
+  #retirer-fichier:hover { background:#e8f2ee; color:#b00020; }
+  @media (max-width:600px) { .vocal-entete { padding:14px; } .systeme-solaire { width:min(86vw, 360px); } .etat-vocal { bottom:5%; } }
+  @media (prefers-reduced-motion:reduce) { #mode-vocal::before, .orbite, .orbe-dashle, .orbe-dashle::after { animation-play-state:paused; } }
 
   button.envoyer {
     background:#10A37F; color:white; border:none; border-radius:50%;
@@ -159,7 +232,7 @@ if ('serviceWorker' in navigator) {
   button.envoyer:disabled { opacity:0.5; cursor:default; }
 </style>
 </head>
-<body>
+<body class="theme-{{ preferences.theme }}">
 
 <header>
   <button onclick="document.getElementById('sidebar').style.display='block';document.getElementById('voile').style.display='block';">&#9776;</button>
@@ -179,29 +252,62 @@ if ('serviceWorker' in navigator) {
 <div id="voile" onclick="document.getElementById('sidebar').style.display='none';this.style.display='none';"></div>
 <div id="sidebar">
   <h2>Dashle</h2>
+  <input class="recherche-conversations" id="recherche-conversations" type="search" placeholder="Rechercher dans l'historique..." aria-label="Rechercher dans l'historique">
   <form action="{{ url_for('nouvelle_conv') }}" method="post" style="margin:0;">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <button class="nouvelle" type="submit" style="width:100%;text-align:left;">+ Nouvelle conversation</button>
   </form>
   {% for i, conv in enumerate(conversations) %}
-    <div style="display:flex;align-items:center;">
+    <div class="ligne-conversation" data-titre="{{ conv.titre|lower }}" style="display:flex;align-items:center;">
       <a href="{{ url_for('charger_conv', i=conv.id) }}" style="flex:1;">{{ conv.titre }}</a>
+      <button type="button" title="Partager" aria-label="Partager" onclick="partagerConversation({{ conv.id }})" style="border:0;background:none;cursor:pointer;padding:8px;">🔗</button>
       <form action="{{ url_for('supprimer_conv', i=conv.id) }}" method="post" style="margin:0;">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button type="submit" onclick="return confirm('Supprimer cette conversation ?');" aria-label="Supprimer cette conversation" style="color:#c00;padding:8px 12px;border:0;background:none;cursor:pointer;font-size:20px;">&times;</button>
       </form>
     </div>
   {% endfor %}
+  <div class="menu-section">Navigation</div>
+  <a href="{{ url_for('parametres') }}">⚙ Paramètres</a>
+  <a href="#" onclick="return false;" title="Fonctionnalité non disponible">📅 Planification <small>(bientôt)</small></a>
+  <a href="#" onclick="return false;" title="Fonctionnalité non disponible">🔌 Plugins / Extensions <small>(bientôt)</small></a>
+  <a href="#" onclick="return false;" title="Fonctionnalité non disponible">📁 Projets <small>(bientôt)</small></a>
 </div>
 
 <div id="chat">
   {% for m in messages %}
-    <div class="msg {{ 'user' if m.auteur == 'user' else 'bot' }}">{{ m.texte }}</div>
+    <div class="message-wrap {{ 'user' if m.auteur == 'user' else 'bot' }}">
+      <div class="msg {{ 'user' if m.auteur == 'user' else 'bot' }}" data-message-id="{{ m.id }}">{{ m.texte }}</div>
+      {% if m.auteur == 'bot' %}
+      <div class="actions-reponse">
+        <button type="button" class="action-copier" title="Copier">📋</button><button type="button" class="action-feedback" data-valeur="positif" title="J'aime">👍</button><button type="button" class="action-feedback" data-valeur="negatif" title="Je n'aime pas">👎</button><button type="button" class="action-partager" title="Partager la conversation">🔗</button><button type="button" class="action-regenerer" title="Régénérer">🔄</button><button type="button" class="action-lire" title="Lecture / pause">▶</button><button type="button" class="action-stop" title="Arrêter">⏹</button><span class="lecture-etat"></span>
+      </div>
+      {% endif %}
+    </div>
   {% endfor %}
 </div>
 
+<section id="mode-vocal" data-etat="attente" aria-label="Mode vocal" aria-hidden="true">
+  <div class="vocal-entete">
+    <strong>Conversation vocale</strong>
+    <div class="vocal-commandes">
+      <button type="button" id="reduire-vocal" title="Revenir au chat en gardant la conversation active">Réduire</button>
+      <button type="button" id="fermer-vocal" title="Quitter le mode vocal">Fermer</button>
+    </div>
+  </div>
+  <div class="scene-vocale">
+    <div class="systeme-solaire" aria-hidden="true">
+      <div class="orbite" style="--taille:58%;--vitesse:11s"><span class="planete" style="--diametre:9px;--couleur:#b8ffe5"></span></div>
+      <div class="orbite" style="--taille:78%;--vitesse:17s"><span class="planete" style="--diametre:13px;--couleur:#62dcb0"></span></div>
+      <div class="orbite" style="--taille:98%;--vitesse:25s"><span class="planete" style="--diametre:7px;--couleur:#d5fff0"></span></div>
+      <div class="orbe-dashle"></div>
+    </div>
+    <div class="etat-vocal" id="etat-vocal">En attente</div>
+  </div>
+</section>
+
 <form class="bas" id="form-message" autocomplete="off">
-  <input type="file" id="image-input" accept="image/*" style="display:none;">
+  <input type="file" id="image-input" accept="image/*,video/*" style="display:none;">
   <button type="button" id="btn-attach" style="background:none;border:none;cursor:pointer;flex-shrink:0;padding:0;width:34px;height:34px;" onclick="document.getElementById('image-input').click();"><img src="{{ url_for('static', filename='icon-attach.png') }}" style="width:34px;height:34px;display:block;border-radius:8px;"></button>
   <textarea id="message" name="message" rows="1" placeholder="Écris à Dashle..." required></textarea>
   <div class="groupe-actions">
@@ -218,6 +324,11 @@ if ('serviceWorker' in navigator) {
     <button class="envoyer" type="submit" id="btn-envoyer">&#10148;</button>
   </div>
 </form>
+<div id="apercu-fichier" aria-live="polite">
+  <img id="apercu-fichier-media" alt="Aperçu du fichier sélectionné">
+  <div id="apercu-fichier-info"><span id="apercu-fichier-nom"></span><span id="apercu-fichier-type"></span></div>
+  <button type="button" id="retirer-fichier" aria-label="Retirer le fichier sélectionné" title="Retirer le fichier">&times;</button>
+</div>
 <div id="statut-vocal"></div>
 
 <script>
@@ -228,10 +339,33 @@ const btnEnvoyer = document.getElementById('btn-envoyer');
 const btnMicro = document.getElementById('btn-micro');
 const btnVocal = document.getElementById('btn-vocal');
 const statutVocal = document.getElementById('statut-vocal');
+const modeVocal = document.getElementById('mode-vocal');
+const etatVocal = document.getElementById('etat-vocal');
+const apercuFichier = document.getElementById('apercu-fichier');
+let apercuMedia = document.getElementById('apercu-fichier-media');
+const apercuNom = document.getElementById('apercu-fichier-nom');
+const apercuType = document.getElementById('apercu-fichier-type');
+const inputImage = document.getElementById('image-input');
 const csrfToken = {{ csrf_token|tojson }};
+let reco = null;
 
 let vocalActif = false;   // mode "conversation vocale en boucle" activé ou non
 let modeActuel = 'texte'; // 'texte' | 'dictee' | 'vocal' : d'où vient la dernière écoute
+
+function afficherEtatVocal(etat, libelle) {
+  modeVocal.dataset.etat = etat;
+  etatVocal.textContent = libelle;
+}
+
+function ouvrirModeVocal() {
+  modeVocal.classList.add('visible');
+  modeVocal.setAttribute('aria-hidden', 'false');
+}
+
+function fermerModeVocal() {
+  modeVocal.classList.remove('visible');
+  modeVocal.setAttribute('aria-hidden', 'true');
+}
 
 function afficherStatutVocal(texte) {
   statutVocal.textContent = texte;
@@ -240,13 +374,15 @@ function afficherStatutVocal(texte) {
 
 if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
   const Reco = window.SpeechRecognition || window.webkitSpeechRecognition;
-  const reco = new Reco();
+  reco = new Reco();
   reco.lang = 'fr-FR';
   reco.interimResults = false;
 
   function demarrerEcouteVocale() {
     if (!vocalActif) return;
     modeActuel = 'vocal';
+    ouvrirModeVocal();
+    afficherEtatVocal('ecoute', 'Dashle écoute...');
     btnVocal.classList.add('ecoute');
     btnVocal.classList.remove('parle');
     afficherStatutVocal('🎧 Je t\\'écoute...');
@@ -266,10 +402,13 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
     vocalActif = !vocalActif;
     if (vocalActif) {
       btnVocal.classList.add('vocal-on');
+      ouvrirModeVocal();
       try { reco.stop(); } catch (e) {}
       demarrerEcouteVocale();
     } else {
       btnVocal.classList.remove('vocal-on', 'ecoute', 'parle');
+      fermerModeVocal();
+      afficherEtatVocal('attente', 'En attente');
       afficherStatutVocal('');
       try { reco.stop(); } catch (e) {}
     }
@@ -280,6 +419,7 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
     champ.value = transcript;
     champ.style.height = 'auto';
     if (modeActuel === 'vocal') {
+      afficherEtatVocal('reflexion', 'Dashle réfléchit...');
       afficherStatutVocal('');
       form.requestSubmit();
     }
@@ -294,6 +434,7 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
     btnMicro.classList.remove('actif');
     btnVocal.classList.remove('ecoute');
     if (vocalActif && e.error !== 'aborted') {
+      afficherEtatVocal('attente', 'En attente du micro...');
       afficherStatutVocal('🎧 Petit souci d\\'écoute, je réessaie...');
       setTimeout(demarrerEcouteVocale, 900);
     }
@@ -304,6 +445,8 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
     estActif: function() { return vocalActif; },
     reprendreEcoute: demarrerEcouteVocale,
     marquerParle: function() {
+      ouvrirModeVocal();
+      afficherEtatVocal('parle', 'Dashle parle...');
       btnVocal.classList.add('parle');
       btnVocal.classList.remove('ecoute');
       afficherStatutVocal('🗣️ Dashle répond...');
@@ -315,8 +458,56 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
 }
 
 let fichierImage = null;
-document.getElementById('image-input').addEventListener('change', function(e) {
+function effacerApercuFichier() {
+  if (apercuMedia.dataset.url) URL.revokeObjectURL(apercuMedia.dataset.url);
+  apercuMedia.removeAttribute('src');
+  delete apercuMedia.dataset.url;
+  apercuFichier.classList.remove('visible');
+  fichierImage = null;
+  inputImage.value = '';
+}
+
+function afficherApercuFichier(fichier) {
+  if (!fichier) { effacerApercuFichier(); return; }
+  if (apercuMedia.dataset.url) URL.revokeObjectURL(apercuMedia.dataset.url);
+  const url = URL.createObjectURL(fichier);
+  if (fichier.type.startsWith('video/')) {
+    const lecteur = document.createElement('video');
+    lecteur.id = 'apercu-fichier-media';
+    lecteur.controls = true;
+    lecteur.muted = true;
+    lecteur.playsInline = true;
+    lecteur.setAttribute('aria-label', 'Aperçu vidéo de ' + fichier.name);
+    apercuMedia.replaceWith(lecteur);
+    apercuMedia = lecteur;
+  } else if (apercuMedia.tagName !== 'IMG') {
+    const image = document.createElement('img');
+    image.id = 'apercu-fichier-media';
+    image.alt = 'Aperçu du fichier sélectionné';
+    apercuMedia.replaceWith(image);
+    apercuMedia = image;
+  }
+  apercuMedia.dataset.url = url;
+  apercuMedia.src = url;
+  apercuMedia.alt = 'Aperçu de ' + fichier.name;
+  apercuNom.textContent = fichier.name;
+  apercuType.textContent = (fichier.type || 'Type inconnu') + ' · ' + Math.ceil(fichier.size / 1024) + ' Ko';
+  apercuFichier.classList.add('visible');
+}
+
+inputImage.addEventListener('change', function(e) {
   fichierImage = e.target.files[0] || null;
+  afficherApercuFichier(fichierImage);
+});
+document.getElementById('retirer-fichier').addEventListener('click', effacerApercuFichier);
+document.getElementById('reduire-vocal').addEventListener('click', fermerModeVocal);
+document.getElementById('fermer-vocal').addEventListener('click', function() {
+  vocalActif = false;
+  btnVocal.classList.remove('vocal-on', 'ecoute', 'parle');
+  try { reco && reco.stop(); } catch (e) {}
+  afficherStatutVocal('');
+  fermerModeVocal();
+  afficherEtatVocal('attente', 'En attente');
 });
 
 function bloquerEnvoi(dureeSecondes) {
@@ -353,10 +544,113 @@ function ajouterMessage(texte, classe) {
   const div = document.createElement('div');
   div.className = 'msg ' + classe;
   div.textContent = texte;
-  chat.appendChild(div);
+  const enveloppe = document.createElement('div');
+  enveloppe.className = 'message-wrap ' + classe;
+  enveloppe.appendChild(div);
+  chat.appendChild(enveloppe);
   chat.scrollTop = chat.scrollHeight;
   return div;
 }
+
+function ajouterReponse(texte, messageId) {
+  const enveloppe = document.createElement('div');
+  enveloppe.className = 'message-wrap bot';
+  const message = document.createElement('div');
+  message.className = 'msg bot';
+  message.dataset.messageId = messageId || '';
+  message.textContent = texte;
+  enveloppe.innerHTML = '<div class="actions-reponse"><button type="button" class="action-copier" title="Copier">📋</button><button type="button" class="action-feedback" data-valeur="positif" title="J&#39;aime">👍</button><button type="button" class="action-feedback" data-valeur="negatif" title="Je n&#39;aime pas">👎</button><button type="button" class="action-partager" title="Partager">🔗</button><button type="button" class="action-regenerer" title="Régénérer">🔄</button><button type="button" class="action-lire" title="Lecture / pause">▶</button><button type="button" class="action-stop" title="Arrêter">⏹</button><span class="lecture-etat"></span></div>';
+  enveloppe.insertBefore(message, enveloppe.firstChild);
+  chat.appendChild(enveloppe);
+  chat.scrollTop = chat.scrollHeight;
+  return enveloppe;
+}
+
+let lectureActuelle = null;
+let utteranceActuelle = null;
+function arreterLecture() {
+  if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+  if (lectureActuelle) {
+    lectureActuelle.classList.remove('actif');
+    lectureActuelle.textContent = '▶';
+    lectureActuelle.closest('.actions-reponse').querySelector('.lecture-etat').textContent = '';
+  }
+  lectureActuelle = null;
+  utteranceActuelle = null;
+}
+
+function lireReponse(bouton) {
+  if (!('speechSynthesis' in window)) {
+    bouton.closest('.actions-reponse').querySelector('.lecture-etat').textContent = 'Voix indisponible';
+    return;
+  }
+  const texte = bouton.closest('.message-wrap').querySelector('.msg').textContent;
+  if (lectureActuelle === bouton && window.speechSynthesis.speaking) {
+    if (window.speechSynthesis.paused) {
+      window.speechSynthesis.resume();
+      bouton.textContent = '⏸';
+      bouton.closest('.actions-reponse').querySelector('.lecture-etat').textContent = 'Lecture';
+    } else {
+      window.speechSynthesis.pause();
+      bouton.textContent = '▶';
+      bouton.closest('.actions-reponse').querySelector('.lecture-etat').textContent = 'Pause';
+    }
+    return;
+  }
+  arreterLecture();
+  const etat = bouton.closest('.actions-reponse').querySelector('.lecture-etat');
+  utteranceActuelle = new SpeechSynthesisUtterance(texte);
+  utteranceActuelle.lang = 'fr-FR';
+  lectureActuelle = bouton;
+  bouton.classList.add('actif');
+  bouton.textContent = '⏸';
+  etat.textContent = 'Lecture';
+  utteranceActuelle.onend = arreterLecture;
+  utteranceActuelle.onerror = function() { etat.textContent = 'Erreur audio'; arreterLecture(); };
+  window.speechSynthesis.speak(utteranceActuelle);
+}
+
+async function partagerConversation(conversationId) {
+  const res = await fetch('/partager/' + conversationId, { method:'POST', headers:{'X-CSRF-Token': csrfToken} });
+  const data = await res.json();
+  if (data.url) {
+    try { await navigator.clipboard.writeText(data.url); } catch (e) {}
+    alert('Lien de partage copié : ' + data.url);
+  }
+}
+
+document.getElementById('recherche-conversations').addEventListener('input', function() {
+  const terme = this.value.toLowerCase().trim();
+  document.querySelectorAll('.ligne-conversation').forEach(function(ligne) {
+    ligne.style.display = !terme || ligne.dataset.titre.includes(terme) ? 'flex' : 'none';
+  });
+});
+
+chat.addEventListener('click', async function(e) {
+  const bouton = e.target.closest('button');
+  if (!bouton) return;
+  const enveloppe = bouton.closest('.message-wrap');
+  const message = enveloppe && enveloppe.querySelector('.msg');
+  if (!message) return;
+  if (bouton.classList.contains('action-copier')) {
+    await navigator.clipboard.writeText(message.textContent);
+    bouton.classList.add('actif');
+  } else if (bouton.classList.contains('action-lire')) {
+    lireReponse(bouton);
+  } else if (bouton.classList.contains('action-stop')) {
+    arreterLecture();
+  } else if (bouton.classList.contains('action-feedback')) {
+    const corps = 'message_id=' + encodeURIComponent(message.dataset.messageId) + '&valeur=' + bouton.dataset.valeur;
+    await fetch('/feedback', { method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded','X-CSRF-Token':csrfToken}, body:corps });
+    bouton.classList.add('actif');
+  } else if (bouton.classList.contains('action-regenerer')) {
+    const res = await fetch('/regenerer/' + message.dataset.messageId, { method:'POST', headers:{'X-CSRF-Token':csrfToken} });
+    const data = await res.json();
+    if (data.reponse) ajouterReponse(data.reponse, data.message_id);
+  } else if (bouton.classList.contains('action-partager')) {
+    partagerConversation({{ conversation_id }});
+  }
+});
 
 function afficherReflexion() {
   const div = document.createElement('div');
@@ -389,13 +683,13 @@ form.addEventListener('submit', async function(e) {
       const res = await fetch("{{ url_for('repondre_image') }}", { method: 'POST', headers: { 'X-CSRF-Token': csrfToken }, body: formData });
       const data = await res.json();
       retirerReflexion();
-      ajouterMessage(data.reponse, 'bot');
+      ajouterReponse(data.reponse, data.message_id);
     } catch (err) {
       retirerReflexion();
       ajouterMessage("Erreur d'envoi de l'image. Réessaie.", 'bot');
     }
     fichierImage = null;
-    document.getElementById('image-input').value = '';
+    effacerApercuFichier();
     return;
   }
   if (!texte) return;
@@ -413,24 +707,19 @@ form.addEventListener('submit', async function(e) {
     });
     const data = await res.json();
     retirerReflexion();
-    ajouterMessage(data.reponse, 'bot');
+    const reponseElement = ajouterReponse(data.reponse, data.message_id);
 
     const vocal = window._dashleVocal;
     const enModeVocal = vocal && vocal.estActif();
 
-    if (data.audio) {
-      const son = new Audio(data.audio + '?t=' + Date.now());
-      if (enModeVocal) vocal.marquerParle();
-      son.onended = function() {
-        if (enModeVocal) vocal.reprendreEcoute();
-      };
-      son.play().catch(function(e) {
-        console.log('Lecture audio bloquee:', e);
-        if (enModeVocal) vocal.reprendreEcoute();
-      });
-    } else if (enModeVocal) {
-      // Pas d'audio généré (ex: gTTS indisponible) : on relance quand même l'écoute
-      setTimeout(vocal.reprendreEcoute, 500);
+    if (enModeVocal) {
+      vocal.marquerParle();
+      const boutonLecture = reponseElement.querySelector('.action-lire');
+      lireReponse(boutonLecture);
+      if (utteranceActuelle) {
+        const reprise = utteranceActuelle.onend;
+        utteranceActuelle.onend = function() { reprise(); vocal.reprendreEcoute(); };
+      }
     }
 
     if (data.reponse && data.reponse.toLowerCase().includes('quota')) {
@@ -454,6 +743,23 @@ champ.addEventListener('input', function() {
 
 </body>
 </html>
+"""
+
+SHARE_PAGE = """
+<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Dashle - {{ titre }}</title>
+<style>body{font-family:Segoe UI,sans-serif;background:#f4f8f6;color:#14251f;margin:0}.partage{max-width:760px;margin:0 auto;padding:28px 18px}.marque{color:#10A37F;font-weight:700}.message{padding:12px 16px;margin:12px 0;border-radius:14px;white-space:pre-wrap;line-height:1.45;background:#fff;box-shadow:0 2px 10px #1231}.user{margin-left:15%;background:#e2f7ed}.bot{margin-right:15%}</style></head>
+<body><main class="partage"><div class="marque">Dashle</div><h1>{{ titre }}</h1>{% for m in messages %}<div class="message {{ m.auteur }}">{{ m.texte }}</div>{% endfor %}</main></body></html>
+"""
+
+SETTINGS_PAGE = """
+<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Dashle - Paramètres</title>
+<style>:root{font-family:Segoe UI,sans-serif;color:#17251f;background:#f4f8f6}*{box-sizing:border-box}body{margin:0}.page{max-width:760px;margin:auto;padding:24px 18px 50px}.bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:22px}.bar a{color:#10A37F;text-decoration:none;font-weight:600}.carte{background:#fff;border:1px solid #dceae4;border-radius:14px;padding:18px;margin:12px 0}.carte h2{font-size:15px;margin:0 0 14px;color:#10A37F}label{display:flex;justify-content:space-between;gap:14px;align-items:center;padding:10px 0;border-top:1px solid #edf2f0}label:first-of-type{border-top:0}select,input[type=checkbox]{accent-color:#10A37F}button{border:0;border-radius:9px;background:#10A37F;color:#fff;padding:10px 14px;cursor:pointer}.note{color:#71837b;font-size:13px}</style></head>
+<body><main class="page"><div class="bar"><div><strong>Dashle</strong><h1>Paramètres</h1></div><a href="{{ url_for('accueil') }}">Retour au chat</a></div>
+<form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><section class="carte"><h2>Compte</h2><p>{{ utilisateur }}</p><p class="note">La modification de l'adresse e-mail et la récupération de compte ne sont pas encore disponibles.</p></section>
+<section class="carte"><h2>Apparence</h2><label>Thème<select name="theme"><option value="clair" {% if preferences.theme == 'clair' %}selected{% endif %}>Clair</option><option value="sombre" {% if preferences.theme == 'sombre' %}selected{% endif %}>Sombre</option></select></label></section>
+<section class="carte"><h2>Voix</h2><label>Voix activée<input type="checkbox" name="voix_active" {% if preferences.voix_active %}checked{% endif %}></label><p class="note">La lecture automatique reste désactivée par défaut.</p></section>
+<section class="carte"><h2>Conversations et confidentialité</h2><label>Conserver l'historique<input type="checkbox" name="conserver_historique" {% if preferences.conserver_historique %}checked{% endif %}></label><p class="note">Les conversations partagées utilisent un lien révocable et ne montrent pas les informations du compte.</p></section>
+<section class="carte"><h2>Sécurité</h2><p class="note">Les mots de passe sont hachés. La gestion avancée des sessions et le changement de mot de passe restent à implémenter.</p></section><button type="submit">Enregistrer</button></form></main></body></html>
 """
 
 AUTH_PAGE = """
@@ -488,7 +794,23 @@ def _messages_conversation(user_id, conversation_id):
         conversation = db.query(Conversation).filter_by(id=conversation_id, user_id=user_id).one_or_none()
         if conversation is None:
             return []
-        return [{"auteur": msg.auteur, "texte": msg.texte} for msg in conversation.messages]
+        return [{"id": msg.id, "auteur": msg.auteur, "texte": msg.texte,
+             "date": msg.created_at.isoformat()} for msg in conversation.messages]
+
+
+def _preferences(user_id):
+    with session_base() as db:
+        preferences = db.query(UserPreference).filter_by(user_id=user_id).one_or_none()
+        if preferences is None:
+            preferences = UserPreference(user_id=user_id)
+            db.add(preferences)
+            db.flush()
+        return {
+            "theme": preferences.theme,
+            "voix_active": preferences.voix_active,
+            "lecture_automatique": preferences.lecture_automatique,
+            "conserver_historique": preferences.conserver_historique,
+        }
 
 
 def ajouter_message(user_id, conversation_id, texte, auteur):
@@ -496,10 +818,13 @@ def ajouter_message(user_id, conversation_id, texte, auteur):
         conversation = db.query(Conversation).filter_by(id=conversation_id, user_id=user_id).one_or_none()
         if conversation is None:
             raise LookupError("Conversation introuvable")
-        db.add(Message(conversation_id=conversation.id, auteur=auteur, texte=texte))
+        message = Message(conversation_id=conversation.id, auteur=auteur, texte=texte)
+        db.add(message)
+        db.flush()
         if auteur == "user" and conversation.title == "Nouvelle conversation":
             conversation.title = texte[:48] or conversation.title
         conversation.updated_at = datetime.utcnow()
+        return message.id
 
 
 @app.route("/")
@@ -507,9 +832,10 @@ def accueil():
     user_id = session["user_id"]
     conversation_id = _conv_courante(user_id)
     return render_template_string(PAGE, conversations=_liste_conversations(user_id),
-                                  messages=_messages_conversation(user_id, conversation_id),
-                                  utilisateur={"email": session["user_email"]}, enumerate=enumerate,
-                                  csrf_token=jeton_csrf())
+                    messages=_messages_conversation(user_id, conversation_id),
+                    utilisateur={"email": session["user_email"]}, enumerate=enumerate,
+                    csrf_token=jeton_csrf(), preferences=_preferences(user_id),
+                    conversation_id=conversation_id)
 
 
 @app.route("/nouvelle", methods=["POST"])
@@ -541,6 +867,135 @@ def supprimer_conv(i):
     return redirect(url_for("accueil"))
 
 
+@app.route("/renommer/<int:i>", methods=["POST"])
+def renommer_conv(i):
+    titre = request.form.get("titre", "").strip()[:120]
+    if not titre:
+        return jsonify({"erreur": "Le titre est vide."}), 400
+    with session_base() as db:
+        conversation = db.query(Conversation).filter_by(id=i, user_id=session["user_id"]).one_or_none()
+        if conversation is None:
+            return jsonify({"erreur": "Conversation introuvable."}), 404
+        conversation.title = titre
+    return redirect(url_for("accueil"))
+
+
+@app.route("/rechercher")
+def rechercher():
+    terme = request.args.get("q", "").strip().lower()
+    user_id = session["user_id"]
+    with session_base() as db:
+        conversations = db.query(Conversation).filter(Conversation.user_id == user_id).order_by(
+            Conversation.updated_at.desc()
+        ).all()
+        resultats = []
+        for conversation in conversations:
+            if not terme or terme in conversation.title.lower() or any(
+                terme in message.texte.lower() for message in conversation.messages
+            ):
+                resultats.append({"id": conversation.id, "titre": conversation.title})
+    return jsonify({"resultats": resultats})
+
+
+@app.route("/feedback", methods=["POST"])
+def feedback():
+    message_id = request.form.get("message_id", type=int)
+    valeur = request.form.get("valeur", "").strip().lower()
+    if valeur not in {"positif", "negatif"} or not message_id:
+        return jsonify({"erreur": "Retour invalide."}), 400
+    with session_base() as db:
+        message = db.query(Message).join(Conversation).filter(
+            Message.id == message_id, Conversation.user_id == session["user_id"]
+        ).one_or_none()
+        if message is None or message.auteur != "bot":
+            return jsonify({"erreur": "Réponse introuvable."}), 404
+        retour = db.query(MessageFeedback).filter_by(
+            user_id=session["user_id"], message_id=message_id
+        ).one_or_none()
+        if retour is None:
+            db.add(MessageFeedback(user_id=session["user_id"], message_id=message_id, valeur=valeur))
+        else:
+            retour.valeur = valeur
+    return jsonify({"ok": True, "valeur": valeur})
+
+
+@app.route("/regenerer/<int:message_id>", methods=["POST"])
+def regenerer(message_id):
+    user_id = session["user_id"]
+    with session_base() as db:
+        message = db.query(Message).join(Conversation).filter(
+            Message.id == message_id, Message.auteur == "bot", Conversation.user_id == user_id
+        ).one_or_none()
+        if message is None:
+            return jsonify({"erreur": "Réponse introuvable."}), 404
+        conversation_id = message.conversation_id
+        historique = [{"auteur": item.auteur, "texte": item.texte} for item in db.query(Message).filter(
+            Message.conversation_id == conversation_id, Message.id < message_id
+        ).order_by(Message.id).all()]
+        dernier_user = next((item["texte"] for item in reversed(historique) if item["auteur"] == "user"), "")
+    if not dernier_user:
+        return jsonify({"erreur": "Aucun message utilisateur à régénérer."}), 400
+    reponse = traiter_message(dernier_user, historique, user_id)
+    nouveau_message_id = ajouter_message(user_id, conversation_id, reponse, "bot")
+    return jsonify({"reponse": reponse, "message_id": nouveau_message_id})
+
+
+@app.route("/partager/<int:i>", methods=["POST"])
+def creer_partage(i):
+    with session_base() as db:
+        conversation = db.query(Conversation).filter_by(id=i, user_id=session["user_id"]).one_or_none()
+        if conversation is None:
+            return jsonify({"erreur": "Conversation introuvable."}), 404
+        lien = db.query(ShareLink).filter_by(conversation_id=i, actif=True).one_or_none()
+        if lien is None:
+            lien = ShareLink(conversation_id=i, token=secrets.token_urlsafe(32))
+            db.add(lien)
+            db.flush()
+        return jsonify({"url": url_for("partage", token=lien.token, _external=True)})
+
+
+@app.route("/partager/<int:i>/desactiver", methods=["POST"])
+def desactiver_partage(i):
+    with session_base() as db:
+        lien = db.query(ShareLink).join(Conversation).filter(
+            ShareLink.conversation_id == i, Conversation.user_id == session["user_id"], ShareLink.actif.is_(True)
+        ).one_or_none()
+        if lien is not None:
+            lien.actif = False
+    return jsonify({"ok": True})
+
+
+@app.route("/partage/<token>")
+def partage(token):
+    with session_base() as db:
+        lien = db.query(ShareLink).filter_by(token=token, actif=True).one_or_none()
+        if lien is None:
+            return "Lien de partage invalide ou désactivé.", 404
+        conversation = db.query(Conversation).filter_by(id=lien.conversation_id).one_or_none()
+        if conversation is None:
+            return "Conversation introuvable.", 404
+        messages = [{"auteur": message.auteur, "texte": message.texte} for message in conversation.messages]
+        titre = conversation.title
+    return render_template_string(SHARE_PAGE, titre=titre, messages=messages)
+
+
+@app.route("/parametres", methods=["GET", "POST"])
+def parametres():
+    user_id = session["user_id"]
+    if request.method == "POST":
+        with session_base() as db:
+            preferences = db.query(UserPreference).filter_by(user_id=user_id).one_or_none()
+            if preferences is None:
+                preferences = UserPreference(user_id=user_id)
+                db.add(preferences)
+            preferences.theme = request.form.get("theme", "clair") if request.form.get("theme") in {"clair", "sombre"} else "clair"
+            preferences.voix_active = request.form.get("voix_active") == "on"
+            preferences.lecture_automatique = False
+            preferences.conserver_historique = request.form.get("conserver_historique") == "on"
+        return redirect(url_for("parametres"))
+    return render_template_string(SETTINGS_PAGE, utilisateur=session["user_email"], preferences=_preferences(user_id), csrf_token=jeton_csrf())
+
+
 @app.route("/repondre", methods=["POST"])
 def repondre():
     """Endpoint appelé en AJAX : ne renvoie que du JSON, pas de rechargement de page."""
@@ -554,18 +1009,15 @@ def repondre():
     historique = _messages_conversation(user_id, conversation_id)
     ajouter_message(user_id, conversation_id, message, "user")
     reponse = traiter_message(message, historique + [{"auteur": "user", "texte": message}], user_id)
-    ajouter_message(user_id, conversation_id, reponse, "bot")
+    message_id = ajouter_message(user_id, conversation_id, reponse, "bot")
 
-    audio_url = None
-    if generer_audio_web(reponse):
-        audio_url = url_for("static", filename="audio/dashle_voix.mp3")
-
-    return jsonify({"reponse": reponse, "audio": audio_url})
+    return jsonify({"reponse": reponse, "message_id": message_id})
 
 @app.route("/repondre_image", methods=["POST"])
 def repondre_image():
     user_id = session["user_id"]
     conversation_id = _conv_courante(user_id)
+    historique = _messages_conversation(user_id, conversation_id)
     message = request.form.get("message", "").strip()
     fichier = request.files.get("image")
     if not fichier:
@@ -575,29 +1027,30 @@ def repondre_image():
     if not image_bytes:
         return jsonify({"reponse": "L'image reçue est vide."}), 400
 
-    mime_type = detecter_type_image(image_bytes)
+    mime_type = detecter_type_media(image_bytes)
     if not mime_type:
-        return jsonify({"reponse": "Le fichier envoyé n'est pas une image valide."}), 400
+        return jsonify({"reponse": "Le fichier envoyé n'est pas une image ou une vidéo valide."}), 400
 
-    if PIL_DISPONIBLE:
+    if mime_type.startswith("image/") and PIL_DISPONIBLE:
         try:
             with Image.open(io.BytesIO(image_bytes)) as image:
                 image.verify()
         except Exception:
-            return jsonify({"reponse": "Le fichier envoyé n'est pas une image valide."}), 400
+          return jsonify({"reponse": "Le fichier envoyé n'est pas une image valide."}), 400
 
     image_b64 = base64.b64encode(image_bytes).decode("utf-8")
-    ajouterMessage_texte = message or "[Image envoyée]"
+    type_media = "Vidéo" if mime_type.startswith("video/") else "Image"
+    ajouterMessage_texte = message or f"[{type_media} envoyée]"
     ajouter_message(user_id, conversation_id, ajouterMessage_texte, "user")
-    reponse = traiter_message_image(message, image_b64, mime_type)
-    ajouter_message(user_id, conversation_id, reponse, "bot")
+    reponse = traiter_message_image(message, image_b64, mime_type, historique)
+    message_id = ajouter_message(user_id, conversation_id, reponse, "bot")
 
-    return jsonify({"reponse": reponse})
+    return jsonify({"reponse": reponse, "message_id": message_id})
 
 
 @app.errorhandler(413)
 def fichier_trop_volumineux(_erreur):
-    return jsonify({"reponse": "L'image est trop volumineuse (maximum : 8 Mo)."}), 413
+  return jsonify({"reponse": "Le fichier est trop volumineux (maximum : 8 Mo)."}), 413
 
 
 @app.route("/inscription", methods=["GET", "POST"])

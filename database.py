@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
 
 
@@ -64,6 +64,38 @@ class Message(Base):
     texte: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     conversation: Mapped[Conversation] = relationship(back_populates="messages")
+
+
+class MessageFeedback(Base):
+    __tablename__ = "message_feedback"
+    __table_args__ = (UniqueConstraint("user_id", "message_id", name="uq_message_feedback_user_message"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
+    message_id: Mapped[int] = mapped_column(ForeignKey("messages.id", ondelete="CASCADE"), index=True, nullable=False)
+    valeur: Mapped[str] = mapped_column(String(10), nullable=False)
+
+
+class UserPreference(Base):
+    __tablename__ = "user_preferences"
+    __table_args__ = (UniqueConstraint("user_id", name="uq_user_preferences_user"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
+    theme: Mapped[str] = mapped_column(String(20), default="clair", nullable=False)
+    voix_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    lecture_automatique: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    conserver_historique: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+
+class ShareLink(Base):
+    __tablename__ = "share_links"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    conversation_id: Mapped[int] = mapped_column(ForeignKey("conversations.id", ondelete="CASCADE"), index=True, nullable=False)
+    token: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    actif: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
 
 class UserMemory(Base):

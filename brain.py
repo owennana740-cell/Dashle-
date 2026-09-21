@@ -87,7 +87,7 @@ def demander_a_lia(message, historique=None):
         return "Impossible de joindre le service IA. Vérifie la connexion puis réessaie."
 
 
-def demander_a_lia_image(message, image_b64, mime_type):
+def demander_a_lia_image(message, image_b64, mime_type, historique=None):
     if not CLE_API:
         return "La clé Gemini n'est pas configurée. Ajoute GEMINI_API_KEY dans le fichier .env."
 
@@ -95,6 +95,18 @@ def demander_a_lia_image(message, image_b64, mime_type):
         "https://generativelanguage.googleapis.com/v1beta/models/"
         "gemini-3.5-flash-lite:generateContent?key=" + CLE_API
     )
+    contents = []
+    if historique:
+        for msg in historique:
+            role = "model" if msg.get("auteur") == "bot" else "user"
+            contents.append({"role": role, "parts": [{"text": msg.get("texte", "")}]})
+    contents.append({
+        "role": "user",
+        "parts": [
+            {"text": message or ("Décris cette vidéo." if mime_type.startswith("video/") else "Décris cette image.")},
+            {"inline_data": {"mime_type": mime_type, "data": image_b64}}
+        ]
+    })
     corps = {
         "system_instruction": {
             "parts": [{
@@ -103,12 +115,7 @@ def demander_a_lia_image(message, image_b64, mime_type):
                         "Réponds toujours en tant que Dashle."
             }]
         },
-        "contents": [{
-            "parts": [
-                {"text": message or "Décris cette image."},
-                {"inline_data": {"mime_type": mime_type, "data": image_b64}}
-            ]
-        }]
+        "contents": contents
     }
     try:
         reponse = _session.post(url, json=corps, timeout=30)

@@ -43,8 +43,8 @@ def traiter_message(message, historique=None, user_id=None):
 
 # Ce bloc ne s'exécute QUE si tu lances app.py directement (mode console).
 # Il ne se déclenche pas quand interface.py importe traiter_message.
-def traiter_message_image(message, image_b64, mime_type):
-    return demander_a_lia_image(message, image_b64, mime_type)
+def traiter_message_image(message, image_b64, mime_type, historique=None):
+    return demander_a_lia_image(message, image_b64, mime_type, historique)
 
 
 if __name__ == "__main__":
