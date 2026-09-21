@@ -390,7 +390,7 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
     afficherEtatVocal('ecoute', 'Dashle écoute...');
     btnVocal.classList.add('ecoute');
     btnVocal.classList.remove('parle');
-    afficherStatutVocal('🎧 Je t\\'écoute...');
+    afficherStatutVocal("🎧 Je t'écoute...");
     try { reco.start(); } catch (e) { /* déjà démarré, on ignore */ }
   }
 
@@ -440,7 +440,7 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
     btnVocal.classList.remove('ecoute');
     if (vocalActif && e.error !== 'aborted') {
       afficherEtatVocal('attente', 'En attente du micro...');
-      afficherStatutVocal('🎧 Petit souci d\\'écoute, je réessaie...');
+      afficherStatutVocal("🎧 Petit souci d'écoute, je réessaie...");
       setTimeout(demarrerEcouteVocale, 900);
     }
   };
@@ -816,6 +816,19 @@ SETTINGS_PAGE = """
 <section class="carte"><h2>Sécurité</h2><p class="note">Les mots de passe sont hachés. La gestion avancée des sessions et le changement de mot de passe restent à implémenter.</p></section><button type="submit">Enregistrer</button></form><script>const selectVoix=document.getElementById('voix-select');let voixParametres=[];function remplirVoix(){voixParametres='speechSynthesis' in window ? speechSynthesis.getVoices().filter(v=>v.lang&&v.lang.toLowerCase().startsWith('fr')):[];selectVoix.innerHTML='<option value="">Automatique</option>';voixParametres.forEach(v=>{const option=document.createElement('option');option.value=v.name;option.textContent=v.name+' ('+v.lang+')';option.selected=v.name===selectVoix.dataset.selection;selectVoix.appendChild(option);});}remplirVoix();if('speechSynthesis' in window)speechSynthesis.onvoiceschanged=remplirVoix;function reglerSorties(){document.getElementById('vitesse-valeur').value=document.querySelector('[name=voix_vitesse]').value;document.getElementById('tonalite-valeur').value=document.querySelector('[name=voix_tonalite]').value;document.getElementById('volume-valeur').value=document.querySelector('[name=voix_volume]').value;}document.querySelectorAll('input[type=range]').forEach(i=>i.addEventListener('input',reglerSorties));document.getElementById('tester-voix').addEventListener('click',()=>{if(!('speechSynthesis' in window)){return;}speechSynthesis.cancel();const u=new SpeechSynthesisUtterance('Bonjour, je suis Dashle.');u.lang='fr-FR';u.voice=voixParametres.find(v=>v.name===selectVoix.value)||voixParametres[0]||null;u.rate=Number(document.querySelector('[name=voix_vitesse]').value);u.pitch=Number(document.querySelector('[name=voix_tonalite]').value);u.volume=Number(document.querySelector('[name=voix_volume]').value);speechSynthesis.speak(u);});</script></main></body></html>
 """
 
+SETTINGS_PAGE = SETTINGS_PAGE.replace(
+  "Retour au chat</a>",
+  "Retour au chat</a> <a href=\"{{ url_for('securite') }}\">Sécurité</a>",
+)
+
+SECURITY_PAGE = """
+<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Dashle - Sécurité</title>
+<style>:root{font-family:Segoe UI,sans-serif;color:#17251f;background:#f4f8f6}*{box-sizing:border-box}body{margin:0}.page{max-width:620px;margin:auto;padding:24px 18px 50px}.bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:22px}.bar a{color:#10A37F;text-decoration:none;font-weight:600}.carte{background:#fff;border:1px solid #dceae4;border-radius:14px;padding:18px;margin:12px 0}.carte h2{font-size:15px;margin:0 0 14px;color:#10A37F}label{display:block;margin-top:12px;font-size:14px}input{display:block;width:100%;margin-top:5px;padding:10px;border:1px solid #dceae4;border-radius:8px}button{border:0;border-radius:9px;background:#10A37F;color:#fff;padding:10px 14px;margin-top:16px;cursor:pointer}.danger{background:#b42318}.note{color:#71837b;font-size:13px}.message{padding:10px;border-radius:8px;background:#e5f3ed;color:#087355}</style></head>
+<body><main class="page"><div class="bar"><div><strong>Dashle</strong><h1>Sécurité</h1></div><a href="{{ url_for('parametres') }}">Retour aux paramètres</a></div>{% if erreur %}<p class="note">{{ erreur }}</p>{% endif %}{% if succes %}<p class="message">{{ succes }}</p>{% endif %}
+<section class="carte"><h2>Modifier le mot de passe</h2><form method="post" action="{{ url_for('changer_mot_de_passe') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>Ancien mot de passe<input type="password" name="ancien_password" required autocomplete="current-password"></label><label>Nouveau mot de passe<input type="password" name="nouveau_password" minlength="8" required autocomplete="new-password"></label><label>Confirmation<input type="password" name="confirmation_password" minlength="8" required autocomplete="new-password"></label><button type="submit">Modifier le mot de passe</button></form></section>
+<section class="carte"><h2>Supprimer le compte</h2><p class="note">Cette action supprime définitivement le compte, les conversations, les préférences et la mémoire associée.</p><form method="post" action="{{ url_for('supprimer_compte') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>Écris supprimer pour confirmer<input type="text" name="confirmation" required></label><button class="danger" type="submit">Supprimer définitivement</button></form></section></main></body></html>
+"""
+
 AUTH_PAGE = """
 <!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Dashle — {{ titre }}</title>
 <style>body{font-family:Segoe UI,sans-serif;background:#f5f7f6;margin:0;display:grid;place-items:center;min-height:100vh}.carte{width:min(360px,90vw);padding:28px;background:#fff;border-radius:14px;box-shadow:0 4px 18px #0002}h1{color:#10A37F;margin-top:0}label,input,button{display:block;width:100%;box-sizing:border-box}label{margin-top:14px}input{padding:10px;margin-top:5px;border:1px solid #ddd;border-radius:8px}button{margin-top:20px;padding:11px;border:0;border-radius:8px;background:#10A37F;color:#fff;cursor:pointer}.erreur{color:#b00020}</style></head>
@@ -1095,6 +1108,16 @@ def parametres():
     return render_template_string(SETTINGS_PAGE, utilisateur=session["user_email"], preferences=_preferences(user_id), csrf_token=jeton_csrf(), erreur=request.args.get("erreur"), succes=request.args.get("succes"))
 
 
+@app.route("/securite")
+def securite():
+    return render_template_string(
+        SECURITY_PAGE,
+        csrf_token=jeton_csrf(),
+        erreur=request.args.get("erreur"),
+        succes=request.args.get("succes"),
+    )
+
+
 @app.route("/repondre", methods=["POST"])
 def repondre():
     """Endpoint appelé en AJAX : ne renvoie que du JSON, pas de rechargement de page."""
@@ -1233,20 +1256,20 @@ def changer_mot_de_passe():
     nouveau = request.form.get("nouveau_password", "")
     confirmation = request.form.get("confirmation_password", "")
     if len(nouveau) < 8 or nouveau != confirmation:
-        return redirect(url_for("parametres", erreur="Le nouveau mot de passe est invalide."))
+        return redirect(url_for("securite", erreur="Le nouveau mot de passe est invalide."))
     with session_base() as db:
         user = db.query(User).filter_by(id=session["user_id"]).one_or_none()
         if user is None or not check_password_hash(user.password_hash, ancien):
-            return redirect(url_for("parametres", erreur="L'ancien mot de passe est incorrect."))
+            return redirect(url_for("securite", erreur="L'ancien mot de passe est incorrect."))
         user.password_hash = generate_password_hash(nouveau)
-    return redirect(url_for("parametres", succes="Mot de passe modifié."))
+    return redirect(url_for("securite", succes="Mot de passe modifié."))
 
 
 @app.route("/compte/supprimer", methods=["POST"])
 def supprimer_compte():
     confirmation = request.form.get("confirmation", "").strip().lower()
     if confirmation != "supprimer":
-        return redirect(url_for("parametres", erreur="Écris supprimer pour confirmer."))
+        return redirect(url_for("securite", erreur="Écris supprimer pour confirmer."))
     with session_base() as db:
         user = db.query(User).filter_by(id=session["user_id"]).one_or_none()
         if user is not None:
