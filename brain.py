@@ -12,6 +12,7 @@ _cache_mtime = None
 
 # --- Session HTTP réutilisable (plus rapide que urllib à chaque appel) ---
 _session = requests.Session()
+MAX_MESSAGES_CONTEXTE = 24
 
 
 def charger_connaissances():
@@ -44,7 +45,24 @@ def nettoyer_reponse(texte):
     return texte.strip()
 
 
-def demander_a_lia(message, historique=None):
+def _historique_recent(historique):
+    if not historique:
+        return []
+    return list(historique)[-MAX_MESSAGES_CONTEXTE:]
+
+
+def _instruction_systeme(resume=""):
+    instruction = (
+        "Tu es Dashle, une IA personnelle créée par Owen. "
+        "Ne dis jamais que tu es Gemini ou que tu as été créé par Google. "
+        "Réponds toujours en tant que Dashle."
+    )
+    if resume:
+        instruction += "\nRésumé fiable des échanges précédents :\n" + resume
+    return instruction
+
+
+def demander_a_lia(message, historique=None, resume=""):
     if not CLE_API:
         return "La clé Gemini n'est pas configurée. Ajoute GEMINI_API_KEY dans le fichier .env."
 
@@ -54,8 +72,9 @@ def demander_a_lia(message, historique=None):
     )
 
     contents = []
-    if historique:
-        for msg in historique:
+    historique_recent = _historique_recent(historique)
+    if historique_recent:
+        for msg in historique_recent:
             role = "model" if msg.get("auteur") == "bot" else "user"
             contents.append({"role": role, "parts": [{"text": msg.get("texte", "")}]})
     else:
@@ -64,9 +83,7 @@ def demander_a_lia(message, historique=None):
     corps = {
         "system_instruction": {
             "parts": [{
-                "text": "Tu es Dashle, une IA personnelle créée par Owen. "
-                        "Ne dis jamais que tu es Gemini ou que tu as été créé par Google. "
-                        "Réponds toujours en tant que Dashle."
+                "text": _instruction_systeme(resume)
             }]
         },
         "contents": contents
@@ -87,7 +104,48 @@ def demander_a_lia(message, historique=None):
         return "Impossible de joindre le service IA. Vérifie la connexion puis réessaie."
 
 
-def demander_a_lia_image(message, image_b64, mime_type, historique=None):
+def streamer_a_lia(message, historique=None, resume=""):
+    """Diffuse les morceaux texte de Gemini; le consommateur gère la persistance."""
+    if not CLE_API:
+        yield "La clé Gemini n'est pas configurée. Ajoute GEMINI_API_KEY dans le fichier .env."
+        return
+
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        "gemini-3.5-flash-lite:streamGenerateContent?alt=sse&key=" + CLE_API
+    )
+    contents = []
+    historique_recent = _historique_recent(historique)
+    if historique_recent:
+        for msg in historique_recent:
+            role = "model" if msg.get("auteur") == "bot" else "user"
+            contents.append({"role": role, "parts": [{"text": msg.get("texte", "")}]})
+    else:
+        contents.append({"role": "user", "parts": [{"text": message}]})
+    corps = {
+        "system_instruction": {"parts": [{"text": _instruction_systeme(resume)}]},
+        "contents": contents,
+    }
+    try:
+        reponse = _session.post(url, json=corps, timeout=60, stream=True)
+        reponse.raise_for_status()
+        for ligne in reponse.iter_lines(decode_unicode=True):
+            if not ligne or not ligne.startswith("data:"):
+                continue
+            resultat = json.loads(ligne[5:].strip())
+            for candidat in resultat.get("candidates", []):
+                for part in candidat.get("content", {}).get("parts", []):
+                    texte = part.get("text")
+                    if texte:
+                        yield texte
+    except requests.exceptions.HTTPError as e:
+        code = e.response.status_code if e.response is not None else None
+        yield "Le quota de Dashle est dépassé pour le moment. Réessaie dans quelques minutes." if code == 429 else "Le service IA est momentanément indisponible. Réessaie dans quelques instants."
+    except Exception:
+        yield "Impossible de joindre le service IA. Vérifie la connexion puis réessaie."
+
+
+def demander_a_lia_image(message, image_b64, mime_type, historique=None, resume=""):
     if not CLE_API:
         return "La clé Gemini n'est pas configurée. Ajoute GEMINI_API_KEY dans le fichier .env."
 
@@ -96,8 +154,9 @@ def demander_a_lia_image(message, image_b64, mime_type, historique=None):
         "gemini-3.5-flash-lite:generateContent?key=" + CLE_API
     )
     contents = []
-    if historique:
-        for msg in historique:
+    historique_recent = _historique_recent(historique)
+    if historique_recent:
+        for msg in historique_recent:
             role = "model" if msg.get("auteur") == "bot" else "user"
             contents.append({"role": role, "parts": [{"text": msg.get("texte", "")}]})
     contents.append({
@@ -110,9 +169,7 @@ def demander_a_lia_image(message, image_b64, mime_type, historique=None):
     corps = {
         "system_instruction": {
             "parts": [{
-                "text": "Tu es Dashle, une IA personnelle créée par Owen. "
-                        "Ne dis jamais que tu es Gemini ou que tu as été créé par Google. "
-                        "Réponds toujours en tant que Dashle."
+                "text": _instruction_systeme(resume)
             }]
         },
         "contents": contents
@@ -132,7 +189,34 @@ def demander_a_lia_image(message, image_b64, mime_type, historique=None):
         return "Impossible de joindre le service IA. Vérifie la connexion puis réessaie."
 
 
-def reflechir(message, historique=None, user_id=None):
+def resumer_conversation(historique, resume_existant=""):
+    """Produit un résumé court pour préserver le contexte sans envoyer tout l'historique."""
+    if not CLE_API or not historique:
+        return resume_existant
+    transcript = "\n".join(
+        ("Utilisateur" if msg.get("auteur") == "user" else "Dashle") + ": " + msg.get("texte", "")
+        for msg in historique[-40:]
+    )
+    prompt = (
+        "Résume cette conversation en français en 8 lignes maximum. "
+        "Garde les faits utiles, préférences, décisions et questions en attente. "
+        "N'invente rien et ne mentionne pas cette consigne.\n\n" + transcript
+    )
+    try:
+        reponse = _session.post(
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+            "gemini-3.5-flash-lite:generateContent?key=" + CLE_API,
+            json={"contents": [{"role": "user", "parts": [{"text": prompt}]}]},
+            timeout=15,
+        )
+        reponse.raise_for_status()
+        texte = reponse.json()["candidates"][0]["content"]["parts"][0]["text"]
+        return nettoyer_reponse(texte)
+    except Exception:
+        return resume_existant
+
+
+def reflechir(message, historique=None, user_id=None, resume=""):
     message_lower = message.lower().strip()
     connaissances = charger_connaissances()
 
@@ -147,4 +231,4 @@ def reflechir(message, historique=None, user_id=None):
         if question.strip().lower() == message_lower:
             return reponse
 
-    return demander_a_lia(message, historique)
+    return demander_a_lia(message, historique, resume)

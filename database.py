@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
 
 
@@ -47,6 +47,8 @@ class Conversation(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
     title: Mapped[str] = mapped_column(String(120), default="Nouvelle conversation", nullable=False)
+    resume: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    archivee: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     user: Mapped[User] = relationship(back_populates="conversations")
@@ -86,6 +88,10 @@ class UserPreference(Base):
     voix_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     lecture_automatique: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     conserver_historique: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    voix_nom: Mapped[str] = mapped_column(String(160), default="", nullable=False)
+    voix_vitesse: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
+    voix_tonalite: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
+    voix_volume: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
 
 
 class ShareLink(Base):
@@ -110,6 +116,27 @@ class UserMemory(Base):
 
 def initialiser_base():
     Base.metadata.create_all(engine)
+    colonnes_conversations = {
+        "resume": "TEXT NOT NULL DEFAULT ''",
+        "archivee": "BOOLEAN NOT NULL DEFAULT FALSE",
+    }
+    colonnes_existantes = {colonne["name"] for colonne in inspect(engine).get_columns("conversations")}
+    with engine.begin() as connexion:
+        for nom, definition in colonnes_conversations.items():
+            if nom not in colonnes_existantes:
+                connexion.execute(text(f"ALTER TABLE conversations ADD COLUMN {nom} {definition}"))
+
+    colonnes_preferences = {
+        "voix_nom": "VARCHAR(160) NOT NULL DEFAULT ''",
+        "voix_vitesse": "FLOAT NOT NULL DEFAULT 1.0",
+        "voix_tonalite": "FLOAT NOT NULL DEFAULT 1.0",
+        "voix_volume": "FLOAT NOT NULL DEFAULT 1.0",
+    }
+    colonnes_existantes = {colonne["name"] for colonne in inspect(engine).get_columns("user_preferences")}
+    with engine.begin() as connexion:
+        for nom, definition in colonnes_preferences.items():
+            if nom not in colonnes_existantes:
+                connexion.execute(text(f"ALTER TABLE user_preferences ADD COLUMN {nom} {definition}"))
 
 
 @contextmanager

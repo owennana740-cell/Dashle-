@@ -1,11 +1,11 @@
 from dotenv import load_dotenv
 load_dotenv()
-from brain import reflechir, demander_a_lia_image
+from brain import reflechir, demander_a_lia_image, streamer_a_lia
 from memory import retenir, se_souvenir
 from learn import apprendre
 
 
-def traiter_message(message, historique=None, user_id=None):
+def traiter_message(message, historique=None, user_id=None, resume=""):
     message_lower = message.lower()
 
     if message_lower.startswith("retiens que"):
@@ -38,13 +38,29 @@ def traiter_message(message, historique=None, user_id=None):
         return se_souvenir("information", user_id)
 
     else:
-        return reflechir(message, historique, user_id)
+        return reflechir(message, historique, user_id, resume)
 
 
 # Ce bloc ne s'exécute QUE si tu lances app.py directement (mode console).
 # Il ne se déclenche pas quand interface.py importe traiter_message.
-def traiter_message_image(message, image_b64, mime_type, historique=None):
-    return demander_a_lia_image(message, image_b64, mime_type, historique)
+def traiter_message_image(message, image_b64, mime_type, historique=None, resume=""):
+    return demander_a_lia_image(message, image_b64, mime_type, historique, resume)
+
+
+def streamer_message(message, historique=None, user_id=None, resume=""):
+    """Diffuse une réponse IA tout en gardant les commandes locales synchrones."""
+    message_lower = message.lower()
+    est_local = (
+        message_lower.startswith("retiens que")
+        or message_lower.startswith("apprends que")
+        or "quel est mon nom" in message_lower
+        or "mon nom" in message_lower
+        or "que retiens" in message_lower
+    )
+    if est_local:
+        yield traiter_message(message, historique, user_id, resume)
+        return
+    yield from streamer_a_lia(message, historique, resume)
 
 
 if __name__ == "__main__":

@@ -1,13 +1,16 @@
 import os
 import io
 import base64
+import json
 import secrets
 from datetime import datetime
-from flask import Flask, request, render_template_string, redirect, url_for, session, jsonify
+from flask import Flask, Response, request, render_template_string, redirect, stream_with_context, url_for, session, jsonify
 from werkzeug.security import check_password_hash, generate_password_hash
 from sqlalchemy.exc import IntegrityError
-from app import traiter_message, traiter_message_image
+from app import streamer_message, traiter_message, traiter_message_image
+from brain import resumer_conversation
 from database import (Conversation, Message, MessageFeedback, ShareLink, User,
+                      UserMemory,
                       UserPreference, initialiser_base, session_base)
 
 try:
@@ -261,6 +264,7 @@ if ('serviceWorker' in navigator) {
     <div class="ligne-conversation" data-titre="{{ conv.titre|lower }}" style="display:flex;align-items:center;">
       <a href="{{ url_for('charger_conv', i=conv.id) }}" style="flex:1;">{{ conv.titre }}</a>
       <button type="button" title="Partager" aria-label="Partager" onclick="partagerConversation({{ conv.id }})" style="border:0;background:none;cursor:pointer;padding:8px;">🔗</button>
+      <form action="{{ url_for('archiver_conv', i=conv.id) }}" method="post" style="margin:0;"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit" title="Archiver" aria-label="Archiver" style="border:0;background:none;cursor:pointer;padding:8px;">🗃</button></form>
       <form action="{{ url_for('supprimer_conv', i=conv.id) }}" method="post" style="margin:0;">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button type="submit" onclick="return confirm('Supprimer cette conversation ?');" aria-label="Supprimer cette conversation" style="color:#c00;padding:8px 12px;border:0;background:none;cursor:pointer;font-size:20px;">&times;</button>
@@ -347,6 +351,7 @@ const apercuNom = document.getElementById('apercu-fichier-nom');
 const apercuType = document.getElementById('apercu-fichier-type');
 const inputImage = document.getElementById('image-input');
 const csrfToken = {{ csrf_token|tojson }};
+const preferencesVocales = {{ preferences|tojson }};
 let reco = null;
 
 let vocalActif = false;   // mode "conversation vocale en boucle" activé ou non
@@ -568,6 +573,25 @@ function ajouterReponse(texte, messageId) {
 
 let lectureActuelle = null;
 let utteranceActuelle = null;
+let voixDisponibles = [];
+
+function chargerVoix() {
+  if ('speechSynthesis' in window) voixDisponibles = window.speechSynthesis.getVoices();
+}
+
+function choisirVoixFrancaise() {
+  const francaises = voixDisponibles.filter(function(voix) {
+    return voix.lang && voix.lang.toLowerCase().startsWith('fr');
+  });
+  const marqueursFeminins = /female|femme|woman|amelie|audrey|claire|julie|marie|sophie|hortense|celine|victoria|eloquence/i;
+  return francaises.find(function(voix) { return voix.name === preferencesVocales.voix_nom; }) ||
+    francaises.find(function(voix) { return marqueursFeminins.test(voix.name); }) ||
+    francaises[0] || voixDisponibles[0] || null;
+}
+
+chargerVoix();
+if ('speechSynthesis' in window) window.speechSynthesis.onvoiceschanged = chargerVoix;
+
 function arreterLecture() {
   if ('speechSynthesis' in window) window.speechSynthesis.cancel();
   if (lectureActuelle) {
@@ -601,6 +625,11 @@ function lireReponse(bouton) {
   const etat = bouton.closest('.actions-reponse').querySelector('.lecture-etat');
   utteranceActuelle = new SpeechSynthesisUtterance(texte);
   utteranceActuelle.lang = 'fr-FR';
+  const voix = choisirVoixFrancaise();
+  if (voix) utteranceActuelle.voice = voix;
+  utteranceActuelle.rate = Number(preferencesVocales.voix_vitesse) || 1;
+  utteranceActuelle.pitch = Number(preferencesVocales.voix_tonalite) || 1;
+  utteranceActuelle.volume = Number(preferencesVocales.voix_volume) || 1;
   lectureActuelle = bouton;
   bouton.classList.add('actif');
   bouton.textContent = '⏸';
@@ -700,14 +729,39 @@ form.addEventListener('submit', async function(e) {
   afficherReflexion();
 
   try {
-    const res = await fetch("{{ url_for('repondre') }}", {
+    const res = await fetch("{{ url_for('repondre_flux') }}", {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-CSRF-Token': csrfToken },
       body: 'message=' + encodeURIComponent(texte)
     });
-    const data = await res.json();
     retirerReflexion();
-    const reponseElement = ajouterReponse(data.reponse, data.message_id);
+    if (!res.ok || !res.body) throw new Error('Flux indisponible');
+    const reponseElement = ajouterReponse('', '');
+    const messageElement = reponseElement.querySelector('.msg');
+    const lecteur = res.body.getReader();
+    const decodeur = new TextDecoder();
+    let tampon = '';
+    let reponseTexte = '';
+    let messageId = null;
+    while (true) {
+      const morceau = await lecteur.read();
+      if (morceau.done) break;
+      tampon += decodeur.decode(morceau.value, {stream:true});
+      const lignes = tampon.split('\n');
+      tampon = lignes.pop();
+      for (const ligne of lignes) {
+        if (!ligne.startsWith('data:')) continue;
+        const evenement = JSON.parse(ligne.slice(5).trim());
+        if (evenement.morceau) {
+          reponseTexte += evenement.morceau;
+          messageElement.textContent = reponseTexte;
+          chat.scrollTop = chat.scrollHeight;
+        }
+        if (evenement.termine) messageId = evenement.message_id;
+      }
+    }
+    messageElement.dataset.messageId = messageId || '';
+    const data = {reponse: reponseTexte};
 
     const vocal = window._dashleVocal;
     const enModeVocal = vocal && vocal.estActif();
@@ -753,13 +807,13 @@ SHARE_PAGE = """
 
 SETTINGS_PAGE = """
 <!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Dashle - Paramètres</title>
-<style>:root{font-family:Segoe UI,sans-serif;color:#17251f;background:#f4f8f6}*{box-sizing:border-box}body{margin:0}.page{max-width:760px;margin:auto;padding:24px 18px 50px}.bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:22px}.bar a{color:#10A37F;text-decoration:none;font-weight:600}.carte{background:#fff;border:1px solid #dceae4;border-radius:14px;padding:18px;margin:12px 0}.carte h2{font-size:15px;margin:0 0 14px;color:#10A37F}label{display:flex;justify-content:space-between;gap:14px;align-items:center;padding:10px 0;border-top:1px solid #edf2f0}label:first-of-type{border-top:0}select,input[type=checkbox]{accent-color:#10A37F}button{border:0;border-radius:9px;background:#10A37F;color:#fff;padding:10px 14px;cursor:pointer}.note{color:#71837b;font-size:13px}</style></head>
-<body><main class="page"><div class="bar"><div><strong>Dashle</strong><h1>Paramètres</h1></div><a href="{{ url_for('accueil') }}">Retour au chat</a></div>
+<style>:root{font-family:Segoe UI,sans-serif;color:#17251f;background:#f4f8f6}*{box-sizing:border-box}body{margin:0}.page{max-width:760px;margin:auto;padding:24px 18px 50px}.bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:22px}.bar a{color:#10A37F;text-decoration:none;font-weight:600}.carte{background:#fff;border:1px solid #dceae4;border-radius:14px;padding:18px;margin:12px 0}.carte h2{font-size:15px;margin:0 0 14px;color:#10A37F}label{display:flex;justify-content:space-between;gap:14px;align-items:center;padding:10px 0;border-top:1px solid #edf2f0}label:first-of-type{border-top:0}select,input[type=checkbox],input[type=range]{accent-color:#10A37F}select{max-width:100%;padding:7px;border:1px solid #dceae4;border-radius:7px}input[type=range]{width:160px}button{border:0;border-radius:9px;background:#10A37F;color:#fff;padding:10px 14px;cursor:pointer}.secondaire{background:#e5f3ed;color:#087355}.note{color:#71837b;font-size:13px}</style></head>
+<body><main class="page"><div class="bar"><div><strong>Dashle</strong><h1>Paramètres</h1></div><a href="{{ url_for('accueil') }}">Retour au chat</a></div>{% if erreur %}<p class="note">{{ erreur }}</p>{% endif %}{% if succes %}<p class="note">{{ succes }}</p>{% endif %}
 <form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><section class="carte"><h2>Compte</h2><p>{{ utilisateur }}</p><p class="note">La modification de l'adresse e-mail et la récupération de compte ne sont pas encore disponibles.</p></section>
 <section class="carte"><h2>Apparence</h2><label>Thème<select name="theme"><option value="clair" {% if preferences.theme == 'clair' %}selected{% endif %}>Clair</option><option value="sombre" {% if preferences.theme == 'sombre' %}selected{% endif %}>Sombre</option></select></label></section>
-<section class="carte"><h2>Voix</h2><label>Voix activée<input type="checkbox" name="voix_active" {% if preferences.voix_active %}checked{% endif %}></label><p class="note">La lecture automatique reste désactivée par défaut.</p></section>
+<section class="carte"><h2>Voix</h2><label>Voix activée<input type="checkbox" name="voix_active" {% if preferences.voix_active %}checked{% endif %}></label><label>Voix française<select id="voix-select" name="voix_nom" data-selection="{{ preferences.voix_nom }}"><option value="">Automatique</option></select></label><label>Vitesse<input type="range" name="voix_vitesse" min="0.6" max="1.4" step="0.05" value="{{ preferences.voix_vitesse }}"><output id="vitesse-valeur">{{ preferences.voix_vitesse }}</output></label><label>Tonalité<input type="range" name="voix_tonalite" min="0.7" max="1.3" step="0.05" value="{{ preferences.voix_tonalite }}"><output id="tonalite-valeur">{{ preferences.voix_tonalite }}</output></label><label>Volume<input type="range" name="voix_volume" min="0.2" max="1" step="0.05" value="{{ preferences.voix_volume }}"><output id="volume-valeur">{{ preferences.voix_volume }}</output></label><button type="button" class="secondaire" id="tester-voix">▶ Tester la voix</button><p class="note">Dashle privilégie automatiquement une voix féminine française disponible sur ton navigateur. La lecture automatique reste désactivée par défaut.</p></section>
 <section class="carte"><h2>Conversations et confidentialité</h2><label>Conserver l'historique<input type="checkbox" name="conserver_historique" {% if preferences.conserver_historique %}checked{% endif %}></label><p class="note">Les conversations partagées utilisent un lien révocable et ne montrent pas les informations du compte.</p></section>
-<section class="carte"><h2>Sécurité</h2><p class="note">Les mots de passe sont hachés. La gestion avancée des sessions et le changement de mot de passe restent à implémenter.</p></section><button type="submit">Enregistrer</button></form></main></body></html>
+<section class="carte"><h2>Sécurité</h2><p class="note">Les mots de passe sont hachés. La gestion avancée des sessions et le changement de mot de passe restent à implémenter.</p></section><button type="submit">Enregistrer</button></form><script>const selectVoix=document.getElementById('voix-select');let voixParametres=[];function remplirVoix(){voixParametres='speechSynthesis' in window ? speechSynthesis.getVoices().filter(v=>v.lang&&v.lang.toLowerCase().startsWith('fr')):[];selectVoix.innerHTML='<option value="">Automatique</option>';voixParametres.forEach(v=>{const option=document.createElement('option');option.value=v.name;option.textContent=v.name+' ('+v.lang+')';option.selected=v.name===selectVoix.dataset.selection;selectVoix.appendChild(option);});}remplirVoix();if('speechSynthesis' in window)speechSynthesis.onvoiceschanged=remplirVoix;function reglerSorties(){document.getElementById('vitesse-valeur').value=document.querySelector('[name=voix_vitesse]').value;document.getElementById('tonalite-valeur').value=document.querySelector('[name=voix_tonalite]').value;document.getElementById('volume-valeur').value=document.querySelector('[name=voix_volume]').value;}document.querySelectorAll('input[type=range]').forEach(i=>i.addEventListener('input',reglerSorties));document.getElementById('tester-voix').addEventListener('click',()=>{if(!('speechSynthesis' in window)){return;}speechSynthesis.cancel();const u=new SpeechSynthesisUtterance('Bonjour, je suis Dashle.');u.lang='fr-FR';u.voice=voixParametres.find(v=>v.name===selectVoix.value)||voixParametres[0]||null;u.rate=Number(document.querySelector('[name=voix_vitesse]').value);u.pitch=Number(document.querySelector('[name=voix_tonalite]').value);u.volume=Number(document.querySelector('[name=voix_volume]').value);speechSynthesis.speak(u);});</script></main></body></html>
 """
 
 AUTH_PAGE = """
@@ -785,7 +839,7 @@ def _conv_courante(user_id):
 
 def _liste_conversations(user_id):
     with session_base() as db:
-        conversations = db.query(Conversation).filter_by(user_id=user_id).order_by(Conversation.updated_at.desc()).all()
+        conversations = db.query(Conversation).filter_by(user_id=user_id, archivee=False).order_by(Conversation.updated_at.desc()).all()
         return [{"id": conv.id, "titre": conv.title} for conv in conversations]
 
 
@@ -796,6 +850,25 @@ def _messages_conversation(user_id, conversation_id):
             return []
         return [{"id": msg.id, "auteur": msg.auteur, "texte": msg.texte,
              "date": msg.created_at.isoformat()} for msg in conversation.messages]
+
+
+def _resume_conversation(user_id, conversation_id):
+    with session_base() as db:
+        conversation = db.query(Conversation).filter_by(id=conversation_id, user_id=user_id).one_or_none()
+        return conversation.resume if conversation is not None else ""
+
+
+def _actualiser_resume(user_id, conversation_id):
+    historique = _messages_conversation(user_id, conversation_id)
+    if len(historique) < 24 or (len(historique) - 24) % 12 != 0:
+        return
+    resume = _resume_conversation(user_id, conversation_id)
+    nouveau_resume = resumer_conversation(historique, resume)
+    if nouveau_resume and nouveau_resume != resume:
+        with session_base() as db:
+            conversation = db.query(Conversation).filter_by(id=conversation_id, user_id=user_id).one_or_none()
+            if conversation is not None:
+                conversation.resume = nouveau_resume
 
 
 def _preferences(user_id):
@@ -810,6 +883,10 @@ def _preferences(user_id):
             "voix_active": preferences.voix_active,
             "lecture_automatique": preferences.lecture_automatique,
             "conserver_historique": preferences.conserver_historique,
+          "voix_nom": preferences.voix_nom,
+          "voix_vitesse": preferences.voix_vitesse,
+          "voix_tonalite": preferences.voix_tonalite,
+          "voix_volume": preferences.voix_volume,
         }
 
 
@@ -862,6 +939,18 @@ def supprimer_conv(i):
         conversation = db.query(Conversation).filter_by(id=i, user_id=session["user_id"]).one_or_none()
         if conversation:
             db.delete(conversation)
+    if session.get("conversation_id") == i:
+        session.pop("conversation_id", None)
+    return redirect(url_for("accueil"))
+
+
+@app.route("/archiver_conv/<int:i>", methods=["POST"])
+def archiver_conv(i):
+    with session_base() as db:
+        conversation = db.query(Conversation).filter_by(id=i, user_id=session["user_id"]).one_or_none()
+        if conversation is None:
+            return jsonify({"erreur": "Conversation introuvable."}), 404
+        conversation.archivee = True
     if session.get("conversation_id") == i:
         session.pop("conversation_id", None)
     return redirect(url_for("accueil"))
@@ -935,7 +1024,7 @@ def regenerer(message_id):
         dernier_user = next((item["texte"] for item in reversed(historique) if item["auteur"] == "user"), "")
     if not dernier_user:
         return jsonify({"erreur": "Aucun message utilisateur à régénérer."}), 400
-    reponse = traiter_message(dernier_user, historique, user_id)
+    reponse = traiter_message(dernier_user, historique, user_id, _resume_conversation(user_id, conversation_id))
     nouveau_message_id = ajouter_message(user_id, conversation_id, reponse, "bot")
     return jsonify({"reponse": reponse, "message_id": nouveau_message_id})
 
@@ -983,6 +1072,12 @@ def partage(token):
 def parametres():
     user_id = session["user_id"]
     if request.method == "POST":
+        def nombre_parametre(nom, minimum, maximum, valeur_defaut):
+            try:
+                return max(minimum, min(maximum, float(request.form.get(nom, valeur_defaut))))
+            except (TypeError, ValueError):
+                return valeur_defaut
+
         with session_base() as db:
             preferences = db.query(UserPreference).filter_by(user_id=user_id).one_or_none()
             if preferences is None:
@@ -992,8 +1087,12 @@ def parametres():
             preferences.voix_active = request.form.get("voix_active") == "on"
             preferences.lecture_automatique = False
             preferences.conserver_historique = request.form.get("conserver_historique") == "on"
+            preferences.voix_nom = request.form.get("voix_nom", "")[:160]
+            preferences.voix_vitesse = nombre_parametre("voix_vitesse", 0.6, 1.4, 1.0)
+            preferences.voix_tonalite = nombre_parametre("voix_tonalite", 0.7, 1.3, 1.0)
+            preferences.voix_volume = nombre_parametre("voix_volume", 0.2, 1.0, 1.0)
         return redirect(url_for("parametres"))
-    return render_template_string(SETTINGS_PAGE, utilisateur=session["user_email"], preferences=_preferences(user_id), csrf_token=jeton_csrf())
+    return render_template_string(SETTINGS_PAGE, utilisateur=session["user_email"], preferences=_preferences(user_id), csrf_token=jeton_csrf(), erreur=request.args.get("erreur"), succes=request.args.get("succes"))
 
 
 @app.route("/repondre", methods=["POST"])
@@ -1007,17 +1106,47 @@ def repondre():
         return jsonify({"reponse": ""})
 
     historique = _messages_conversation(user_id, conversation_id)
+    resume = _resume_conversation(user_id, conversation_id)
     ajouter_message(user_id, conversation_id, message, "user")
-    reponse = traiter_message(message, historique + [{"auteur": "user", "texte": message}], user_id)
+    reponse = traiter_message(message, historique + [{"auteur": "user", "texte": message}], user_id, resume)
     message_id = ajouter_message(user_id, conversation_id, reponse, "bot")
+    _actualiser_resume(user_id, conversation_id)
 
     return jsonify({"reponse": reponse, "message_id": message_id})
+
+
+@app.route("/repondre_flux", methods=["POST"])
+def repondre_flux():
+    """Diffuse une réponse texte et persiste le message complet à la fin."""
+    user_id = session["user_id"]
+    conversation_id = _conv_courante(user_id)
+    message = request.form.get("message", "").strip()
+    if not message:
+        return jsonify({"reponse": ""})
+
+    historique = _messages_conversation(user_id, conversation_id)
+    resume = _resume_conversation(user_id, conversation_id)
+    ajouter_message(user_id, conversation_id, message, "user")
+
+    @stream_with_context
+    def generer():
+        morceaux = []
+        for morceau in streamer_message(message, historique + [{"auteur": "user", "texte": message}], user_id, resume):
+            morceaux.append(morceau)
+            yield "data: " + json.dumps({"morceau": morceau}, ensure_ascii=False) + "\n\n"
+        reponse = "".join(morceaux).strip()
+        message_id = ajouter_message(user_id, conversation_id, reponse, "bot")
+        _actualiser_resume(user_id, conversation_id)
+        yield "data: " + json.dumps({"termine": True, "message_id": message_id}, ensure_ascii=False) + "\n\n"
+
+    return Response(generer(), mimetype="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 @app.route("/repondre_image", methods=["POST"])
 def repondre_image():
     user_id = session["user_id"]
     conversation_id = _conv_courante(user_id)
     historique = _messages_conversation(user_id, conversation_id)
+    resume = _resume_conversation(user_id, conversation_id)
     message = request.form.get("message", "").strip()
     fichier = request.files.get("image")
     if not fichier:
@@ -1042,8 +1171,9 @@ def repondre_image():
     type_media = "Vidéo" if mime_type.startswith("video/") else "Image"
     ajouterMessage_texte = message or f"[{type_media} envoyée]"
     ajouter_message(user_id, conversation_id, ajouterMessage_texte, "user")
-    reponse = traiter_message_image(message, image_b64, mime_type, historique)
+    reponse = traiter_message_image(message, image_b64, mime_type, historique, resume)
     message_id = ajouter_message(user_id, conversation_id, reponse, "bot")
+    _actualiser_resume(user_id, conversation_id)
 
     return jsonify({"reponse": reponse, "message_id": message_id})
 
@@ -1095,6 +1225,40 @@ def connexion():
     return render_template_string(AUTH_PAGE, titre="Connexion", action="Se connecter", erreur=erreur,
                                   lien="inscription", texte_lien="Pas encore de compte ?", libelle_lien="S'inscrire",
                                   autocomplete="current-password", csrf_token=jeton_csrf())
+
+
+@app.route("/mot-de-passe", methods=["POST"])
+def changer_mot_de_passe():
+    ancien = request.form.get("ancien_password", "")
+    nouveau = request.form.get("nouveau_password", "")
+    confirmation = request.form.get("confirmation_password", "")
+    if len(nouveau) < 8 or nouveau != confirmation:
+        return redirect(url_for("parametres", erreur="Le nouveau mot de passe est invalide."))
+    with session_base() as db:
+        user = db.query(User).filter_by(id=session["user_id"]).one_or_none()
+        if user is None or not check_password_hash(user.password_hash, ancien):
+            return redirect(url_for("parametres", erreur="L'ancien mot de passe est incorrect."))
+        user.password_hash = generate_password_hash(nouveau)
+    return redirect(url_for("parametres", succes="Mot de passe modifié."))
+
+
+@app.route("/compte/supprimer", methods=["POST"])
+def supprimer_compte():
+    confirmation = request.form.get("confirmation", "").strip().lower()
+    if confirmation != "supprimer":
+        return redirect(url_for("parametres", erreur="Écris supprimer pour confirmer."))
+    with session_base() as db:
+        user = db.query(User).filter_by(id=session["user_id"]).one_or_none()
+        if user is not None:
+            db.query(UserMemory).filter_by(user_id=user.id).delete()
+            db.query(MessageFeedback).filter_by(user_id=user.id).delete()
+            db.query(UserPreference).filter_by(user_id=user.id).delete()
+            db.query(ShareLink).filter(ShareLink.conversation_id.in_(
+                db.query(Conversation.id).filter_by(user_id=user.id)
+            )).delete(synchronize_session=False)
+            db.delete(user)
+    session.clear()
+    return redirect(url_for("inscription"))
 
 
 @app.route("/deconnexion", methods=["POST"])
