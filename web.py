@@ -310,7 +310,7 @@ if ('serviceWorker' in navigator) {
   </div>
 </section>
 
-<form class="bas" id="form-message" autocomplete="off">
+<form class="bas" id="form-message" autocomplete="off" method="post" action="{{ url_for('repondre_flux') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <input type="file" id="image-input" accept="image/*,video/*" style="display:none;">
   <button type="button" id="btn-attach" style="background:none;border:none;cursor:pointer;flex-shrink:0;padding:0;width:34px;height:34px;" onclick="document.getElementById('image-input').click();"><img src="{{ url_for('static', filename='icon-attach.png') }}" style="width:34px;height:34px;display:block;border-radius:8px;"></button>
   <textarea id="message" name="message" rows="1" placeholder="Écris à Dashle..." required></textarea>
@@ -747,7 +747,7 @@ form.addEventListener('submit', async function(e) {
       const morceau = await lecteur.read();
       if (morceau.done) break;
       tampon += decodeur.decode(morceau.value, {stream:true});
-      const lignes = tampon.split('\n');
+      const lignes = tampon.split('\\n');
       tampon = lignes.pop();
       for (const ligne of lignes) {
         if (!ligne.startsWith('data:')) continue;
