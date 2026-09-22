@@ -355,7 +355,11 @@ const preferencesVocales = {{ preferences|tojson }};
 let reco = null;
 
 let vocalActif = false;   // mode "conversation vocale en boucle" activé ou non
+let vocalReduit = false;  // mode vocal actif mais panneau réduit
 let modeActuel = 'texte'; // 'texte' | 'dictee' | 'vocal' : d'où vient la dernière écoute
+let ecouteActive = false;   // une reconnaissance vocale est en cours (évite deux start())
+let reponseEnCours = false; // Dashle est en train de répondre : on ne s'écoute pas soi-même
+let microBloque = false;    // micro refusé par le navigateur : on arrête de réessayer
 
 function afficherEtatVocal(etat, libelle) {
   modeVocal.dataset.etat = etat;
@@ -383,44 +387,99 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
   reco.lang = 'fr-FR';
   reco.interimResults = false;
 
+  function arreterEcoute() {
+    ecouteActive = false;
+    try { reco.stop(); } catch (e) { /* session déjà terminée */ }
+  }
+
   function demarrerEcouteVocale() {
-    if (!vocalActif) return;
+    if (!vocalActif || ecouteActive || microBloque) return; // idempotent : jamais deux start()
     modeActuel = 'vocal';
     ouvrirModeVocal();
     afficherEtatVocal('ecoute', 'Dashle écoute...');
     btnVocal.classList.add('ecoute');
     btnVocal.classList.remove('parle');
     afficherStatutVocal("🎧 Je t'écoute...");
-    try { reco.start(); } catch (e) { /* déjà démarré, on ignore */ }
+    arreterLecture(); // Dashle se tait dès que tu reprends la parole
+    try {
+      reco.start();
+      ecouteActive = true;
+    } catch (e) {
+      ecouteActive = false;
+      afficherStatutVocal('🎙️ Micro indisponible (' + ((e && e.name) || 'erreur') + ').');
+    }
   }
 
   // Dictée simple (un seul message, on garde le contrôle avant l'envoi)
   btnMicro.onclick = function() {
-    if (vocalActif) return; // pas de dictée manuelle pendant le mode vocal
-    modeActuel = 'dictee';
-    btnMicro.classList.add('actif');
-    try { reco.start(); } catch (e) {}
+  if (vocalActif && !vocalReduit) return;
+
+  microBloque = false;
+  modeActuel = 'dictee';
+  btnMicro.classList.add('actif');
+
+  const lancerMicro = function() {
+    try {
+      reco.start();
+      ecouteActive = true;
+    } catch (e) {
+      ecouteActive = false;
+      btnMicro.classList.remove('actif');
+      afficherStatutVocal(
+        '🎙️ Micro indisponible (' +
+        ((e && e.name) || 'erreur') +
+        ').'
+      );
+    }
   };
 
-  // Toggle du mode conversation vocale en boucle
+    if (ecouteActive) {
+  arreterEcoute();
+
+  setTimeout(function() {
+    if (!ecouteActive) {
+      lancerMicro();
+    }
+  }, 600);
+} else {
+  lancerMicro();
+}
+};
   btnVocal.onclick = function() {
+
+    if (vocalActif && vocalReduit) {
+    vocalReduit = false;
+    modeActuel = 'vocal';
+    btnVocal.classList.add('vocal-on');
+    ouvrirModeVocal();
+    demarrerEcouteVocale();
+    return;
+  }
     vocalActif = !vocalActif;
+    microBloque = false;
     if (vocalActif) {
       btnVocal.classList.add('vocal-on');
       ouvrirModeVocal();
-      try { reco.stop(); } catch (e) {}
-      demarrerEcouteVocale();
+      if (ecouteActive) {
+        // onend relancera l'écoute en mode vocal : on ne fait pas stop()+start() collés
+        arreterEcoute();
+      } else {
+        demarrerEcouteVocale();
+      }
     } else {
       btnVocal.classList.remove('vocal-on', 'ecoute', 'parle');
       fermerModeVocal();
       afficherEtatVocal('attente', 'En attente');
       afficherStatutVocal('');
-      try { reco.stop(); } catch (e) {}
+      arreterEcoute();
+      arreterLecture();
     }
   };
 
   reco.onresult = function(e) {
-    const transcript = e.results[0][0].transcript;
+    const resultat = e.results[0] && e.results[0][0];
+    const transcript = resultat ? resultat.transcript.trim() : '';
+    if (!transcript) return;
     champ.value = transcript;
     champ.style.height = 'auto';
     if (modeActuel === 'vocal') {
@@ -431,14 +490,23 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
   };
 
   reco.onend = function() {
+    ecouteActive = false;
     btnMicro.classList.remove('actif');
     btnVocal.classList.remove('ecoute');
-  };
+    // En mode vocal, l'écoute reprend dès que Dashle a fini de répondre.
+    if (vocalActif && !vocalReduit && modeActuel === 'vocal' && !reponseEnCours) {
+  setTimeout(demarrerEcouteVocale, 400);
+}
 
   reco.onerror = function(e) {
+    ecouteActive = false;
     btnMicro.classList.remove('actif');
     btnVocal.classList.remove('ecoute');
-    if (vocalActif && e.error !== 'aborted') {
+    if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+      microBloque = true;
+      afficherEtatVocal('attente', 'Micro refusé');
+      afficherStatutVocal('🎙️ Micro refusé : autorise le microphone dans le navigateur (et utilise localhost ou https).');
+    } else if (vocalActif && e.error !== 'aborted' && e.error !== 'no-speech') {
       afficherEtatVocal('attente', 'En attente du micro...');
       afficherStatutVocal("🎧 Petit souci d'écoute, je réessaie...");
       setTimeout(demarrerEcouteVocale, 900);
@@ -449,6 +517,13 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
   window._dashleVocal = {
     estActif: function() { return vocalActif; },
     reprendreEcoute: demarrerEcouteVocale,
+    marquerEnvoi: function() { reponseEnCours = true; },
+    marquerFin: function() {
+      reponseEnCours = false;
+      if (!vocalActif || microBloque || champ.disabled) return; // envoi bloqué : on ne relance pas
+      if (lectureActuelle || ('speechSynthesis' in window && window.speechSynthesis.speaking)) return; // le TTS relancera l'écoute
+      setTimeout(demarrerEcouteVocale, 400);
+    },
     marquerParle: function() {
       ouvrirModeVocal();
       afficherEtatVocal('parle', 'Dashle parle...');
@@ -458,8 +533,15 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
     }
   };
 } else {
-  btnMicro.style.display = 'none';
-  btnVocal.style.display = 'none';
+  // Le navigateur ne sait pas transcrire la voix : on le dit clairement au lieu de
+  // masquer les boutons en silence.
+  btnMicro.disabled = true;
+  btnVocal.disabled = true;
+  btnMicro.style.opacity = '0.45';
+  btnVocal.style.opacity = '0.45';
+  const messageVocal = 'Reconnaissance vocale non prise en charge par ce navigateur : utilise Chrome ou Edge.';
+  btnMicro.title = messageVocal;
+  btnVocal.title = messageVocal;
 }
 
 let fichierImage = null;
@@ -505,7 +587,10 @@ inputImage.addEventListener('change', function(e) {
   afficherApercuFichier(fichierImage);
 });
 document.getElementById('retirer-fichier').addEventListener('click', effacerApercuFichier);
-document.getElementById('reduire-vocal').addEventListener('click', fermerModeVocal);
+document.getElementById('reduire-vocal').addEventListener('click', function() {
+  vocalReduit = true;
+  fermerModeVocal();
+});
 document.getElementById('fermer-vocal').addEventListener('click', function() {
   vocalActif = false;
   btnVocal.classList.remove('vocal-on', 'ecoute', 'parle');
@@ -608,6 +693,10 @@ function lireReponse(bouton) {
     bouton.closest('.actions-reponse').querySelector('.lecture-etat').textContent = 'Voix indisponible';
     return;
   }
+  if (preferencesVocales.voix_active === false) {
+    bouton.closest('.actions-reponse').querySelector('.lecture-etat').textContent = 'Voix désactivée';
+    return;
+  }
   const texte = bouton.closest('.message-wrap').querySelector('.msg').textContent;
   if (lectureActuelle === bouton && window.speechSynthesis.speaking) {
     if (window.speechSynthesis.paused) {
@@ -705,6 +794,7 @@ form.addEventListener('submit', async function(e) {
     champ.value = '';
     champ.style.height = 'auto';
     afficherReflexion();
+    if (window._dashleVocal) window._dashleVocal.marquerEnvoi();
     const formData = new FormData();
     formData.append('message', texte);
     formData.append('image', fichierImage);
@@ -719,9 +809,11 @@ form.addEventListener('submit', async function(e) {
     }
     fichierImage = null;
     effacerApercuFichier();
+    if (window._dashleVocal) window._dashleVocal.marquerFin();
     return;
   }
   if (!texte) return;
+  if (window._dashleVocal) window._dashleVocal.marquerEnvoi();
 
   ajouterMessage(texte, 'user');
   champ.value = '';
