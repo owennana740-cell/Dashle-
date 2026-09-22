@@ -1254,7 +1254,7 @@ def repondre_flux():
         _actualiser_resume(user_id, conversation_id)
         yield "data: " + json.dumps({"termine": True, "message_id": message_id}, ensure_ascii=False) + "\n\n"
 
-    return Response(generer(), mimetype="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+    return Response(generer(), mimetype="text/event-stream; charset=utf-8", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 @app.route("/repondre_image", methods=["POST"])
 def repondre_image():

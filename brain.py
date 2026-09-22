@@ -36,12 +36,26 @@ def charger_connaissances():
 
 
 def nettoyer_reponse(texte):
-    """Retire le Markdown brut (**, ###, *, ---, etc.) que Gemini renvoie parfois."""
-    texte = re.sub(r"#{1,6}\s*", "", texte)  # titres ###
-    texte = re.sub(r"\*\*(.*?)\*\*", r"\1", texte)  # gras **texte**
-    texte = re.sub(r"\*(.*?)\*", r"\1", texte)  # italique *texte*
-    texte = re.sub(r"^-{3,}$", "", texte, flags=re.MULTILINE)  # ---
-    texte = re.sub(r"^\s*[-*]\s+", "- ", texte, flags=re.MULTILINE)  # listes
+    """Retire le Markdown brut (**, ###, *, ---, etc.) que Gemini renvoie parfois.
+
+    Les motifs restent prudents pour ne jamais abîmer du texte légitime :
+    un dièse en milieu de mot (C#, F#), une multiplication (2 * 3 * 4) ou un
+    astérisque entouré d'espaces restent intacts.
+    """
+    # Titres ### : uniquement en début de ligne (ne touche plus "C#" ni "canal #3")
+    texte = re.sub(r"^[ \t]{0,3}#{1,6}[ \t]*", "", texte, flags=re.MULTILINE)
+    # Gras **texte** : le contenu ne commence ni ne finit par un espace,
+    # donc une puissance écrite "2 ** 3" n'est plus modifiée.
+    texte = re.sub(r"\*\*(?!\s)([^*\n]+?)(?<!\s)\*\*", r"\1", texte)
+    # Italique *texte* : ouvre sur un caractère non blanc, ferme sur un non-blanc.
+    # "2 * 3 * 4" et "5 * 3 font 15" ne sont donc plus touchés.
+    texte = re.sub(r"(?<!\*)\*(?!\s)([^*\n]+?)(?<!\s)\*(?!\*)", r"\1", texte)
+    # Lignes de séparation --- / *** / ___ : supprimées d'un bloc
+    texte = re.sub(r"^[ \t]*[-*_]{3,}[ \t]*$", "", texte, flags=re.MULTILINE)
+    # Puces de liste normalisées en "- " sans jamais traverser un saut de ligne
+    texte = re.sub(r"^[ \t]*[-*][ \t]+", "- ", texte, flags=re.MULTILINE)
+    # Au plus une ligne vide d'affilée
+    texte = re.sub(r"\n{3,}", "\n\n", texte)
     return texte.strip()
 
 
@@ -129,6 +143,10 @@ def streamer_a_lia(message, historique=None, resume=""):
     try:
         reponse = _session.post(url, json=corps, timeout=60, stream=True)
         reponse.raise_for_status()
+        # Le flux SSE de Gemini est de l'UTF-8 mais son en-tete Content-Type ne
+        # precise pas toujours "charset", ce qui ferait deviner ISO-8859-1 a
+        # requests (=> accents casses : é devient Ã©). On force donc l'UTF-8.
+        reponse.encoding = "utf-8"
         for ligne in reponse.iter_lines(decode_unicode=True):
             if not ligne or not ligne.startswith("data:"):
                 continue
