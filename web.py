@@ -25,7 +25,7 @@ app.config.update(
     MAX_CONTENT_LENGTH=8 * 1024 * 1024,
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
-    SESSION_COOKIE_SECURE=os.environ.get("SESSION_COOKIE_SECURE") == "1",
+    SESSION_COOKIE_SECURE=os.environ.get("SESSION_COOKIE_SECURE", "1") != "0",
 )
 initialiser_base()
 
@@ -65,11 +65,25 @@ def jeton_csrf():
 
 @app.before_request
 def verifier_csrf():
+    """Vérifie le jeton CSRF sans casser les requêtes AJAX/SSE JSON."""
     if request.method != "POST":
         return None
-    token = request.form.get("csrf_token") or request.headers.get("X-CSRF-Token")
-    if not token or not secrets.compare_digest(token, session.get("csrf_token", "")):
-        return jsonify({"reponse": "Requête invalide. Recharge la page puis réessaie."}), 400
+
+    # Les endpoints publics utilisent également le CSRF, mais une requête
+    # vers un endpoint protégé sans session doit laisser exiger_connexion()
+    # répondre par une redirection plutôt que par un faux 400 CSRF.
+    publiques = {"connexion", "inscription"}
+    if request.endpoint not in publiques and "user_id" not in session:
+        return None
+
+    token = request.headers.get("X-CSRF-Token") or request.form.get("csrf_token")
+    if not token and request.is_json:
+        donnees = request.get_json(silent=True) or {}
+        token = donnees.get("csrf_token")
+
+    attendu = session.get("csrf_token", "")
+    if not token or not attendu or not secrets.compare_digest(str(token), str(attendu)):
+        return jsonify({"erreur": "Session CSRF expirée. Recharge la page puis réessaie."}), 400
     return None
 
 
@@ -310,7 +324,7 @@ if ('serviceWorker' in navigator) {
   </div>
 </section>
 
-<form class="bas" id="form-message" autocomplete="off" method="post" action="{{ url_for('repondre_flux') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+<form class="bas" id="form-message" autocomplete="off">
   <input type="file" id="image-input" accept="image/*,video/*" style="display:none;">
   <button type="button" id="btn-attach" style="background:none;border:none;cursor:pointer;flex-shrink:0;padding:0;width:34px;height:34px;" onclick="document.getElementById('image-input').click();"><img src="{{ url_for('static', filename='icon-attach.png') }}" style="width:34px;height:34px;display:block;border-radius:8px;"></button>
   <textarea id="message" name="message" rows="1" placeholder="Écris à Dashle..." required></textarea>
@@ -355,11 +369,24 @@ const preferencesVocales = {{ preferences|tojson }};
 let reco = null;
 
 let vocalActif = false;   // mode "conversation vocale en boucle" activé ou non
-let vocalReduit = false;  // mode vocal actif mais panneau réduit
 let modeActuel = 'texte'; // 'texte' | 'dictee' | 'vocal' : d'où vient la dernière écoute
-let ecouteActive = false;   // une reconnaissance vocale est en cours (évite deux start())
-let reponseEnCours = false; // Dashle est en train de répondre : on ne s'écoute pas soi-même
-let microBloque = false;    // micro refusé par le navigateur : on arrête de réessayer
+let requeteActiveController = null;
+let reponseEnCours = false;
+let interruptionDemandee = false;
+
+// Détection locale de parole pendant que Dashle parle.
+// Elle permet d'arrêter immédiatement speechSynthesis et le fetch SSE.
+let vadStream = null;
+let vadAudioContext = null;
+let vadAnalyser = null;
+let vadSource = null;
+let vadAnimation = null;
+let vadDerniereDetection = 0;
+let vadDebutParole = 0;
+let vadPret = false;
+const VAD_SEUIL = 0.045;
+const VAD_DUREE_MIN = 110;
+const VAD_COOLDOWN = 900;
 
 function afficherEtatVocal(etat, libelle) {
   modeVocal.dataset.etat = etat;
@@ -381,168 +408,206 @@ function afficherStatutVocal(texte) {
   statutVocal.classList.toggle('visible', !!texte);
 }
 
+async function demarrerVAD() {
+  if (vadPret || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    return vadPret;
+  }
+  try {
+    vadStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+        channelCount: 1
+      }
+    });
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return false;
+
+    vadAudioContext = new AudioCtx();
+    vadSource = vadAudioContext.createMediaStreamSource(vadStream);
+    vadAnalyser = vadAudioContext.createAnalyser();
+    vadAnalyser.fftSize = 1024;
+    vadAnalyser.smoothingTimeConstant = 0.18;
+    vadSource.connect(vadAnalyser);
+    vadPret = true;
+    surveillerParole();
+    return true;
+  } catch (e) {
+    console.warn("Détection d'interruption vocale indisponible :", e);
+    vadPret = false;
+    return false;
+  }
+}
+
+function arreterVAD() {
+  if (vadAnimation) cancelAnimationFrame(vadAnimation);
+  vadAnimation = null;
+  if (vadStream) vadStream.getTracks().forEach(function(track) { track.stop(); });
+  vadStream = null;
+  if (vadSource) { try { vadSource.disconnect(); } catch (e) {} }
+  if (vadAnalyser) { try { vadAnalyser.disconnect(); } catch (e) {} }
+  vadSource = null;
+  vadAnalyser = null;
+  if (vadAudioContext) { try { vadAudioContext.close(); } catch (e) {} }
+  vadAudioContext = null;
+  vadPret = false;
+  vadDebutParole = 0;
+}
+
+function surveillerParole() {
+  if (!vadPret || !vadAnalyser || !vocalActif) return;
+  const donnees = new Uint8Array(vadAnalyser.fftSize);
+  const verifier = function() {
+    if (!vadPret || !vadAnalyser || !vocalActif) return;
+    vadAnalyser.getByteTimeDomainData(donnees);
+    let somme = 0;
+    for (let i = 0; i < donnees.length; i++) {
+      const x = (donnees[i] - 128) / 128;
+      somme += x * x;
+    }
+    const rms = Math.sqrt(somme / donnees.length);
+    const maintenant = performance.now();
+
+    // On n'interrompt que si Dashle est en train de générer/parler.
+    const dashleOccupe = reponseEnCours ||
+      (window.speechSynthesis && window.speechSynthesis.speaking);
+
+    if (dashleOccupe && rms >= VAD_SEUIL) {
+      if (!vadDebutParole) vadDebutParole = maintenant;
+      if (maintenant - vadDebutParole >= VAD_DUREE_MIN &&
+          maintenant - vadDerniereDetection >= VAD_COOLDOWN) {
+        vadDerniereDetection = maintenant;
+        vadDebutParole = 0;
+        interrompreDashle();
+      }
+    } else {
+      vadDebutParole = 0;
+    }
+    vadAnimation = requestAnimationFrame(verifier);
+  };
+  verifier();
+}
+
+function arreterGeneration() {
+  if (requeteActiveController) {
+    try { requeteActiveController.abort(); } catch (e) {}
+    requeteActiveController = null;
+  }
+  reponseEnCours = false;
+}
+
+function interrompreDashle() {
+  if (!vocalActif) return;
+  interruptionDemandee = true;
+  if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+  arreterGeneration();
+  if (lectureActuelle) {
+    lectureActuelle.classList.remove('actif');
+    lectureActuelle.textContent = '▶';
+  }
+  lectureActuelle = null;
+  utteranceActuelle = null;
+  afficherEtatVocal('ecoute', "Je t'écoute...");
+  afficherStatutVocal("🎙️ Vas-y, je t'écoute.");
+  btnVocal.classList.add('ecoute');
+  btnVocal.classList.remove('parle');
+  try { reco.abort(); } catch (e) {}
+  setTimeout(function() {
+    if (!vocalActif || !reco) return;
+    try { reco.start(); } catch (e) {}
+  }, 90);
+}
+
 if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
   const Reco = window.SpeechRecognition || window.webkitSpeechRecognition;
   reco = new Reco();
   reco.lang = 'fr-FR';
   reco.interimResults = false;
-
-  function arreterEcoute() {
-    ecouteActive = false;
-    try { reco.stop(); } catch (e) { /* session déjà terminée */ }
-  }
+  reco.continuous = false;
+  reco.maxAlternatives = 1;
 
   function demarrerEcouteVocale() {
-    if (!vocalActif || ecouteActive || microBloque) return; // idempotent : jamais deux start()
+    if (!vocalActif) return;
     modeActuel = 'vocal';
     ouvrirModeVocal();
     afficherEtatVocal('ecoute', 'Dashle écoute...');
     btnVocal.classList.add('ecoute');
     btnVocal.classList.remove('parle');
     afficherStatutVocal("🎧 Je t'écoute...");
-    arreterLecture(); // Dashle se tait dès que tu reprends la parole
-    try {
-      reco.start();
-      ecouteActive = true;
-    } catch (e) {
-      ecouteActive = false;
-      afficherStatutVocal('🎙️ Micro indisponible (' + ((e && e.name) || 'erreur') + ').');
-    }
+    try { reco.start(); } catch (e) {}
   }
 
-  // Dictée simple (un seul message, on garde le contrôle avant l'envoi)
   btnMicro.onclick = function() {
-  if (vocalActif && !vocalReduit) return;
-
-  microBloque = false;
-  modeActuel = 'dictee';
-  btnMicro.classList.add('actif');
-
-  const lancerMicro = function() {
-    try {
-      reco.start();
-      ecouteActive = true;
-    } catch (e) {
-      ecouteActive = false;
-      btnMicro.classList.remove('actif');
-      afficherStatutVocal(
-        '🎙️ Micro indisponible (' +
-        ((e && e.name) || 'erreur') +
-        ').'
-      );
-    }
+    if (vocalActif) return;
+    modeActuel = 'dictee';
+    btnMicro.classList.add('actif');
+    try { reco.start(); } catch (e) {}
   };
 
-    if (ecouteActive) {
-  arreterEcoute();
-
-  setTimeout(function() {
-    if (!ecouteActive) {
-      lancerMicro();
-    }
-  }, 600);
-} else {
-  lancerMicro();
-}
-};
-  btnVocal.onclick = function() {
-
-    if (vocalActif && vocalReduit) {
-    vocalReduit = false;
-    modeActuel = 'vocal';
-    btnVocal.classList.add('vocal-on');
-    ouvrirModeVocal();
-    demarrerEcouteVocale();
-    return;
-  }
+  btnVocal.onclick = async function() {
     vocalActif = !vocalActif;
-    microBloque = false;
     if (vocalActif) {
       btnVocal.classList.add('vocal-on');
       ouvrirModeVocal();
-      if (ecouteActive) {
-        // onend relancera l'écoute en mode vocal : on ne fait pas stop()+start() collés
-        arreterEcoute();
-      } else {
-        demarrerEcouteVocale();
-      }
+      interruptionDemandee = false;
+      await demarrerVAD();
+      try { reco.stop(); } catch (e) {}
+      setTimeout(demarrerEcouteVocale, 80);
     } else {
       btnVocal.classList.remove('vocal-on', 'ecoute', 'parle');
       fermerModeVocal();
       afficherEtatVocal('attente', 'En attente');
       afficherStatutVocal('');
-      arreterEcoute();
-      arreterLecture();
+      try { reco.stop(); } catch (e) {}
+      arreterGeneration();
+      if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+      arreterVAD();
     }
   };
 
   reco.onresult = function(e) {
-    const resultat = e.results[0] && e.results[0][0];
-    const transcript = resultat ? resultat.transcript.trim() : '';
+    const transcript = (e.results[0][0].transcript || '').trim();
     if (!transcript) return;
     champ.value = transcript;
     champ.style.height = 'auto';
     if (modeActuel === 'vocal') {
+      interruptionDemandee = false;
       afficherEtatVocal('reflexion', 'Dashle réfléchit...');
       afficherStatutVocal('');
       form.requestSubmit();
     }
   };
 
-    reco.onend = function() {
-    ecouteActive = false;
+  reco.onend = function() {
     btnMicro.classList.remove('actif');
-    btnVocal.classList.remove('ecoute');
-    // En mode vocal, l'écoute reprend dès que Dashle a fini de répondre.
-    if (vocalActif && !vocalReduit && modeActuel === 'vocal' && !reponseEnCours) {
-      setTimeout(demarrerEcouteVocale, 400);
-    }
+    if (!vocalActif) btnVocal.classList.remove('ecoute');
   };
 
   reco.onerror = function(e) {
-    ecouteActive = false;
     btnMicro.classList.remove('actif');
-    btnVocal.classList.remove('ecoute');
-    if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
-      microBloque = true;
-      afficherEtatVocal('attente', 'Micro refusé');
-      afficherStatutVocal('🎙️ Micro refusé : autorise le microphone dans le navigateur (et utilise localhost ou https).');
-    } else if (vocalActif && e.error !== 'aborted' && e.error !== 'no-speech') {
+    if (vocalActif && e.error !== 'aborted') {
       afficherEtatVocal('attente', 'En attente du micro...');
       afficherStatutVocal("🎧 Petit souci d'écoute, je réessaie...");
-      setTimeout(demarrerEcouteVocale, 900);
+      setTimeout(demarrerEcouteVocale, 700);
     }
   };
 
-  // Exposées pour le handler d'envoi plus bas
   window._dashleVocal = {
     estActif: function() { return vocalActif; },
     reprendreEcoute: demarrerEcouteVocale,
-    marquerEnvoi: function() { reponseEnCours = true; },
-    marquerFin: function() {
-      reponseEnCours = false;
-      if (!vocalActif || microBloque || champ.disabled) return; // envoi bloqué : on ne relance pas
-      if (lectureActuelle || ('speechSynthesis' in window && window.speechSynthesis.speaking)) return; // le TTS relancera l'écoute
-      setTimeout(demarrerEcouteVocale, 400);
-    },
     marquerParle: function() {
       ouvrirModeVocal();
       afficherEtatVocal('parle', 'Dashle parle...');
       btnVocal.classList.add('parle');
       btnVocal.classList.remove('ecoute');
       afficherStatutVocal('🗣️ Dashle répond...');
-    }
+    },
+    interrompre: interrompreDashle
   };
 } else {
-  // Le navigateur ne sait pas transcrire la voix : on le dit clairement au lieu de
-  // masquer les boutons en silence.
-  btnMicro.disabled = true;
-  btnVocal.disabled = true;
-  btnMicro.style.opacity = '0.45';
-  btnVocal.style.opacity = '0.45';
-  const messageVocal = 'Reconnaissance vocale non prise en charge par ce navigateur : utilise Chrome ou Edge.';
-  btnMicro.title = messageVocal;
-  btnVocal.title = messageVocal;
+  btnMicro.style.display = 'none';
+  btnVocal.style.display = 'none';
 }
 
 let fichierImage = null;
@@ -588,10 +653,7 @@ inputImage.addEventListener('change', function(e) {
   afficherApercuFichier(fichierImage);
 });
 document.getElementById('retirer-fichier').addEventListener('click', effacerApercuFichier);
-document.getElementById('reduire-vocal').addEventListener('click', function() {
-  vocalReduit = true;
-  fermerModeVocal();
-});
+document.getElementById('reduire-vocal').addEventListener('click', fermerModeVocal);
 document.getElementById('fermer-vocal').addEventListener('click', function() {
   vocalActif = false;
   btnVocal.classList.remove('vocal-on', 'ecoute', 'parle');
@@ -650,7 +712,7 @@ function ajouterReponse(texte, messageId) {
   message.className = 'msg bot';
   message.dataset.messageId = messageId || '';
   message.textContent = texte;
-  enveloppe.innerHTML = '<div class="actions-reponse"><button type="button" class="action-copier" title="Copier">📋</button><button type="button" class="action-feedback" data-valeur="positif" title="J&#x27;aime">👍</button><button type="button" class="action-feedback" data-valeur="negatif" title="Je n&#x27;aime pas">👎</button><button type="button" class="action-partager" title="Partager">🔗</button><button type="button" class="action-regenerer" title="Régénérer">🔄</button><button type="button" class="action-lire" title="Lecture / pause">▶</button><button type="button" class="action-stop" title="Arrêter">⏹</button><span class="lecture-etat"></span></div>';
+  enveloppe.innerHTML = '<div class="actions-reponse"><button type="button" class="action-copier" title="Copier">📋</button><button type="button" class="action-feedback" data-valeur="positif" title="J&#39;aime">👍</button><button type="button" class="action-feedback" data-valeur="negatif" title="Je n&#39;aime pas">👎</button><button type="button" class="action-partager" title="Partager">🔗</button><button type="button" class="action-regenerer" title="Régénérer">🔄</button><button type="button" class="action-lire" title="Lecture / pause">▶</button><button type="button" class="action-stop" title="Arrêter">⏹</button><span class="lecture-etat"></span></div>';
   enveloppe.insertBefore(message, enveloppe.firstChild);
   chat.appendChild(enveloppe);
   chat.scrollTop = chat.scrollHeight;
@@ -683,7 +745,8 @@ function arreterLecture() {
   if (lectureActuelle) {
     lectureActuelle.classList.remove('actif');
     lectureActuelle.textContent = '▶';
-    lectureActuelle.closest('.actions-reponse').querySelector('.lecture-etat').textContent = '';
+    const actions = lectureActuelle.closest('.actions-reponse');
+    if (actions) actions.querySelector('.lecture-etat').textContent = '';
   }
   lectureActuelle = null;
   utteranceActuelle = null;
@@ -692,10 +755,6 @@ function arreterLecture() {
 function lireReponse(bouton) {
   if (!('speechSynthesis' in window)) {
     bouton.closest('.actions-reponse').querySelector('.lecture-etat').textContent = 'Voix indisponible';
-    return;
-  }
-  if (preferencesVocales.voix_active === false) {
-    bouton.closest('.actions-reponse').querySelector('.lecture-etat').textContent = 'Voix désactivée';
     return;
   }
   const texte = bouton.closest('.message-wrap').querySelector('.msg').textContent;
@@ -711,6 +770,7 @@ function lireReponse(bouton) {
     }
     return;
   }
+
   arreterLecture();
   const etat = bouton.closest('.actions-reponse').querySelector('.lecture-etat');
   utteranceActuelle = new SpeechSynthesisUtterance(texte);
@@ -724,8 +784,22 @@ function lireReponse(bouton) {
   bouton.classList.add('actif');
   bouton.textContent = '⏸';
   etat.textContent = 'Lecture';
-  utteranceActuelle.onend = arreterLecture;
-  utteranceActuelle.onerror = function() { etat.textContent = 'Erreur audio'; arreterLecture(); };
+
+  utteranceActuelle.onend = function() {
+    const vocal = window._dashleVocal;
+    const modeVocal = vocal && vocal.estActif();
+    arreterLecture();
+    if (modeVocal && !interruptionDemandee) {
+      vocal.reprendreEcoute();
+    }
+  };
+  utteranceActuelle.onerror = function() {
+    etat.textContent = 'Erreur audio';
+    arreterLecture();
+    if (window._dashleVocal && window._dashleVocal.estActif()) {
+      setTimeout(window._dashleVocal.reprendreEcoute, 200);
+    }
+  };
   window.speechSynthesis.speak(utteranceActuelle);
 }
 
@@ -790,19 +864,29 @@ form.addEventListener('submit', async function(e) {
   const texte = champ.value.trim();
   if (!texte && !fichierImage) return;
 
+  // Si l'utilisateur envoie un nouveau message manuellement, on coupe
+  // immédiatement toute lecture vocale précédente.
+  if ('speechSynthesis' in window && window.speechSynthesis.speaking) {
+    arreterLecture();
+  }
+
   if (fichierImage) {
     ajouterMessage(texte || '📷 Image envoyée', 'user');
     champ.value = '';
     champ.style.height = 'auto';
     afficherReflexion();
-    if (window._dashleVocal) window._dashleVocal.marquerEnvoi();
     const formData = new FormData();
     formData.append('message', texte);
     formData.append('image', fichierImage);
     try {
-      const res = await fetch("{{ url_for('repondre_image') }}", { method: 'POST', headers: { 'X-CSRF-Token': csrfToken }, body: formData });
+      const res = await fetch("{{ url_for('repondre_image') }}", {
+        method: 'POST',
+        headers: { 'X-CSRF-Token': csrfToken },
+        body: formData
+      });
       const data = await res.json();
       retirerReflexion();
+      if (!res.ok) throw new Error(data.erreur || data.reponse || 'Erreur image');
       ajouterReponse(data.reponse, data.message_id);
     } catch (err) {
       retirerReflexion();
@@ -810,41 +894,67 @@ form.addEventListener('submit', async function(e) {
     }
     fichierImage = null;
     effacerApercuFichier();
-    if (window._dashleVocal) window._dashleVocal.marquerFin();
     return;
   }
+
   if (!texte) return;
-  if (window._dashleVocal) window._dashleVocal.marquerEnvoi();
 
   ajouterMessage(texte, 'user');
   champ.value = '';
   champ.style.height = 'auto';
   afficherReflexion();
 
+  const controller = new AbortController();
+  requeteActiveController = controller;
+  reponseEnCours = true;
+  interruptionDemandee = false;
+  let reponseElement = null;
+  let messageElement = null;
+
   try {
     const res = await fetch("{{ url_for('repondre_flux') }}", {
       method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-CSRF-Token': csrfToken },
-      body: 'message=' + encodeURIComponent(texte)
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+        'X-CSRF-Token': csrfToken,
+        'Accept': 'text/event-stream'
+      },
+      body: 'message=' + encodeURIComponent(texte),
+      signal: controller.signal,
+      cache: 'no-store'
     });
+
     retirerReflexion();
-    if (!res.ok || !res.body) throw new Error('Flux indisponible');
-    const reponseElement = ajouterReponse('', '');
-    const messageElement = reponseElement.querySelector('.msg');
+    if (!res.ok || !res.body) {
+      let detail = '';
+      try { detail = (await res.json()).erreur || ''; } catch (e) {}
+      throw new Error(detail || 'Flux indisponible (' + res.status + ')');
+    }
+
+    reponseElement = ajouterReponse('', '');
+    messageElement = reponseElement.querySelector('.msg');
     const lecteur = res.body.getReader();
     const decodeur = new TextDecoder();
     let tampon = '';
     let reponseTexte = '';
     let messageId = null;
+
     while (true) {
       const morceau = await lecteur.read();
       if (morceau.done) break;
       tampon += decodeur.decode(morceau.value, {stream:true});
-      const lignes = tampon.split('\\n');
+      const lignes = tampon.split('\n');
       tampon = lignes.pop();
+
       for (const ligne of lignes) {
         if (!ligne.startsWith('data:')) continue;
-        const evenement = JSON.parse(ligne.slice(5).trim());
+        let evenement;
+        try {
+          evenement = JSON.parse(ligne.slice(5).trim());
+        } catch (e) {
+          continue;
+        }
+        if (evenement.erreur) throw new Error(evenement.erreur);
         if (evenement.morceau) {
           reponseTexte += evenement.morceau;
           messageElement.textContent = reponseTexte;
@@ -853,30 +963,45 @@ form.addEventListener('submit', async function(e) {
         if (evenement.termine) messageId = evenement.message_id;
       }
     }
+
     messageElement.dataset.messageId = messageId || '';
-    const data = {reponse: reponseTexte};
+    reponseEnCours = false;
+    requeteActiveController = null;
 
     const vocal = window._dashleVocal;
     const enModeVocal = vocal && vocal.estActif();
 
-    if (enModeVocal) {
+    if (enModeVocal && reponseTexte) {
       vocal.marquerParle();
       const boutonLecture = reponseElement.querySelector('.action-lire');
       lireReponse(boutonLecture);
-      if (utteranceActuelle) {
-        const reprise = utteranceActuelle.onend;
-        utteranceActuelle.onend = function() { reprise(); vocal.reprendreEcoute(); };
-      }
     }
 
-    if (data.reponse && data.reponse.toLowerCase().includes('quota')) {
+    if (reponseTexte && reponseTexte.toLowerCase().includes('quota')) {
       bloquerEnvoi(30);
     }
   } catch (err) {
     retirerReflexion();
+    reponseEnCours = false;
+    if (requeteActiveController === controller) requeteActiveController = null;
+
+    if (err && err.name === 'AbortError') {
+      // Interruption volontaire : on retire seulement la réponse partielle.
+      if (reponseElement) reponseElement.remove();
+      if (vocalActif) {
+        setTimeout(function() {
+          if (vocalActif && reco) { try { reco.start(); } catch (e) {} }
+        }, 100);
+      }
+      return;
+    }
+
+    if (reponseElement && !reponseElement.querySelector('.msg').textContent.trim()) {
+      reponseElement.remove();
+    }
     ajouterMessage("Erreur de connexion au serveur. Réessaie.", 'bot');
     if (window._dashleVocal && window._dashleVocal.estActif()) {
-      setTimeout(window._dashleVocal.reprendreEcoute, 1000);
+      setTimeout(window._dashleVocal.reprendreEcoute, 700);
     }
   }
 });
@@ -1233,12 +1358,21 @@ def repondre():
 
 @app.route("/repondre_flux", methods=["POST"])
 def repondre_flux():
-    """Diffuse une réponse texte et persiste le message complet à la fin."""
-    user_id = session["user_id"]
+    """Diffuse une réponse SSE, accepte FormData/JSON et gère les annulations vocales."""
+    user_id = session.get("user_id")
+    if not user_id:
+        return jsonify({"erreur": "Session expirée. Recharge la page."}), 401
+
     conversation_id = _conv_courante(user_id)
-    message = request.form.get("message", "").strip()
+
+    if request.is_json:
+        donnees = request.get_json(silent=True) or {}
+        message = str(donnees.get("message", "")).strip()
+    else:
+        message = request.form.get("message", "").strip()
+
     if not message:
-        return jsonify({"reponse": ""})
+        return jsonify({"erreur": "Aucun message reçu."}), 400
 
     historique = _messages_conversation(user_id, conversation_id)
     resume = _resume_conversation(user_id, conversation_id)
@@ -1247,15 +1381,51 @@ def repondre_flux():
     @stream_with_context
     def generer():
         morceaux = []
-        for morceau in streamer_message(message, historique + [{"auteur": "user", "texte": message}], user_id, resume):
-            morceaux.append(morceau)
-            yield "data: " + json.dumps({"morceau": morceau}, ensure_ascii=False) + "\n\n"
-        reponse = "".join(morceaux).strip()
-        message_id = ajouter_message(user_id, conversation_id, reponse, "bot")
-        _actualiser_resume(user_id, conversation_id)
-        yield "data: " + json.dumps({"termine": True, "message_id": message_id}, ensure_ascii=False) + "\n\n"
+        try:
+            for morceau in streamer_message(
+                message,
+                historique + [{"auteur": "user", "texte": message}],
+                user_id,
+                resume,
+            ):
+                if morceau is None:
+                    continue
+                morceau = str(morceau)
+                if not morceau:
+                    continue
+                morceaux.append(morceau)
+                yield "data: " + json.dumps({"morceau": morceau}, ensure_ascii=False) + "\n\n"
 
-    return Response(generer(), mimetype="text/event-stream; charset=utf-8", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+            reponse = "".join(morceaux).strip()
+            message_id = ajouter_message(user_id, conversation_id, reponse, "bot")
+            _actualiser_resume(user_id, conversation_id)
+            yield "data: " + json.dumps(
+                {"termine": True, "message_id": message_id},
+                ensure_ascii=False,
+            ) + "\n\n"
+
+        except GeneratorExit:
+            # Le navigateur peut fermer le fetch dès que l'utilisateur
+            # interrompt Dashle. Dans ce cas, on ne tente pas de sauvegarder
+            # une réponse incomplète comme réponse du bot.
+            return
+        except Exception as erreur:
+            print("ERREUR /repondre_flux :", repr(erreur))
+            yield "data: " + json.dumps(
+                {"erreur": "Erreur pendant la génération de la réponse."},
+                ensure_ascii=False,
+            ) + "\n\n"
+
+    return Response(
+        generer(),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 @app.route("/repondre_image", methods=["POST"])
 def repondre_image():
@@ -1381,6 +1551,11 @@ def supprimer_compte():
 def deconnexion():
     session.clear()
     return redirect(url_for("connexion"))
+
+
+@app.route("/health")
+def health():
+    return jsonify({"ok": True, "service": "dashle"})
 
 
 if __name__ == "__main__":
