@@ -489,14 +489,15 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
     }
   };
 
-  reco.onend = function() {
+    reco.onend = function() {
     ecouteActive = false;
     btnMicro.classList.remove('actif');
     btnVocal.classList.remove('ecoute');
     // En mode vocal, l'écoute reprend dès que Dashle a fini de répondre.
     if (vocalActif && !vocalReduit && modeActuel === 'vocal' && !reponseEnCours) {
-  setTimeout(demarrerEcouteVocale, 400);
-}
+      setTimeout(demarrerEcouteVocale, 400);
+    }
+  };
 
   reco.onerror = function(e) {
     ecouteActive = false;

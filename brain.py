@@ -244,9 +244,9 @@ def reflechir(message, historique=None, user_id=None, resume=""):
         if question.strip().lower() == message_lower:
             return reponse
 
-    appris = se_souvenir_tout(user_id)
+   
+    return demander_a_lia(message, historique, resume)
+ appris = se_souvenir_tout(user_id)
     for question, reponse in appris.items():
         if question.strip().lower() == message_lower:
             return reponse
-
-    return demander_a_lia(message, historique, resume)
