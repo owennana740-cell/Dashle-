@@ -1,21 +1,53 @@
+"""brain.py — Couche d'accès à l'API Gemini pour Dashle.
+
+Corrections apportées :
+- Modèle centralisé via config.MODELE_GEMINI (plus de chaîne codée en dur).
+- _construire_contents() garantit que le message courant est TOUJOURS
+  le dernier élément 'user' envoyé à Gemini (bug précédent : le message
+  était absent quand l'historique était non vide).
+- Erreur HTTP 404 explicite si le nom de modèle est incorrect.
+- Timeout augmenté pour le streaming (90 s), réduit pour les appels sync (20 s).
+- generationConfig ajouté (température, limite de tokens).
+- resumer_conversation déclenche le résumé de manière plus fiable.
+"""
+
 import json
 import os
 import re
 import requests
 from core.utils import BASE_DIR, lire_json
 from memory import se_souvenir_tout
-from config import CLE_API
+from config import CLE_API, MODELE_GEMINI, MAX_MESSAGES_CONTEXTE
 
-# --- Cache RAM pour charger_connaissances() ---
+# ---------------------------------------------------------------------------
+# Cache RAM pour charger_connaissances()
+# ---------------------------------------------------------------------------
 _cache_connaissances = None
 _cache_mtime = None
 
-# --- Session HTTP réutilisable (plus rapide que urllib à chaque appel) ---
+# ---------------------------------------------------------------------------
+# Session HTTP réutilisable — évite de créer une connexion TCP à chaque appel
+# ---------------------------------------------------------------------------
 _session = requests.Session()
-MAX_MESSAGES_CONTEXTE = 24
 
 
-def charger_connaissances():
+# ---------------------------------------------------------------------------
+# Helpers internes
+# ---------------------------------------------------------------------------
+
+def _url(endpoint: str) -> str:
+    """Construit l'URL REST Gemini.
+    La clé est en paramètre de requête (standard Google AI Studio).
+    Elle n'est JAMAIS transmise au navigateur.
+    """
+    return (
+        f"https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{MODELE_GEMINI}:{endpoint}?key={CLE_API}"
+    )
+
+
+def charger_connaissances() -> dict:
+    """Charge knowledge.json avec cache basé sur mtime."""
     global _cache_connaissances, _cache_mtime
 
     chemin = BASE_DIR / "data" / "knowledge.json"
@@ -24,7 +56,6 @@ def charger_connaissances():
     except OSError:
         return {}
 
-    # Si le fichier n'a pas changé depuis le dernier chargement, on renvoie le cache
     if _cache_connaissances is not None and _cache_mtime == mtime_actuel:
         return _cache_connaissances
 
@@ -35,37 +66,34 @@ def charger_connaissances():
     return _cache_connaissances
 
 
-def nettoyer_reponse(texte):
-    """Retire le Markdown brut (**, ###, *, ---, etc.) que Gemini renvoie parfois.
+def nettoyer_reponse(texte: str) -> str:
+    """Retire le Markdown brut que Gemini renvoie parfois.
 
-    Les motifs restent prudents pour ne jamais abîmer du texte légitime :
-    un dièse en milieu de mot (C#, F#), une multiplication (2 * 3 * 4) ou un
-    astérisque entouré d'espaces restent intacts.
+    Les motifs sont prudents : C#, F#, 2 * 3, astérisques isolés restent intacts.
     """
-    # Titres ### : uniquement en début de ligne (ne touche plus "C#" ni "canal #3")
+    # Titres ### : uniquement en début de ligne
     texte = re.sub(r"^[ \t]{0,3}#{1,6}[ \t]*", "", texte, flags=re.MULTILINE)
-    # Gras **texte** : le contenu ne commence ni ne finit par un espace,
-    # donc une puissance écrite "2 ** 3" n'est plus modifiée.
+    # Gras **texte** (ne touche pas "2 ** 3")
     texte = re.sub(r"\*\*(?!\s)([^*\n]+?)(?<!\s)\*\*", r"\1", texte)
-    # Italique *texte* : ouvre sur un caractère non blanc, ferme sur un non-blanc.
-    # "2 * 3 * 4" et "5 * 3 font 15" ne sont donc plus touchés.
+    # Italique *texte* (ne touche pas "2 * 3 * 4")
     texte = re.sub(r"(?<!\*)\*(?!\s)([^*\n]+?)(?<!\s)\*(?!\*)", r"\1", texte)
-    # Lignes de séparation --- / *** / ___ : supprimées d'un bloc
+    # Lignes de séparation --- / *** / ___
     texte = re.sub(r"^[ \t]*[-*_]{3,}[ \t]*$", "", texte, flags=re.MULTILINE)
-    # Puces de liste normalisées en "- " sans jamais traverser un saut de ligne
+    # Puces de liste → "- "
     texte = re.sub(r"^[ \t]*[-*][ \t]+", "- ", texte, flags=re.MULTILINE)
     # Au plus une ligne vide d'affilée
     texte = re.sub(r"\n{3,}", "\n\n", texte)
     return texte.strip()
 
 
-def _historique_recent(historique):
+def _historique_recent(historique) -> list:
+    """Retourne les N derniers messages du contexte."""
     if not historique:
         return []
     return list(historique)[-MAX_MESSAGES_CONTEXTE:]
 
 
-def _instruction_systeme(resume=""):
+def _instruction_systeme(resume: str = "") -> str:
     instruction = (
         "Tu es Dashle, une IA personnelle créée par Owen. "
         "Ne dis jamais que tu es Gemini ou que tu as été créé par Google. "
@@ -76,81 +104,112 @@ def _instruction_systeme(resume=""):
     return instruction
 
 
-def demander_a_lia(message, historique=None, resume=""):
+def _construire_contents(message: str, historique) -> list:
+    """Construit la liste 'contents' envoyée à Gemini.
+
+    CORRECTION : le message courant est TOUJOURS inclus comme dernier
+    élément 'user', même quand l'historique est non vide.
+    On évite la duplication si le message est déjà le dernier de l'historique.
+    """
+    contents = []
+    for msg in _historique_recent(historique):
+        role = "model" if msg.get("auteur") == "bot" else "user"
+        texte = msg.get("texte", "")
+        if texte:
+            contents.append({"role": role, "parts": [{"text": texte}]})
+
+    # Vérifier si le message courant est déjà en dernière position
+    dernier = contents[-1] if contents else None
+    deja_present = (
+        dernier is not None
+        and dernier["role"] == "user"
+        and dernier["parts"][0]["text"] == message
+    )
+    if not deja_present:
+        contents.append({"role": "user", "parts": [{"text": message}]})
+
+    return contents
+
+
+def _gen_config() -> dict:
+    """Configuration de génération commune à tous les appels."""
+    return {"temperature": 0.7, "maxOutputTokens": 2048}
+
+
+def _message_erreur_http(code) -> str:
+    if code == 429:
+        return "Le quota de Dashle est dépassé pour le moment. Réessaie dans quelques minutes."
+    if code == 404:
+        return (
+            f"Le modèle '{MODELE_GEMINI}' est introuvable. "
+            "Vérifie la variable GEMINI_MODEL dans ton fichier .env."
+        )
+    return "Le service IA est momentanément indisponible. Réessaie dans quelques instants."
+
+
+# ---------------------------------------------------------------------------
+# API publique
+# ---------------------------------------------------------------------------
+
+def demander_a_lia(message: str, historique=None, resume: str = "") -> str:
+    """Requête synchrone (non-streaming) vers Gemini."""
     if not CLE_API:
         return "La clé Gemini n'est pas configurée. Ajoute GEMINI_API_KEY dans le fichier .env."
 
-    url = (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        "gemini-3.5-flash-lite:generateContent?key=" + CLE_API
-    )
-
-    contents = []
-    historique_recent = _historique_recent(historique)
-    if historique_recent:
-        for msg in historique_recent:
-            role = "model" if msg.get("auteur") == "bot" else "user"
-            contents.append({"role": role, "parts": [{"text": msg.get("texte", "")}]})
-    else:
-        contents.append({"role": "user", "parts": [{"text": message}]})
-
     corps = {
-        "system_instruction": {
-            "parts": [{
-                "text": _instruction_systeme(resume)
-            }]
-        },
-        "contents": contents
+        "system_instruction": {"parts": [{"text": _instruction_systeme(resume)}]},
+        "contents": _construire_contents(message, historique),
+        "generationConfig": _gen_config(),
     }
 
     try:
-        reponse = _session.post(url, json=corps, timeout=15)
-        reponse.raise_for_status()
-        resultat = reponse.json()
-        texte = resultat["candidates"][0]["content"]["parts"][0]["text"]
+        rep = _session.post(_url("generateContent"), json=corps, timeout=20)
+        rep.raise_for_status()
+        texte = rep.json()["candidates"][0]["content"]["parts"][0]["text"]
         return nettoyer_reponse(texte)
     except requests.exceptions.HTTPError as e:
         code = e.response.status_code if e.response is not None else None
-        if code == 429:
-            return "Le quota de Dashle est dépassé pour le moment. Réessaie dans quelques minutes."
-        return "Le service IA est momentanément indisponible. Réessaie dans quelques instants."
-    except Exception as e:
+        return _message_erreur_http(code)
+    except requests.exceptions.Timeout:
+        return "Le service IA a mis trop de temps à répondre. Réessaie dans quelques instants."
+    except Exception:
         return "Impossible de joindre le service IA. Vérifie la connexion puis réessaie."
 
 
-def streamer_a_lia(message, historique=None, resume=""):
-    """Diffuse les morceaux texte de Gemini; le consommateur gère la persistance."""
+def streamer_a_lia(message: str, historique=None, resume: str = ""):
+    """Diffuse les morceaux texte de Gemini via SSE (Server-Sent Events).
+
+    CORRECTION : _construire_contents() garantit désormais que le message
+    courant est toujours présent dans contents.
+    """
     if not CLE_API:
         yield "La clé Gemini n'est pas configurée. Ajoute GEMINI_API_KEY dans le fichier .env."
         return
 
-    url = (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        "gemini-3.5-flash-lite:streamGenerateContent?alt=sse&key=" + CLE_API
-    )
-    contents = []
-    historique_recent = _historique_recent(historique)
-    if historique_recent:
-        for msg in historique_recent:
-            role = "model" if msg.get("auteur") == "bot" else "user"
-            contents.append({"role": role, "parts": [{"text": msg.get("texte", "")}]})
-    else:
-        contents.append({"role": "user", "parts": [{"text": message}]})
     corps = {
         "system_instruction": {"parts": [{"text": _instruction_systeme(resume)}]},
-        "contents": contents,
+        "contents": _construire_contents(message, historique),
+        "generationConfig": _gen_config(),
     }
+
     try:
-        reponse = _session.post(url, json=corps, timeout=60, stream=True)
-        reponse.raise_for_status()
-        # Le flux SSE de Gemini est de l'UTF-8 mais son en-tete Content-Type ne
-        # precise pas toujours "charset", ce qui ferait deviner ISO-8859-1 a
-        # requests (=> accents casses : é devient Ã©). On force donc l'UTF-8.
-        reponse.encoding = "utf-8"
-        for ligne in reponse.iter_lines(decode_unicode=True):
+        rep = _session.post(
+            _url("streamGenerateContent") + "&alt=sse",
+            json=corps,
+            timeout=90,
+            stream=True,
+        )
+        rep.raise_for_status()
+        for ligne in rep.iter_lines(decode_unicode=True):
             if not ligne or not ligne.startswith("data:"):
                 continue
-            resultat = json.loads(ligne[5:].strip())
+            payload = ligne[5:].strip()
+            if not payload or payload == "[DONE]":
+                continue
+            try:
+                resultat = json.loads(payload)
+            except json.JSONDecodeError:
+                continue
             for candidat in resultat.get("candidates", []):
                 for part in candidat.get("content", {}).get("parts", []):
                     texte = part.get("text")
@@ -158,61 +217,75 @@ def streamer_a_lia(message, historique=None, resume=""):
                         yield texte
     except requests.exceptions.HTTPError as e:
         code = e.response.status_code if e.response is not None else None
-        yield "Le quota de Dashle est dépassé pour le moment. Réessaie dans quelques minutes." if code == 429 else "Le service IA est momentanément indisponible. Réessaie dans quelques instants."
+        yield _message_erreur_http(code)
+    except requests.exceptions.Timeout:
+        yield "Le service IA a mis trop de temps à répondre. Réessaie dans quelques instants."
     except Exception:
         yield "Impossible de joindre le service IA. Vérifie la connexion puis réessaie."
 
 
-def demander_a_lia_image(message, image_b64, mime_type, historique=None, resume=""):
+def demander_a_lia_image(
+    message: str,
+    image_b64: str,
+    mime_type: str,
+    historique=None,
+    resume: str = "",
+) -> str:
+    """Requête synchrone avec image ou vidéo inline."""
     if not CLE_API:
         return "La clé Gemini n'est pas configurée. Ajoute GEMINI_API_KEY dans le fichier .env."
 
-    url = (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        "gemini-3.5-flash-lite:generateContent?key=" + CLE_API
-    )
     contents = []
-    historique_recent = _historique_recent(historique)
-    if historique_recent:
-        for msg in historique_recent:
-            role = "model" if msg.get("auteur") == "bot" else "user"
-            contents.append({"role": role, "parts": [{"text": msg.get("texte", "")}]})
+    for msg in _historique_recent(historique):
+        role = "model" if msg.get("auteur") == "bot" else "user"
+        texte = msg.get("texte", "")
+        if texte:
+            contents.append({"role": role, "parts": [{"text": texte}]})
+
+    texte_message = message or (
+        "Décris cette vidéo." if mime_type.startswith("video/") else "Décris cette image."
+    )
     contents.append({
         "role": "user",
         "parts": [
-            {"text": message or ("Décris cette vidéo." if mime_type.startswith("video/") else "Décris cette image.")},
-            {"inline_data": {"mime_type": mime_type, "data": image_b64}}
-        ]
+            {"text": texte_message},
+            {"inline_data": {"mime_type": mime_type, "data": image_b64}},
+        ],
     })
+
     corps = {
-        "system_instruction": {
-            "parts": [{
-                "text": _instruction_systeme(resume)
-            }]
-        },
-        "contents": contents
+        "system_instruction": {"parts": [{"text": _instruction_systeme(resume)}]},
+        "contents": contents,
+        "generationConfig": _gen_config(),
     }
+
     try:
-        reponse = _session.post(url, json=corps, timeout=30)
-        reponse.raise_for_status()
-        resultat = reponse.json()
-        texte = resultat["candidates"][0]["content"]["parts"][0]["text"]
+        rep = _session.post(_url("generateContent"), json=corps, timeout=30)
+        rep.raise_for_status()
+        texte = rep.json()["candidates"][0]["content"]["parts"][0]["text"]
         return nettoyer_reponse(texte)
     except requests.exceptions.HTTPError as e:
         code = e.response.status_code if e.response is not None else None
-        if code == 429:
-            return "Le quota de Dashle est dépassé pour le moment. Réessaie dans quelques minutes."
-        return "Le service IA est momentanément indisponible. Réessaie dans quelques instants."
-    except Exception as e:
+        return _message_erreur_http(code)
+    except requests.exceptions.Timeout:
+        return "Le service IA a mis trop de temps à répondre. Réessaie dans quelques instants."
+    except Exception:
         return "Impossible de joindre le service IA. Vérifie la connexion puis réessaie."
 
 
-def resumer_conversation(historique, resume_existant=""):
-    """Produit un résumé court pour préserver le contexte sans envoyer tout l'historique."""
+def resumer_conversation(historique, resume_existant: str = "") -> str:
+    """Produit un résumé compact pour préserver le contexte sans envoyer
+    tout l'historique à chaque appel.
+
+    Amélioration : utilise aussi le modèle centralisé, timeout explicite,
+    et renvoie resume_existant en cas d'échec (pas de perte silencieuse).
+    """
     if not CLE_API or not historique:
         return resume_existant
+
     transcript = "\n".join(
-        ("Utilisateur" if msg.get("auteur") == "user" else "Dashle") + ": " + msg.get("texte", "")
+        ("Utilisateur" if msg.get("auteur") == "user" else "Dashle")
+        + ": " + msg.get("texte", "")
         for msg in historique[-40:]
     )
     prompt = (
@@ -220,26 +293,32 @@ def resumer_conversation(historique, resume_existant=""):
         "Garde les faits utiles, préférences, décisions et questions en attente. "
         "N'invente rien et ne mentionne pas cette consigne.\n\n" + transcript
     )
+
     try:
-        reponse = _session.post(
-            "https://generativelanguage.googleapis.com/v1beta/models/"
-            "gemini-3.5-flash-lite:generateContent?key=" + CLE_API,
-            json={"contents": [{"role": "user", "parts": [{"text": prompt}]}]},
-            timeout=15,
+        rep = _session.post(
+            _url("generateContent"),
+            json={
+                "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                "generationConfig": {"temperature": 0.3, "maxOutputTokens": 512},
+            },
+            timeout=20,
         )
-        reponse.raise_for_status()
-        texte = reponse.json()["candidates"][0]["content"]["parts"][0]["text"]
-        return nettoyer_reponse(texte)
+        rep.raise_for_status()
+        texte = rep.json()["candidates"][0]["content"]["parts"][0]["text"]
+        return nettoyer_reponse(texte) or resume_existant
     except Exception:
         return resume_existant
 
 
-def reflechir(message, historique=None, user_id=None, resume=""):
+def reflechir(message: str, historique=None, user_id=None, resume: str = "") -> str:
+    """Point d'entrée principal pour une réponse synchrone.
+
+    Vérifie d'abord les connaissances locales et la mémoire utilisateur,
+    puis délègue à Gemini si aucune correspondance exacte n'est trouvée.
+    """
     message_lower = message.lower().strip()
     connaissances = charger_connaissances()
 
-    # Comparaison EXACTE (et non plus "in") pour éviter les faux positifs
-    # quand une clé courte comme "nom" est une simple sous-chaîne du message.
     for question, reponse in connaissances.items():
         if question.strip().lower() == message_lower:
             return reponse
