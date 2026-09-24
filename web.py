@@ -835,6 +835,27 @@ video#apercu-fichier-media { object-fit: contain; }
 }
 #retirer-fichier:hover { background: #ffe0e0; color: #b00020; }
 
+/* ---- Bouton rouvrir overlay vocal (vue réduite) ---- */
+.btn-rouvrir-vocal {
+  display: none; /* géré par JS */
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: 0 12px 6px;
+  padding: 7px 14px;
+  background: #2563eb;
+  color: white;
+  border: none;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background var(--transition);
+}
+.btn-rouvrir-vocal:hover { background: #1d4ed8; }
+.btn-rouvrir-vocal.actif { display: flex; }
+
 /* ---- Statut vocal (texte) ---- */
 #statut-vocal {
   text-align: center;
@@ -1200,6 +1221,9 @@ if ('serviceWorker' in navigator) {
 </div>
 
 <div id="statut-vocal" aria-live="polite"></div>
+<button type="button" id="btn-rouvrir-vocal" class="btn-rouvrir-vocal" title="Rouvrir la conversation vocale" aria-label="Rouvrir le mode vocal" style="display:none;">
+  🎙 Vue vocale
+</button>
 """
 
 # Javascript principal — injecté dans PAGE
@@ -1851,7 +1875,13 @@ document.getElementById('retirer-fichier').addEventListener('click', effacerAper
 // =====================================================================
 // Contrôles mode vocal plein écran
 // =====================================================================
-document.getElementById('reduire-vocal').addEventListener('click', fermerModeVocal);
+document.getElementById('reduire-vocal').addEventListener('click', function() {
+  fermerModeVocal();
+  // Afficher le bouton de réouverture si le mode vocal reste actif.
+  var btnRouvrir = document.getElementById('btn-rouvrir-vocal');
+  if (btnRouvrir) btnRouvrir.classList.toggle('actif', vocalActif);
+});
+
 document.getElementById('fermer-vocal').addEventListener('click', function() {
   vocalActif = false;
   btnVocal.classList.remove('vocal-on', 'ecoute', 'parle');
@@ -1861,7 +1891,21 @@ document.getElementById('fermer-vocal').addEventListener('click', function() {
   afficherEtatVocal('attente', 'En attente');
   if ('speechSynthesis' in window) window.speechSynthesis.cancel();
   arreterVAD();
+  // Cacher le bouton de réouverture : le mode vocal est réellement arrêté.
+  var btnRouvrir = document.getElementById('btn-rouvrir-vocal');
+  if (btnRouvrir) btnRouvrir.classList.remove('actif');
 });
+
+// Bouton rouvrir : ramène l'overlay sans relancer quoi que ce soit —
+// le VAD et la reconnaissance continuent de tourner en arrière-plan.
+var btnRouvrirVocal = document.getElementById('btn-rouvrir-vocal');
+if (btnRouvrirVocal) {
+  btnRouvrirVocal.addEventListener('click', function() {
+    if (!vocalActif) return;
+    ouvrirModeVocal();
+    btnRouvrirVocal.classList.remove('actif');
+  });
+}
 
 // =====================================================================
 // Menu utilisateur dropdown
