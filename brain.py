@@ -136,9 +136,11 @@ def _gen_config() -> dict:
     return {"temperature": 0.7, "maxOutputTokens": 2048}
 
 
-def _message_erreur_http(code, detail: str = "") -> str:
+def _message_erreur_http(code, detail: str = "", retry_after: int = 0) -> str:
     if code == 429:
-        return "Le quota de Dashle est dépassé pour le moment. Réessaie dans quelques minutes."
+        if retry_after > 0:
+            return f"QUOTA:{retry_after}:Limite de requêtes atteinte. Réessaie dans {retry_after} secondes."
+        return "QUOTA:30:Limite de requêtes atteinte. Réessaie dans 30 secondes."
     if code == 404:
         return (
             f"Le modèle '{MODELE_GEMINI}' est introuvable. "
@@ -176,8 +178,14 @@ def demander_a_lia(message: str, historique=None, resume: str = "") -> str:
     except requests.exceptions.HTTPError as e:
         code = e.response.status_code if e.response is not None else None
         detail = e.response.text[:300] if e.response is not None else ""
+        retry_after = 0
+        if code == 429 and e.response is not None:
+            try:
+                retry_after = int(e.response.headers.get("Retry-After", 0))
+            except (ValueError, TypeError):
+                retry_after = 0
         print(f"ERREUR Gemini HTTP {code} [demander_a_lia] : {detail}")
-        return _message_erreur_http(code, detail)
+        return _message_erreur_http(code, detail, retry_after)
     except requests.exceptions.Timeout:
         return "Le service IA a mis trop de temps à répondre. Réessaie dans quelques instants."
     except Exception as exc:
@@ -227,8 +235,14 @@ def streamer_a_lia(message: str, historique=None, resume: str = ""):
     except requests.exceptions.HTTPError as e:
         code = e.response.status_code if e.response is not None else None
         detail = e.response.text[:300] if e.response is not None else ""
+        retry_after = 0
+        if code == 429 and e.response is not None:
+            try:
+                retry_after = int(e.response.headers.get("Retry-After", 0))
+            except (ValueError, TypeError):
+                retry_after = 0
         print(f"ERREUR Gemini HTTP {code} [streamer_a_lia] : {detail}")
-        yield _message_erreur_http(code, detail)
+        yield _message_erreur_http(code, detail, retry_after)
     except requests.exceptions.Timeout:
         yield "Le service IA a mis trop de temps à répondre. Réessaie dans quelques instants."
     except Exception as exc:
@@ -279,8 +293,14 @@ def demander_a_lia_image(
     except requests.exceptions.HTTPError as e:
         code = e.response.status_code if e.response is not None else None
         detail = e.response.text[:300] if e.response is not None else ""
+        retry_after = 0
+        if code == 429 and e.response is not None:
+            try:
+                retry_after = int(e.response.headers.get("Retry-After", 0))
+            except (ValueError, TypeError):
+                retry_after = 0
         print(f"ERREUR Gemini HTTP {code} [demander_a_lia_image] : {detail}")
-        return _message_erreur_http(code, detail)
+        return _message_erreur_http(code, detail, retry_after)
     except requests.exceptions.Timeout:
         return "Le service IA a mis trop de temps à répondre. Réessaie dans quelques instants."
     except Exception as exc:

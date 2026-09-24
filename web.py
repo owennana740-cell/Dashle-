@@ -955,12 +955,12 @@ video#apercu-fichier-media { object-fit: contain; }
   border-radius: 50%;
   background: radial-gradient(
     circle at 34% 28%,
-    #d7fff0 0%, #60e4b4 13%, #10a37f 43%, #087355 72%, #023d31 100%
+    #d0e8ff 0%, #5aaaf5 13%, #2563eb 43%, #1d4ed8 72%, #0a1a5c 100%
   );
   box-shadow:
-    0 0 22px rgba(101,255,198,.9),
-    0 0 72px rgba(16,163,127,.65),
-    inset -16px -18px 28px rgba(0,45,34,.48);
+    0 0 22px rgba(59,130,246,.9),
+    0 0 72px rgba(37,99,235,.65),
+    inset -16px -18px 28px rgba(0,10,60,.48);
   animation: respiration-orbe 3.8s ease-in-out infinite;
 }
 
@@ -968,14 +968,14 @@ video#apercu-fichier-media { object-fit: contain; }
   content: "";
   position: absolute;
   inset: -14%;
-  border: 1px solid rgba(173,255,224,.48);
+  border: 1px solid rgba(147,197,253,.48);
   border-radius: 50%;
   animation: halo-orbe 2.8s ease-in-out infinite;
 }
 
-#mode-vocal[data-etat="ecoute"]    .orbe-dashle { animation-duration: 1.35s; box-shadow: 0 0 30px rgba(135,255,213,.95), 0 0 100px rgba(16,163,127,.8), inset -16px -18px 28px rgba(0,45,34,.48); }
-#mode-vocal[data-etat="reflexion"] .orbe-dashle { animation-duration: 1.9s;  filter: hue-rotate(200deg) brightness(1.15); box-shadow: 0 0 32px rgba(80,160,255,.95), 0 0 110px rgba(50,120,255,.7), inset -16px -18px 28px rgba(0,20,60,.45); }
-#mode-vocal[data-etat="parle"]     .orbe-dashle { animation-duration: .85s;  box-shadow: 0 0 34px rgba(188,255,224,1), 0 0 120px rgba(16,163,127,.9), inset -16px -18px 28px rgba(0,45,34,.48); }
+#mode-vocal[data-etat="ecoute"]    .orbe-dashle { animation-duration: 1.35s; box-shadow: 0 0 30px rgba(96,165,250,.95), 0 0 100px rgba(37,99,235,.8), inset -16px -18px 28px rgba(0,10,60,.48); }
+#mode-vocal[data-etat="reflexion"] .orbe-dashle { animation-duration: 1.9s;  filter: hue-rotate(0deg) brightness(1.15); box-shadow: 0 0 32px rgba(80,160,255,.95), 0 0 110px rgba(50,120,255,.7), inset -16px -18px 28px rgba(0,20,60,.45); }
+#mode-vocal[data-etat="parle"]     .orbe-dashle { animation-duration: .85s;  box-shadow: 0 0 34px rgba(147,197,253,1), 0 0 120px rgba(59,130,246,.9), inset -16px -18px 28px rgba(0,10,60,.48); }
 
 @keyframes respiration-orbe { 0%,100% { transform:translate(-50%,-50%) scale(.96); } 50% { transform:translate(-50%,-50%) scale(1.04); } }
 @keyframes halo-orbe         { 0%,100% { transform:scale(.92); opacity:.3; } 50% { transform:scale(1.08); opacity:.8; } }
@@ -1266,8 +1266,56 @@ const VAD_DUREE_MIN   = 180;   // ms continus avant interruption (↑ anti-plosi
 const VAD_COOLDOWN    = 1200;  // ms minimum entre deux interruptions
 const VAD_DELAI_POST  = 350;   // ms de délai anti-écho après fin réelle de synthèse
 
-// Garde contre les doubles reco.start().
-let recoEnCours = false;
+// Compteur de relances automatiques pour éviter les boucles infinies (P2).
+let nbRelancesVocal = 0;
+const MAX_RELANCES_VOCAL = 3;
+
+// Identifiant du watchdog d'écoute (clearTimeout pour l'annuler).
+let watchdogEcoute = null;
+
+// Arme le watchdog : si reco ne produit pas de résultat dans WATCHDOG_MS,
+// on force un abort + relance. Annulé dès onresult, onend ou onerror.
+const WATCHDOG_MS = 9000;
+
+function armerWatchdog() {
+  desarmerWatchdog();
+  watchdogEcoute = setTimeout(function() {
+    if (!vocalActif || reponseEnCours || syntheseEnCours) return;
+    console.warn('[DASHLE] Watchdog écoute déclenché — relance reco');
+    recoEnCours = false;
+    try { reco && reco.abort(); } catch(e) {}
+    setTimeout(function() {
+      if (vocalActif && !recoEnCours && !reponseEnCours && !syntheseEnCours) {
+        demarrerEcouteVocale();
+      }
+    }, 300);
+  }, WATCHDOG_MS);
+}
+
+function desarmerWatchdog() {
+  if (watchdogEcoute) { clearTimeout(watchdogEcoute); watchdogEcoute = null; }
+}
+
+// Réinitialise TOUS les flags et stoppe tout — utilisé avant un redémarrage
+// complet du mode vocal (P1-B).
+function reinitialiserEtatVocal() {
+  desarmerWatchdog();
+  syntheseEnCours    = false;
+  vadDebutSynthese   = 0;
+  interruptionDemandee = false;
+  recoEnCours        = false;
+  nbRelancesVocal    = 0;
+  if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+  arreterGeneration();
+  try { reco && reco.abort(); } catch(e) {}
+  arreterVAD();
+  if (lectureActuelle && lectureActuelle.isConnected) {
+    lectureActuelle.classList.remove('actif');
+    lectureActuelle.textContent = '▶';
+  }
+  lectureActuelle  = null;
+  utteranceActuelle = null;
+}
 
 // =====================================================================
 // Helpers UI
@@ -2048,7 +2096,20 @@ form.addEventListener('submit', async function(e) {
       // L'écoute reprendra via utteranceActuelle.onend (après la synthèse)
     }
 
-    if (reponseTexte && reponseTexte.toLowerCase().includes('quota')) bloquerEnvoi(30);
+    if (reponseTexte) {
+      // Format QUOTA:N: émis par brain.py quand l'API retourne 429.
+      // On extrait le délai réel (Retry-After ou défaut 30s) pour bloquer
+      // l'envoi exactement le bon nombre de secondes.
+      const quotaMatch = reponseTexte.match(/^QUOTA:(\d+):/);
+      if (quotaMatch) {
+        const delai = parseInt(quotaMatch[1], 10) || 30;
+        // Remplacer le préfixe technique par un message lisible avant affichage.
+        messageElement.textContent = reponseTexte.replace(/^QUOTA:\d+:/, '');
+        bloquerEnvoi(delai);
+      } else if (reponseTexte.toLowerCase().includes('quota')) {
+        bloquerEnvoi(30);
+      }
+    }
 
   } catch(err) {
     retirerReflexion();
