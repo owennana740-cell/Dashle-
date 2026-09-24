@@ -1285,6 +1285,10 @@ let vadDebutSynthese = 0;
 // Le VAD ne peut déclencher interrompreDashle() que si syntheseEnCours=false.
 let syntheseEnCours = false;
 
+// true quand c'est le TTS qui a forcé l'arrêt de reco (pas un silence naturel).
+// Empêche reco.onend de relancer reco automatiquement pendant la synthèse.
+let recoMutePendantTTS = false;
+
 const VAD_SEUIL       = 0.052; // RMS minimal pour "parole humaine"
 const VAD_DUREE_MIN   = 180;   // ms continus avant interruption (↑ anti-plosive)
 const VAD_COOLDOWN    = 1200;  // ms minimum entre deux interruptions
@@ -1488,6 +1492,7 @@ function arreterVAD() {
   // Libérer les verrous de synthèse : on quitte le mode vocal,
   // plus aucune protection n'est nécessaire.
   syntheseEnCours = false;
+  recoMutePendantTTS = false;
   vadDebutSynthese = 0;
 }
 
@@ -1546,6 +1551,7 @@ function interrompreDashle() {
   // syntheseEnCours et vadDebutSynthese sont remis à 0 : la période
   // protégée est levée car c'est une interruption explicite de l'utilisateur.
   syntheseEnCours = false;
+  recoMutePendantTTS = false;
   vadDebutSynthese = 0;
   if ('speechSynthesis' in window) window.speechSynthesis.cancel();
 
@@ -1651,12 +1657,14 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
     btnMicro.classList.remove('actif');
     recoEnCours = false;  // reco s'est arrêté, le guard est libéré
     if (!vocalActif) { btnVocal.classList.remove('ecoute'); return; }
-    // Ne pas redémarrer si : interruption en cours (interrompreDashle() s'en charge),
-    // génération SSE en cours, ou synthèse encore active.
+    // Ne pas redémarrer si : TTS en cours a muté reco (relance gérée par
+    // utteranceActuelle.onend), interruption en cours, SSE en cours,
+    // ou synthèse encore active.
+    if (recoMutePendantTTS) return;  // TTS prend la main, onend le relancera
     const synthActive = ('speechSynthesis' in window) && window.speechSynthesis.speaking;
     if (!interruptionDemandee && !reponseEnCours && !synthActive) {
       setTimeout(function() {
-        if (!vocalActif || interruptionDemandee || recoEnCours) return;
+        if (!vocalActif || interruptionDemandee || recoEnCours || recoMutePendantTTS) return;
         const encoreSynth = ('speechSynthesis' in window) && window.speechSynthesis.speaking;
         if (!reponseEnCours && !encoreSynth) {
           recoEnCours = true;
@@ -1797,30 +1805,51 @@ function lireReponse(bouton) {
   utteranceActuelle.onend = function() {
     // Synthèse terminée normalement.
     syntheseEnCours = false;
+    recoMutePendantTTS = false;
     // Armer le délai anti-écho : le VAD attend encore VAD_DELAI_POST ms
     // avant d'autoriser une interruption, le temps que l'écho s'estompe.
     vadDebutSynthese = performance.now();
     arreterLecture();
-    // La reprise de reco est gérée par reco.onend (qui se déclenche
-    // naturellement après le silence post-synthèse).
+    // En mode vocal : relancer reco maintenant que le TTS est terminé.
+    // On attend VAD_DELAI_POST ms (délai anti-écho) avant d'écouter.
+    if (vocalActif && window._dashleVocal && !interruptionDemandee && !recoEnCours) {
+      setTimeout(function() {
+        if (vocalActif && !recoEnCours && !interruptionDemandee && !syntheseEnCours) {
+          demarrerEcouteVocale();
+        }
+      }, VAD_DELAI_POST);
+    }
   };
 
   utteranceActuelle.onerror = function(ev) {
     // Synthèse interrompue ou en erreur : libérer le verrou dans tous les cas.
     syntheseEnCours = false;
+    recoMutePendantTTS = false;
     vadDebutSynthese = 0;
     // Ne pas afficher d'erreur si l'interruption est volontaire (cancel).
     if (ev && ev.error !== 'interrupted' && ev.error !== 'canceled') {
       etat.textContent = 'Erreur audio';
     }
     arreterLecture();
-    // Sur erreur non volontaire, reco.onend peut ne pas se déclencher.
+    // Sur erreur non volontaire, relancer reco manuellement.
     if (window._dashleVocal && window._dashleVocal.estActif() && !recoEnCours
         && ev && ev.error !== 'interrupted' && ev.error !== 'canceled') {
       recoEnCours = true;
       setTimeout(function() { recoEnCours = false; window._dashleVocal.reprendreEcoute(); }, 400);
     }
   };
+
+  // Stopper reco avant de lancer le TTS en mode vocal.
+  // Cela garantit que la voix de Dashle n'est jamais capturée par la
+  // reconnaissance vocale. reco.onend ne relancera pas grâce à recoMutePendantTTS.
+  // La reprise est assurée par utteranceActuelle.onend ci-dessus.
+  if (vocalActif && reco) {
+    recoMutePendantTTS = true;
+    recoEnCours = true;   // bloque reco.onend
+    try { reco.abort(); } catch(e) {}
+    // recoEnCours est remis à false par reco.onend, mais recoMutePendantTTS
+    // empêche onend de relancer reco — la relance est dans utteranceActuelle.onend.
+  }
 
   // On n'arme PAS syntheseEnCours ici : speak() met l'utterance en file
   // d'attente mais l'audio peut démarrer avec un délai. C'est onstart
