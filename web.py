@@ -1661,8 +1661,8 @@ function lireReponse(bouton) {
   };
 
   utteranceActuelle.onerror = function() {
-    etat.textContent = 'Erreur audio';
     vadSuspendu = false;
+    etat.textContent = 'Erreur audio';
     arreterLecture();
     if (window._dashleVocal && window._dashleVocal.estActif()) {
       setTimeout(window._dashleVocal.reprendreEcoute, 400);
@@ -2196,7 +2196,6 @@ def _rendre_page(messages, utilisateur=None, conversations=None, conversation_id
     # Remplacer les placeholders JS par des valeurs JSON sérialisées.
     # La clé CSRF n'est jamais exposée aux visiteurs non connectés via JS ;
     # elle est remplacée par null pour que le JS sache ne pas l'envoyer.
-    csrf_val = jeton_csrf() if est_connecte else "null"
 
     html = render_template_string(
         PAGE,
@@ -2212,10 +2211,10 @@ def _rendre_page(messages, utilisateur=None, conversations=None, conversation_id
     # Injection des constantes JS
     html = html.replace("__CSRF_TOKEN__",   json.dumps(jeton_csrf() if est_connecte else None))
     html = html.replace("__PREFS_VOCALES__", json.dumps({
-        "voix_nom":      prefs["voix_nom"],
-        "voix_vitesse":  float(prefs["voix_vitesse"]),
-        "voix_tonalite": float(prefs["voix_tonalite"]),
-        "voix_volume":   float(prefs["voix_volume"]),
+        "voix_nom":      prefs["voix_nom"] or "",
+        "voix_vitesse":  float(prefs["voix_vitesse"] or 1.0),
+        "voix_tonalite": float(prefs["voix_tonalite"] or 1.0),
+        "voix_volume":   float(prefs["voix_volume"] or 1.0),
     }))
     html = html.replace("__EST_CONNECTE__",  "true" if est_connecte else "false")
     html = html.replace("__URL_FLUX__",      json.dumps(url_flux))
