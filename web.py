@@ -124,6 +124,7 @@ def verifier_csrf():
 _ROUTES_PUBLIQUES = {
     "static", "connexion", "inscription", "partage",
     "accueil", "repondre_flux", "repondre", "repondre_image",
+    "confirmer_message",
     "health",
 }
 
@@ -320,6 +321,8 @@ _CSS = """
   --header-bg: #10A37F;
   --radius: 16px;
   --transition: 0.18s ease;
+  /* Taille de texte des messages — modifiable via JS depuis les paramètres */
+  --taille-msg: 15px;
 }
 
 body.theme-sombre {
@@ -598,7 +601,7 @@ header button.icon-btn:hover { background: rgba(255,255,255,0.18); }
   border-radius: var(--radius);
   white-space: pre-wrap;
   line-height: 1.5;
-  font-size: 15px;
+  font-size: var(--taille-msg);
   word-break: break-word;
 }
 
@@ -783,6 +786,26 @@ button.envoyer:hover:not(:disabled) {
 
 button.envoyer:disabled { opacity: 0.45; cursor: default; }
 
+/* ---- Bouton arrêter la génération ---- */
+button.arreter {
+  background: #ef4444;
+  color: white;
+  border: none;
+  border-radius: 50%;
+  width: 38px;
+  height: 38px;
+  font-size: 14px;
+  flex-shrink: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background var(--transition), transform var(--transition);
+}
+
+button.arreter.visible { display: flex; }
+button.arreter:hover { background: #dc2626; transform: scale(1.05); }
+
 /* ---- Aperçu fichier ---- */
 #apercu-fichier {
   display: none;
@@ -951,7 +974,7 @@ video#apercu-fichier-media { object-fit: contain; }
 }
 
 #mode-vocal[data-etat="ecoute"]    .orbe-dashle { animation-duration: 1.35s; box-shadow: 0 0 30px rgba(135,255,213,.95), 0 0 100px rgba(16,163,127,.8), inset -16px -18px 28px rgba(0,45,34,.48); }
-#mode-vocal[data-etat="reflexion"] .orbe-dashle { animation-duration: 1.9s;  filter: hue-rotate(18deg); }
+#mode-vocal[data-etat="reflexion"] .orbe-dashle { animation-duration: 1.9s;  filter: hue-rotate(200deg) brightness(1.15); box-shadow: 0 0 32px rgba(80,160,255,.95), 0 0 110px rgba(50,120,255,.7), inset -16px -18px 28px rgba(0,20,60,.45); }
 #mode-vocal[data-etat="parle"]     .orbe-dashle { animation-duration: .85s;  box-shadow: 0 0 34px rgba(188,255,224,1), 0 0 120px rgba(16,163,127,.9), inset -16px -18px 28px rgba(0,45,34,.48); }
 
 @keyframes respiration-orbe { 0%,100% { transform:translate(-50%,-50%) scale(.96); } 50% { transform:translate(-50%,-50%) scale(1.04); } }
@@ -1152,6 +1175,7 @@ if ('serviceWorker' in navigator) {
   </button>
   <textarea id="message" name="message" rows="1" placeholder="Écris à Dashle..." aria-label="Message"></textarea>
   <div class="groupe-actions">
+    <button type="button" class="arreter" id="btn-arreter" title="Arrêter la génération" aria-label="Arrêter">&#9632;</button>
     <button type="button" class="vocal" id="btn-vocal" title="Conversation vocale">
       <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round">
         <line x1="2"  y1="9"  x2="2"  y2="15"></line>
@@ -1228,13 +1252,22 @@ let vadPret         = false;
 
 // Flag : vrai pendant toute la durée d'une synthèse vocale pour éviter
 // que le VAD ne déclenche une interruption sur la voix de Dashle lui-même.
-let vadSuspendu = false;
+// Timestamp du début de la dernière synthèse. Utilisé uniquement pour
+// le délai anti-écho post-fin de synthèse (laisser l'écho s'estomper).
+let vadDebutSynthese = 0;
 
-// Seuils VAD : assez hauts pour ne pas se déclencher sur la voix de synthèse
-// (echoCancellation atténue déjà le retour, on affine avec le seuil)
-const VAD_SEUIL    = 0.052;   // RMS minimal pour considérer "parole humaine"
-const VAD_DUREE_MIN = 130;    // ms de parole continue avant interruption
-const VAD_COOLDOWN  = 1200;   // ms minimum entre deux interruptions
+// Verrou d'état binaire : true pendant TOUTE la durée réelle de la synthèse
+// vocale, de utteranceActuelle.onstart jusqu'à onend/onerror.
+// Le VAD ne peut déclencher interrompreDashle() que si syntheseEnCours=false.
+let syntheseEnCours = false;
+
+const VAD_SEUIL       = 0.052; // RMS minimal pour "parole humaine"
+const VAD_DUREE_MIN   = 180;   // ms continus avant interruption (↑ anti-plosive)
+const VAD_COOLDOWN    = 1200;  // ms minimum entre deux interruptions
+const VAD_DELAI_POST  = 350;   // ms de délai anti-écho après fin réelle de synthèse
+
+// Garde contre les doubles reco.start().
+let recoEnCours = false;
 
 // =====================================================================
 // Helpers UI
@@ -1380,6 +1413,10 @@ function arreterVAD() {
   vadAudioContext = null;
   vadPret = false;
   vadDebutParole = 0;
+  // Libérer les verrous de synthèse : on quitte le mode vocal,
+  // plus aucune protection n'est nécessaire.
+  syntheseEnCours = false;
+  vadDebutSynthese = 0;
 }
 
 function surveillerParole() {
@@ -1387,7 +1424,7 @@ function surveillerParole() {
   const donnees = new Uint8Array(vadAnalyser.fftSize);
 
   const verifier = function() {
-    if (!vadPret || !vadAnalyser || !vocalActif || vadSuspendu) return;
+    if (!vadPret || !vadAnalyser || !vocalActif) return;
     vadAnalyser.getByteTimeDomainData(donnees);
     let somme = 0;
     for (let i = 0; i < donnees.length; i++) {
@@ -1397,11 +1434,20 @@ function surveillerParole() {
     const rms = Math.sqrt(somme / donnees.length);
     const now = performance.now();
 
-    // N'interrompt que si Dashle génère OU parle
+    // Dashle est occupé si SSE en cours OU synthèse en cours.
     const dashleOccupe = reponseEnCours
       || (window.speechSynthesis && window.speechSynthesis.speaking);
 
-    if (dashleOccupe && rms >= VAD_SEUIL) {
+    // Verrou principal : syntheseEnCours est true pendant TOUTE la durée
+    // réelle de la synthèse (onstart → onend/onerror). Tant qu'il est actif,
+    // aucune interruption n'est possible — la voix de Dashle ne peut pas
+    // se déclencher elle-même.
+    // Délai anti-écho post-synthèse : laisser VAD_DELAI_POST ms après la fin
+    // réelle pour que l'écho résiduel s'estompe avant de réautoriser.
+    const enPeriodeProtegee = syntheseEnCours
+      || (vadDebutSynthese > 0 && (now - vadDebutSynthese) < VAD_DELAI_POST);
+
+    if (dashleOccupe && !enPeriodeProtegee && rms >= VAD_SEUIL) {
       if (!vadDebutParole) vadDebutParole = now;
       if (now - vadDebutParole >= VAD_DUREE_MIN
           && now - vadDerniereDetection >= VAD_COOLDOWN) {
@@ -1424,7 +1470,11 @@ function interrompreDashle() {
   if (!vocalActif) return;
   interruptionDemandee = true;
 
-  // 1. Stopper immédiatement la synthèse vocale
+  // 1. Stopper immédiatement la synthèse vocale.
+  // syntheseEnCours et vadDebutSynthese sont remis à 0 : la période
+  // protégée est levée car c'est une interruption explicite de l'utilisateur.
+  syntheseEnCours = false;
+  vadDebutSynthese = 0;
   if ('speechSynthesis' in window) window.speechSynthesis.cancel();
 
   // 2. Stopper la génération SSE
@@ -1432,25 +1482,31 @@ function interrompreDashle() {
 
   // 3. Réinitialiser l'UI lecture
   if (lectureActuelle) {
-    lectureActuelle.classList.remove('actif');
-    lectureActuelle.textContent = '▶';
+    if (lectureActuelle.isConnected) {
+      lectureActuelle.classList.remove('actif');
+      lectureActuelle.textContent = '▶';
+    }
   }
   lectureActuelle = null;
   utteranceActuelle = null;
 
-  // 4. Reprendre l'écoute immédiatement
+  // 4. Mettre à jour l'UI
   afficherEtatVocal('ecoute', "Je t'écoute...");
   afficherStatutVocal("🎙️ Vas-y, je t'écoute.");
   btnVocal.classList.add('ecoute');
   btnVocal.classList.remove('parle');
 
-  // 5. Redémarrer la reconnaissance vocale
+  // 5. Redémarrer reco pour capter la nouvelle phrase.
+  // reco.abort() déclenche reco.onend ; recoEnCours=true empêche onend
+  // de lancer un second start() concurrent.
+  recoEnCours = true;
   try { reco && reco.abort(); } catch(e) {}
   setTimeout(function() {
-    if (!vocalActif || !reco) return;
+    if (!vocalActif || !reco) { recoEnCours = false; return; }
     interruptionDemandee = false;
+    recoEnCours = false;
     try { reco.start(); } catch(e) {}
-  }, 100);
+  }, 120);
 }
 
 // =====================================================================
@@ -1466,13 +1522,16 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
 
   function demarrerEcouteVocale() {
     if (!vocalActif) return;
+    // Ne pas démarrer si un démarrage est déjà en vol (guard anti-doublon).
+    if (recoEnCours) return;
     modeActuel = 'vocal';
     ouvrirModeVocal();
     afficherEtatVocal('ecoute', 'Dashle écoute...');
     btnVocal.classList.add('ecoute');
     btnVocal.classList.remove('parle');
     afficherStatutVocal("🎧 Je t'écoute...");
-    try { reco.start(); } catch(e) {}
+    recoEnCours = true;
+    try { reco.start(); } catch(e) { recoEnCours = false; }
   }
 
   btnMicro.onclick = function() {
@@ -1518,13 +1577,18 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
 
   reco.onend = function() {
     btnMicro.classList.remove('actif');
-    if (!vocalActif) btnVocal.classList.remove('ecoute');
-    // En mode vocal : si pas d'interruption et pas de génération en cours,
-    // on redemarre l'écoute après un court délai de sécurité.
-    if (vocalActif && !reponseEnCours && !interruptionDemandee) {
+    recoEnCours = false;  // reco s'est arrêté, le guard est libéré
+    if (!vocalActif) { btnVocal.classList.remove('ecoute'); return; }
+    // Ne pas redémarrer si : interruption en cours (interrompreDashle() s'en charge),
+    // génération SSE en cours, ou synthèse encore active.
+    const synthActive = ('speechSynthesis' in window) && window.speechSynthesis.speaking;
+    if (!interruptionDemandee && !reponseEnCours && !synthActive) {
       setTimeout(function() {
-        if (vocalActif && !reponseEnCours) {
-          try { reco.start(); } catch(e) {}
+        if (!vocalActif || interruptionDemandee || recoEnCours) return;
+        const encoreSynth = ('speechSynthesis' in window) && window.speechSynthesis.speaking;
+        if (!reponseEnCours && !encoreSynth) {
+          recoEnCours = true;
+          try { reco.start(); } catch(e) { recoEnCours = false; }
         }
       }, 200);
     }
@@ -1582,10 +1646,14 @@ function choisirVoixFrancaise() {
 function arreterLecture() {
   if ('speechSynthesis' in window) window.speechSynthesis.cancel();
   if (lectureActuelle) {
-    lectureActuelle.classList.remove('actif');
-    lectureActuelle.textContent = '▶';
-    const act = lectureActuelle.closest('.actions-reponse');
-    if (act) act.querySelector('.lecture-etat').textContent = '';
+    // Vérifier que le bouton est encore dans le DOM (peut avoir été retiré
+    // lors d'une interruption qui supprime le message en cours de lecture).
+    if (lectureActuelle.isConnected) {
+      lectureActuelle.classList.remove('actif');
+      lectureActuelle.textContent = '▶';
+      const act = lectureActuelle.closest('.actions-reponse');
+      if (act) act.querySelector('.lecture-etat').textContent = '';
+    }
   }
   lectureActuelle   = null;
   utteranceActuelle = null;
@@ -1647,29 +1715,44 @@ function lireReponse(bouton) {
   bouton.textContent = '⏸';
   etat.textContent = 'Lecture';
 
+  utteranceActuelle.onstart = function() {
+    // L'audio démarre réellement : on arme le verrou d'état.
+    // C'est ici, pas dans speak(), que le son commence vraiment.
+    syntheseEnCours = true;
+    vadDebutSynthese = 0;  // réinitialiser le délai post-synthèse
+  };
+
   utteranceActuelle.onend = function() {
-    vadSuspendu = false;
-    const vocal = window._dashleVocal;
-    const enModeVocal = vocal && vocal.estActif();
+    // Synthèse terminée normalement.
+    syntheseEnCours = false;
+    // Armer le délai anti-écho : le VAD attend encore VAD_DELAI_POST ms
+    // avant d'autoriser une interruption, le temps que l'écho s'estompe.
+    vadDebutSynthese = performance.now();
     arreterLecture();
-    // Séquencement vocal : on reprend l'écoute APRÈS la fin de la synthèse,
-    // jamais pendant (évite que Dashle détecte sa propre voix).
-    if (enModeVocal && !interruptionDemandee) {
-      // Petit délai de sécurité pour laisser l'echo disparaître
-      setTimeout(vocal.reprendreEcoute, 250);
+    // La reprise de reco est gérée par reco.onend (qui se déclenche
+    // naturellement après le silence post-synthèse).
+  };
+
+  utteranceActuelle.onerror = function(ev) {
+    // Synthèse interrompue ou en erreur : libérer le verrou dans tous les cas.
+    syntheseEnCours = false;
+    vadDebutSynthese = 0;
+    // Ne pas afficher d'erreur si l'interruption est volontaire (cancel).
+    if (ev && ev.error !== 'interrupted' && ev.error !== 'canceled') {
+      etat.textContent = 'Erreur audio';
+    }
+    arreterLecture();
+    // Sur erreur non volontaire, reco.onend peut ne pas se déclencher.
+    if (window._dashleVocal && window._dashleVocal.estActif() && !recoEnCours
+        && ev && ev.error !== 'interrupted' && ev.error !== 'canceled') {
+      recoEnCours = true;
+      setTimeout(function() { recoEnCours = false; window._dashleVocal.reprendreEcoute(); }, 400);
     }
   };
 
-  utteranceActuelle.onerror = function() {
-    vadSuspendu = false;
-    etat.textContent = 'Erreur audio';
-    arreterLecture();
-    if (window._dashleVocal && window._dashleVocal.estActif()) {
-      setTimeout(window._dashleVocal.reprendreEcoute, 400);
-    }
-  };
-
-  vadSuspendu = true;
+  // On n'arme PAS syntheseEnCours ici : speak() met l'utterance en file
+  // d'attente mais l'audio peut démarrer avec un délai. C'est onstart
+  // qui marque le vrai début du son.
   window.speechSynthesis.speak(utteranceActuelle);
 }
 
@@ -1873,6 +1956,11 @@ form.addEventListener('submit', async function(e) {
   champ.value = '';
   champ.style.height = 'auto';
   afficherReflexion();
+  // Passer immédiatement en état réflexion (orbe bleue) dès l'envoi,
+  // avant même la réponse du serveur.
+  if (window._dashleVocal && window._dashleVocal.estActif()) {
+    afficherEtatVocal('reflexion', 'Dashle réfléchit...');
+  }
 
   const controller = new AbortController();
   requeteActiveController = controller;
@@ -1931,7 +2019,20 @@ form.addEventListener('submit', async function(e) {
           messageElement.textContent = reponseTexte;
           chat.scrollTop = chat.scrollHeight;
         }
-        if (ev.termine) messageId = ev.message_id;
+        if (ev.termine) {
+          messageId = ev.message_id;
+          // Visiteur : sauvegarder la réponse en session via une requête séparée.
+          // Impossible de le faire dans le générateur SSE (headers déjà envoyés).
+          if (!estConnecte && ev.reponse) {
+            fetch('/confirmer_message', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ reponse: ev.reponse }),
+            }).catch(function(err) {
+              console.warn('confirmer_message échoué :', err);
+            });
+          }
+        }
       }
     }
 
@@ -1954,12 +2055,21 @@ form.addEventListener('submit', async function(e) {
     reponseEnCours = false;
     if (requeteActiveController === controller) requeteActiveController = null;
 
+    // En cas d'erreur, remettre l'orbe en état écoute (pas bloquée en réflexion).
+    if (window._dashleVocal && window._dashleVocal.estActif()) {
+      afficherEtatVocal('ecoute', "Je t'écoute...");
+      btnVocal.classList.add('ecoute');
+      btnVocal.classList.remove('parle');
+    }
+
     if (err && err.name === 'AbortError') {
       if (reponseElement) reponseElement.remove();
-      if (vocalActif) {
+      if (vocalActif && !recoEnCours) {
+        recoEnCours = true;
         setTimeout(function() {
+          recoEnCours = false;
           if (vocalActif && reco) { try { reco.start(); } catch(ex) {} }
-        }, 100);
+        }, 120);
       }
       return;
     }
@@ -1968,11 +2078,89 @@ form.addEventListener('submit', async function(e) {
       reponseElement.remove();
     }
     ajouterMessage("Erreur de connexion. Réessaie.", 'bot');
-    if (window._dashleVocal && window._dashleVocal.estActif()) {
+    if (window._dashleVocal && window._dashleVocal.estActif() && !recoEnCours) {
       setTimeout(window._dashleVocal.reprendreEcoute, 700);
     }
   }
 });
+
+// =====================================================================
+// Bouton "Arrêter la génération"
+// =====================================================================
+const btnArreter = document.getElementById('btn-arreter');
+
+// Affiche le bouton arrêter pendant la génération, cache le bouton envoyer.
+function montrerBtnArreter() {
+  if (btnArreter) btnArreter.classList.add('visible');
+  btnEnvoyer.style.display = 'none';
+}
+
+function cacherBtnArreter() {
+  if (btnArreter) btnArreter.classList.remove('visible');
+  btnEnvoyer.style.display = '';
+}
+
+if (btnArreter) {
+  btnArreter.addEventListener('click', function() {
+    arreterGeneration();
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+    syntheseEnCours = false;
+    vadDebutSynthese = 0;
+    retirerReflexion();
+    cacherBtnArreter();
+    champ.disabled = false;
+    btnEnvoyer.disabled = false;
+    if (window._dashleVocal && window._dashleVocal.estActif()) {
+      afficherEtatVocal('ecoute', "Je t'écoute...");
+    }
+  });
+}
+
+// Synchroniser l'affichage du bouton arrêter avec reponseEnCours.
+// On wrappe form.addEventListener('submit') pour ajouter le show/hide.
+(function() {
+  var origSubmit = form.onsubmit;
+  // Patch : on observe les changements de reponseEnCours via polling léger.
+  var dernierEtat = false;
+  setInterval(function() {
+    if (reponseEnCours !== dernierEtat) {
+      dernierEtat = reponseEnCours;
+      if (reponseEnCours) {
+        montrerBtnArreter();
+      } else {
+        cacherBtnArreter();
+      }
+    }
+  }, 120);
+})();
+
+// =====================================================================
+// Thème en temps réel et taille du texte
+// =====================================================================
+
+// Applique le thème sans rechargement de page.
+function appliquerTheme(theme) {
+  document.body.classList.toggle('theme-sombre', theme === 'sombre');
+  document.body.classList.toggle('theme-clair',  theme === 'clair');
+  try { localStorage.setItem('dashle_theme', theme); } catch(e) {}
+}
+
+// Applique la taille de texte des messages sans rechargement.
+function appliquerTailleMsg(taille) {
+  document.documentElement.style.setProperty('--taille-msg', taille);
+  try { localStorage.setItem('dashle_taille_msg', taille); } catch(e) {}
+}
+
+// Restaurer les préférences sauvegardées localement (si l'utilisateur
+// n'est pas connecté ou si la page vient de charger).
+(function() {
+  try {
+    var t = localStorage.getItem('dashle_theme');
+    if (t === 'sombre' || t === 'clair') appliquerTheme(t);
+    var tm = localStorage.getItem('dashle_taille_msg');
+    if (tm) appliquerTailleMsg(tm);
+  } catch(e) {}
+})();
 </script>
 """
 
@@ -2064,6 +2252,26 @@ button{border:0;border-radius:9px;background:#10A37F;color:#fff;padding:10px 14p
   <section class="carte"><h2>Sécurité</h2>
     <p class="note">Les mots de passe sont hachés. <a href="{{ url_for('securite') }}">Gérer la sécurité du compte →</a></p>
   </section>
+  <section class="carte"><h2>Données et confidentialité</h2>
+    <label>Conserver l'historique après déconnexion<input type="checkbox" name="conserver_historique" {% if preferences.conserver_historique %}checked{% endif %}></label>
+    <p class="note">L'export des conversations et la gestion fine de la mémoire arriveront prochainement.</p>
+    <p class="note">Les conversations partagées utilisent un lien révocable et ne montrent pas les informations du compte.</p>
+  </section>
+  <section class="carte"><h2>Apparence avancée</h2>
+    <label>Taille du texte des messages
+      <select name="taille_msg" id="taille-msg-select">
+        <option value="13px" {% if preferences.get('taille_msg','15px')=='13px' %}selected{% endif %}>Petite</option>
+        <option value="15px" {% if preferences.get('taille_msg','15px')=='15px' or not preferences.get('taille_msg') %}selected{% endif %}>Normale</option>
+        <option value="17px" {% if preferences.get('taille_msg','15px')=='17px' %}selected{% endif %}>Grande</option>
+        <option value="19px" {% if preferences.get('taille_msg','15px')=='19px' %}selected{% endif %}>Très grande</option>
+      </select>
+    </label>
+  </section>
+  <section class="carte"><h2>À propos de Dashle</h2>
+    <p class="note"><strong>Version :</strong> 2.0</p>
+    <p class="note"><strong>Modèle IA :</strong> Gemini 2.5 Flash (Google AI)</p>
+    <p class="note">Dashle est un assistant personnel conçu par Owen. Il mémorise le contexte de tes conversations et s'améliore avec le temps.</p>
+  </section>
   <button type="submit">Enregistrer</button>
 </form>
 <script>
@@ -2093,6 +2301,24 @@ document.getElementById('tester-voix').addEventListener('click', () => {
   u.volume = Number(document.querySelector('[name=voix_volume]').value);
   speechSynthesis.speak(u);
 });
+
+// Thème en temps réel : appliqué immédiatement quand l'utilisateur change
+// la valeur, sans attendre l'enregistrement. Utilise localStorage pour
+// synchroniser avec le chat (la page principale lit localStorage au chargement).
+var themeSelect = document.querySelector('[name=theme]');
+if (themeSelect) {
+  themeSelect.addEventListener('change', function() {
+    try { localStorage.setItem('dashle_theme', this.value); } catch(e) {}
+  });
+}
+
+// Taille de texte en temps réel.
+var tailleSelect = document.getElementById('taille-msg-select');
+if (tailleSelect) {
+  tailleSelect.addEventListener('change', function() {
+    try { localStorage.setItem('dashle_taille_msg', this.value); } catch(e) {}
+  });
+}
 </script>
 </main></body></html>
 """
@@ -2544,11 +2770,12 @@ def repondre():
 def repondre_flux():
     """Diffuse une réponse SSE. Gère visiteur et utilisateur connecté.
 
-    Corrections :
-    - Accessible aux visiteurs anonymes (historique en session).
-    - GeneratorExit capturé proprement sans sauvegarder une réponse incomplète.
-    - Erreurs retournées en JSON SSE compréhensible.
-    - Résumé visiteur mis à jour toutes les 20 demandes.
+    Architecture deux requêtes pour les visiteurs :
+    - Le générateur SSE ne modifie JAMAIS la session Flask (impossible en streaming).
+    - Pour les visiteurs, la réponse complète est incluse dans le payload
+      {termine: true, reponse: "..."} afin que le JS puisse la transmettre
+      à /confirmer_message dans une requête séparée qui elle peut écrire la session.
+    - Pour les utilisateurs connectés : sauvegarde BDD inchangée dans le générateur.
     """
     user_id = session.get("user_id")
 
@@ -2592,26 +2819,23 @@ def repondre_flux():
 
             reponse_complete = "".join(morceaux).strip()
 
-            if user_id and reponse_complete:
-                mid = ajouter_message(user_id, conversation_id, reponse_complete, "bot")
-                _actualiser_resume(user_id, conversation_id)
+            if user_id:
+                # Utilisateur connecté : sauvegarde BDD directement dans le générateur.
+                if reponse_complete:
+                    mid = ajouter_message(user_id, conversation_id, reponse_complete, "bot")
+                    _actualiser_resume(user_id, conversation_id)
+                else:
+                    mid = None
                 yield "data: " + json.dumps(
                     {"termine": True, "message_id": mid}, ensure_ascii=False
                 ) + "\n\n"
             else:
-                # Visiteur : stocker dans la session (hors du générateur,
-                # on utilise un flag pour signaler la fin proprement)
-                if reponse_complete:
-                    _ajouter_message_visiteur(reponse_complete, "bot")
-                    # Résumé visiteur toutes les 20 demandes
-                    n = len(_historique_visiteur())
-                    if n >= 20 and (n - 20) % 10 == 0:
-                        nouveau = resumer_conversation(_historique_visiteur(), _resume_visiteur())
-                        if nouveau:
-                            _maj_resume_visiteur(nouveau)
-                    session.modified = True
+                # Visiteur : on NE MODIFIE PAS la session ici (headers déjà envoyés).
+                # On renvoie la réponse complète au client ; c'est le JS qui appellera
+                # /confirmer_message pour écrire proprement en session.
                 yield "data: " + json.dumps(
-                    {"termine": True, "message_id": None}, ensure_ascii=False
+                    {"termine": True, "message_id": None, "reponse": reponse_complete},
+                    ensure_ascii=False,
                 ) + "\n\n"
 
         except GeneratorExit:
@@ -2635,6 +2859,59 @@ def repondre_flux():
             "Connection":    "keep-alive",
         },
     )
+
+
+@app.route("/confirmer_message", methods=["POST"])
+def confirmer_message():
+    """Sauvegarde la réponse bot dans la session visiteur.
+
+    Appelé par le JS uniquement pour les visiteurs anonymes, après réception
+    de l'événement {termine: true} dans le flux SSE. Cette requête séparée
+    garantit que le cookie de session est correctement écrit (impossible dans
+    un générateur SSE en streaming).
+
+    Validations :
+    - Refusé si l'utilisateur est connecté (la BDD gère tout pour eux).
+    - La réponse doit être une chaîne non vide, limitée à 16 000 caractères.
+    - Le message utilisateur correspondant doit être présent dans la session
+      (on vérifie que _historique_visiteur() contient au moins un message user)
+      pour éviter d'injecter une réponse orpheline.
+    """
+    # Visiteurs uniquement — les connectés n'ont pas à appeler cet endpoint
+    if session.get("user_id"):
+        return jsonify({"erreur": "Endpoint réservé aux visiteurs."}), 403
+
+    donnees = request.get_json(silent=True) or {}
+    reponse_txt = donnees.get("reponse", "")
+
+    if not isinstance(reponse_txt, str):
+        return jsonify({"erreur": "Format invalide."}), 400
+    reponse_txt = reponse_txt.strip()[:16_000]
+    if not reponse_txt:
+        return jsonify({"erreur": "Réponse vide."}), 400
+
+    # Vérifier qu'il y a bien un échange en cours (au moins 1 message user)
+    hist = _historique_visiteur()
+    if not any(m.get("auteur") == "user" for m in hist):
+        return jsonify({"erreur": "Aucun message utilisateur en session."}), 400
+
+    # Éviter les doublons : si le dernier message est déjà une réponse bot
+    # identique, on ne l'ajoute pas une seconde fois.
+    if hist and hist[-1].get("auteur") == "bot" and hist[-1].get("texte") == reponse_txt:
+        return jsonify({"ok": True, "note": "Déjà enregistré."})
+
+    _ajouter_message_visiteur(reponse_txt, "bot")
+
+    # Résumé visiteur : déclenché après 20 demandes utilisateur, puis toutes les 10.
+    # On compte uniquement les messages auteur=="user" pour une granularité exacte.
+    n_user = sum(1 for m in _historique_visiteur() if m.get("auteur") == "user")
+    if n_user >= 20 and (n_user - 20) % 10 == 0:
+        nouveau = resumer_conversation(_historique_visiteur(), _resume_visiteur())
+        if nouveau:
+            _maj_resume_visiteur(nouveau)
+
+    session.modified = True
+    return jsonify({"ok": True})
 
 
 @app.route("/repondre_image", methods=["POST"])

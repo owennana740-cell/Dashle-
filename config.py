@@ -13,7 +13,7 @@ CLE_API = os.environ.get("GEMINI_API_KEY")
 
 # Modèle Gemini utilisé pour toutes les requêtes (texte, streaming, résumé).
 # Changer GEMINI_MODEL dans .env suffit pour migrer vers un autre modèle.
-MODELE_GEMINI = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
+MODELE_GEMINI = os.environ.get("GEMINI_MODEL", "gemini-3.6-flash")
 
 # Nombre maximal de messages transmis en contexte à chaque appel Gemini.
 MAX_MESSAGES_CONTEXTE = int(os.environ.get("GEMINI_MAX_CONTEXTE", "24"))
