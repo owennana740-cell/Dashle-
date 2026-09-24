@@ -1,3 +1,5 @@
+
+        print("Dashle :", traiter_message(message))
 from dotenv import load_dotenv
 load_dotenv()
 from brain import reflechir, demander_a_lia_image, streamer_a_lia

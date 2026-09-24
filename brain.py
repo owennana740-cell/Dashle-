@@ -136,7 +136,7 @@ def _gen_config() -> dict:
     return {"temperature": 0.7, "maxOutputTokens": 2048}
 
 
-def _message_erreur_http(code) -> str:
+def _message_erreur_http(code, detail: str = "") -> str:
     if code == 429:
         return "Le quota de Dashle est dépassé pour le moment. Réessaie dans quelques minutes."
     if code == 404:
@@ -144,6 +144,12 @@ def _message_erreur_http(code) -> str:
             f"Le modèle '{MODELE_GEMINI}' est introuvable. "
             "Vérifie la variable GEMINI_MODEL dans ton fichier .env."
         )
+    if code == 400:
+        return f"Requête invalide envoyée à Gemini (400). Détail : {detail}"
+    if code == 403:
+        return "Clé API Gemini refusée (403). Vérifie GEMINI_API_KEY dans les variables d'environnement."
+    if code:
+        return f"Erreur Gemini {code}. Réessaie dans quelques instants."
     return "Le service IA est momentanément indisponible. Réessaie dans quelques instants."
 
 
@@ -169,10 +175,13 @@ def demander_a_lia(message: str, historique=None, resume: str = "") -> str:
         return nettoyer_reponse(texte)
     except requests.exceptions.HTTPError as e:
         code = e.response.status_code if e.response is not None else None
-        return _message_erreur_http(code)
+        detail = e.response.text[:300] if e.response is not None else ""
+        print(f"ERREUR Gemini HTTP {code} [demander_a_lia] : {detail}")
+        return _message_erreur_http(code, detail)
     except requests.exceptions.Timeout:
         return "Le service IA a mis trop de temps à répondre. Réessaie dans quelques instants."
-    except Exception:
+    except Exception as exc:
+        print(f"ERREUR Gemini inattendue [demander_a_lia] : {exc!r}")
         return "Impossible de joindre le service IA. Vérifie la connexion puis réessaie."
 
 
@@ -217,10 +226,13 @@ def streamer_a_lia(message: str, historique=None, resume: str = ""):
                         yield texte
     except requests.exceptions.HTTPError as e:
         code = e.response.status_code if e.response is not None else None
-        yield _message_erreur_http(code)
+        detail = e.response.text[:300] if e.response is not None else ""
+        print(f"ERREUR Gemini HTTP {code} [streamer_a_lia] : {detail}")
+        yield _message_erreur_http(code, detail)
     except requests.exceptions.Timeout:
         yield "Le service IA a mis trop de temps à répondre. Réessaie dans quelques instants."
-    except Exception:
+    except Exception as exc:
+        print(f"ERREUR Gemini inattendue [streamer_a_lia] : {exc!r}")
         yield "Impossible de joindre le service IA. Vérifie la connexion puis réessaie."
 
 
@@ -266,10 +278,13 @@ def demander_a_lia_image(
         return nettoyer_reponse(texte)
     except requests.exceptions.HTTPError as e:
         code = e.response.status_code if e.response is not None else None
-        return _message_erreur_http(code)
+        detail = e.response.text[:300] if e.response is not None else ""
+        print(f"ERREUR Gemini HTTP {code} [demander_a_lia_image] : {detail}")
+        return _message_erreur_http(code, detail)
     except requests.exceptions.Timeout:
         return "Le service IA a mis trop de temps à répondre. Réessaie dans quelques instants."
-    except Exception:
+    except Exception as exc:
+        print(f"ERREUR Gemini inattendue [demander_a_lia_image] : {exc!r}")
         return "Impossible de joindre le service IA. Vérifie la connexion puis réessaie."
 
 
