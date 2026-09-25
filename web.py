@@ -1083,6 +1083,17 @@ video#apercu-fichier-media { object-fit: contain; }
 .message-wrap { max-width:min(82%,760px); }
 .image-message-lien { display:block; margin-top:4px; }
 .image-message { display:block; max-width:min(280px,70vw); max-height:320px; object-fit:contain; border-radius:12px; cursor:zoom-in; }
+.btn-attach { display:grid; place-items:center; flex-shrink:0; width:40px; height:40px; padding:0; border:0; border-radius:50%; background:transparent; color:var(--texte); font-size:30px; font-weight:300; line-height:1; cursor:pointer; }
+.btn-attach:hover { background:var(--fond-secondaire); }
+.feuille-fichiers-voile { position:fixed; inset:0; z-index:1200; display:flex; align-items:flex-end; justify-content:center; padding:16px; background:rgba(15,23,42,.42); }
+.feuille-fichiers-voile[hidden] { display:none; }
+.feuille-fichiers { width:min(100%,480px); padding:24px 20px max(24px,env(safe-area-inset-bottom)); border-radius:24px 24px 16px 16px; background:var(--fond); color:var(--texte); box-shadow:0 -12px 40px rgba(0,0,0,.16); }
+.feuille-fichiers h2 { margin:0 0 22px; font-size:18px; text-align:center; }
+.feuille-fichiers-options { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
+.option-fichier { display:flex; flex-direction:column; align-items:center; gap:9px; padding:4px; border:0; background:transparent; color:inherit; font:inherit; cursor:pointer; }
+.option-fichier-icone { display:grid; place-items:center; width:58px; height:58px; border-radius:50%; background:#f1f3f5; color:#334155; }
+.option-fichier-icone svg { width:25px; height:25px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
+.option-fichier:hover .option-fichier-icone { background:#e7ebef; }
 
 /* L'orbe conserve sa base verte dans les trois états. */
 .orbe-dashle { background:radial-gradient(circle at 34% 28%,#d5fff0 0%,#62dcb0 18%,#10a37f 53%,#087355 78%,#043d31 100%); box-shadow:0 0 22px rgba(16,163,127,.55),0 0 72px rgba(8,115,85,.35),inset -16px -18px 28px rgba(0,40,28,.35); }
@@ -1319,8 +1330,7 @@ if ('serviceWorker' in navigator) {
 
 <form class="bas" id="form-message" autocomplete="off" method="post" action="">
   <input type="file" id="image-input" accept="image/*,video/*" style="display:none;">
-  <button type="button" id="btn-attach" style="background:none;border:none;cursor:pointer;flex-shrink:0;padding:0;width:34px;height:34px;" title="Joindre une image ou vidéo" aria-label="Joindre un fichier" onclick="document.getElementById('image-input').click();">
-    <img src="{{ url_for('static', filename='icon-attach.png') }}" style="width:34px;height:34px;display:block;border-radius:8px;" alt="">
+  <button type="button" id="btn-attach" class="btn-attach" title="Ajouter une image ou vidéo" aria-label="Ajouter une image ou vidéo" aria-haspopup="dialog" aria-controls="feuille-fichiers">+
   </button>
   <textarea id="message" name="message" rows="1" placeholder="Écris à Dashle..." aria-label="Message"></textarea>
   <div class="groupe-actions">
@@ -1338,6 +1348,26 @@ if ('serviceWorker' in navigator) {
     <button class="envoyer" type="submit" id="btn-envoyer" aria-label="Envoyer">&#10148;</button>
   </div>
 </form>
+
+<div id="feuille-fichiers" class="feuille-fichiers-voile" role="presentation" hidden>
+  <section class="feuille-fichiers" role="dialog" aria-modal="true" aria-labelledby="titre-feuille-fichiers">
+    <h2 id="titre-feuille-fichiers">Ajouter un fichier</h2>
+    <div class="feuille-fichiers-options">
+      <button type="button" class="option-fichier" data-source-fichier="camera">
+        <span class="option-fichier-icone" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 7h3l1.5-2h7L17 7h3v12H4z"></path><circle cx="12" cy="13" r="3.5"></circle></svg></span>
+        <span>Caméra</span>
+      </button>
+      <button type="button" class="option-fichier" data-source-fichier="photos">
+        <span class="option-fichier-icone" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"></rect><circle cx="9" cy="9" r="1.5"></circle><path d="m5 17 5-5 3 3 2-2 4 4"></path></svg></span>
+        <span>Photos</span>
+      </button>
+      <button type="button" class="option-fichier" data-source-fichier="fichiers">
+        <span class="option-fichier-icone" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 3h9l5 5v13H5z"></path><path d="M14 3v6h5M8 14h8M8 17h8"></path></svg></span>
+        <span>Fichiers</span>
+      </button>
+    </div>
+  </section>
+</div>
 
 <div id="apercu-fichier" aria-live="polite">
   <img id="apercu-fichier-media" alt="Aperçu du fichier sélectionné">
@@ -2177,6 +2207,27 @@ inputImage.addEventListener('change', function(e) {
   afficherApercuFichier(fichierImage);
 });
 document.getElementById('retirer-fichier').addEventListener('click', effacerApercuFichier);
+
+const feuilleFichiers = document.getElementById('feuille-fichiers');
+document.getElementById('btn-attach').addEventListener('click', function() {
+  feuilleFichiers.hidden = false;
+});
+feuilleFichiers.addEventListener('click', function(e) {
+  if (e.target === feuilleFichiers) feuilleFichiers.hidden = true;
+});
+feuilleFichiers.querySelectorAll('[data-source-fichier]').forEach(function(option) {
+  option.addEventListener('click', function() {
+    const source = option.dataset.sourceFichier;
+    inputImage.accept = source === 'photos' ? 'image/*' : 'image/*,video/*';
+    if (source === 'camera') inputImage.setAttribute('capture', 'environment');
+    else inputImage.removeAttribute('capture');
+    feuilleFichiers.hidden = true;
+    inputImage.click();
+  });
+});
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape' && !feuilleFichiers.hidden) feuilleFichiers.hidden = true;
+});
 
 // =====================================================================
 // Contrôles mode vocal plein écran
