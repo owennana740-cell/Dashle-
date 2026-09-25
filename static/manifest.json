@@ -3,6 +3,7 @@
   "short_name": "Dashle",
   "start_url": "/",
   "display": "standalone",
+  "description": "Dashle est votre intelligence artificielle personnelle pour échanger par écrit et demander l’analyse d’images ou de vidéos.",
   "background_color": "#F7FBF9",
   "theme_color": "#22C55E",
   "icons": [

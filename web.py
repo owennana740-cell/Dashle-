@@ -156,7 +156,7 @@ _ROUTES_PUBLIQUES = {
     "static", "connexion", "inscription", "partage",
     "accueil", "actualites", "repondre_flux", "repondre", "repondre_image",
     "confirmer_message", "nouvelle_conv", "conditions_utilisation",
-    "health",
+    "health", "robots_txt", "sitemap_xml",
 }
 
 
@@ -1209,8 +1209,25 @@ PAGE = _HEADER_USER_MACRO + """
 <head>
 <meta charset="UTF-8">
 <meta name="google-site-verification" content="Thfhw3_kxuum7bWPLLuLgOrubxOw298KvLDBChfO3Tg" />
-<title>Dashle</title>
+<title>Dashle - Votre intelligence artificielle personnelle</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Dashle est votre intelligence artificielle personnelle pour échanger, explorer vos idées et demander l’analyse d’images ou de vidéos depuis votre navigateur.">
+<link rel="canonical" href="https://dashle.onrender.com/">
+<meta property="og:title" content="Dashle — Votre intelligence artificielle personnelle">
+<meta property="og:description" content="Échangez avec votre intelligence artificielle personnelle, explorez vos idées et demandez l’analyse d’images ou de vidéos.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://dashle.onrender.com/">
+<meta property="og:image" content="https://dashle.onrender.com/static/icons/dashle-icon-1024.png">
+<meta property="og:image:alt" content="Icône de Dashle avec couronne">
+<meta property="og:locale" content="fr_FR">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Dashle — Votre intelligence artificielle personnelle">
+<meta name="twitter:description" content="Échangez avec votre intelligence artificielle personnelle, explorez vos idées et demandez l’analyse d’images ou de vidéos.">
+<meta name="twitter:image" content="https://dashle.onrender.com/static/icons/dashle-icon-1024.png">
+<meta name="twitter:url" content="https://dashle.onrender.com/">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"WebApplication","name":"Dashle","url":"https://dashle.onrender.com/","description":"Dashle est une intelligence artificielle personnelle accessible depuis un navigateur pour échanger par écrit et demander l’analyse d’images ou de vidéos."}
+</script>
 <link rel="manifest" href="/static/manifest.json">
 <link rel="icon" type="image/png" sizes="1024x1024" href="/static/icons/dashle-icon-1024.png">
 <link rel="icon" type="image/png" sizes="512x512" href="/static/icons/dashle-icon-512.png">
@@ -1321,7 +1338,7 @@ if ('serviceWorker' in navigator) {
     <section class="accueil-vide" aria-label="Accueil DASHLE">
       <img src="{{ url_for('static', filename='icons/dashle-logo-header.png') }}" alt="Logo DASHLE">
       <h1>{{ message_accueil }}</h1>
-      <p>Pose une question ou choisis une idée pour commencer.</p>
+      <p>Votre IA personnelle pour échanger, explorer vos idées et demander l’analyse d’images ou de vidéos.</p>
       <div class="suggestions">
         <button type="button" class="suggestion">Aide-moi à organiser ma journée</button>
         <button type="button" class="suggestion">Explique-moi un sujet simplement</button>
@@ -3463,6 +3480,46 @@ def conditions_utilisation():
 @app.route("/actualites")
 def actualites():
     return render_template_string(NEWS_PAGE)
+
+
+@app.route("/robots.txt")
+def robots_txt():
+    contenu = """User-agent: *
+Allow: /
+Disallow: /connexion
+Disallow: /inscription
+Disallow: /parametres
+Disallow: /securite
+Disallow: /conv/
+Disallow: /rechercher
+Disallow: /supprimer_conv/
+Disallow: /archiver_conv/
+Disallow: /renommer/
+Disallow: /feedback
+Disallow: /regenerer/
+Disallow: /partager/
+Disallow: /partage/
+Disallow: /nouvelle
+Disallow: /repondre
+Disallow: /repondre_flux
+Disallow: /repondre_image
+Disallow: /confirmer_message
+Disallow: /health
+Sitemap: https://dashle.onrender.com/sitemap.xml
+"""
+    return Response(contenu, mimetype="text/plain")
+
+
+@app.route("/sitemap.xml")
+def sitemap_xml():
+    contenu = """<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://dashle.onrender.com/</loc></url>
+  <url><loc>https://dashle.onrender.com/actualites</loc></url>
+  <url><loc>https://dashle.onrender.com/conditions</loc></url>
+</urlset>
+"""
+    return Response(contenu, mimetype="application/xml")
 
 
 @app.route("/parametres", methods=["GET", "POST"])
