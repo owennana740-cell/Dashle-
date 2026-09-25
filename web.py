@@ -1282,7 +1282,7 @@ let vadDebutSynthese = 0;
 
 // Verrou d'état binaire : true pendant TOUTE la durée réelle de la synthèse
 // vocale, de utteranceActuelle.onstart jusqu'à onend/onerror.
-// Le VAD ne peut déclencher interrompreDashle() que si syntheseEnCours=false.
+// Le VAD conserve la détection de barge-in pendant le TTS; la reconnaissance, elle, est mutée.
 let syntheseEnCours = false;
 
 // true quand c'est le TTS qui a forcé l'arrêt de reco (pas un silence naturel).
@@ -1329,6 +1329,7 @@ function desarmerWatchdog() {
 function reinitialiserEtatVocal() {
   desarmerWatchdog();
   syntheseEnCours    = false;
+  recoMutePendantTTS = false;
   vadDebutSynthese   = 0;
   interruptionDemandee = false;
   recoEnCours        = false;
@@ -1513,16 +1514,14 @@ function surveillerParole() {
 
     // Dashle est occupé si SSE en cours OU synthèse en cours.
     const dashleOccupe = reponseEnCours
+      || syntheseEnCours
       || (window.speechSynthesis && window.speechSynthesis.speaking);
 
-    // Verrou principal : syntheseEnCours est true pendant TOUTE la durée
-    // réelle de la synthèse (onstart → onend/onerror). Tant qu'il est actif,
-    // aucune interruption n'est possible — la voix de Dashle ne peut pas
-    // se déclencher elle-même.
-    // Délai anti-écho post-synthèse : laisser VAD_DELAI_POST ms après la fin
-    // réelle pour que l'écho résiduel s'estompe avant de réautoriser.
-    const enPeriodeProtegee = syntheseEnCours
-      || (vadDebutSynthese > 0 && (now - vadDebutSynthese) < VAD_DELAI_POST);
+    // Le VAD reste actif pendant le TTS pour détecter une vraie prise de parole.
+    // echoCancellation, le seuil et la durée minimale filtrent la voix de Dashle.
+    // Après le TTS, attendre VAD_DELAI_POST pour laisser l'écho résiduel retomber.
+    const enPeriodeProtegee = vadDebutSynthese > 0
+      && (now - vadDebutSynthese) < VAD_DELAI_POST;
 
     if (dashleOccupe && !enPeriodeProtegee && rms >= VAD_SEUIL) {
       if (!vadDebutParole) vadDebutParole = now;
@@ -1533,7 +1532,7 @@ function surveillerParole() {
         interrompreDashle();
       }
     } else {
-      if (!dashleOccupe) vadDebutParole = 0;
+      vadDebutParole = 0;
     }
     vadAnimation = requestAnimationFrame(verifier);
   };
@@ -1599,7 +1598,8 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
   reco.maxAlternatives = 1;
 
   function demarrerEcouteVocale() {
-    if (!vocalActif) return;
+    if (!vocalActif || recoMutePendantTTS || syntheseEnCours || reponseEnCours
+        || (('speechSynthesis' in window) && window.speechSynthesis.speaking)) return;
     // Ne pas démarrer si un démarrage est déjà en vol (guard anti-doublon).
     if (recoEnCours) return;
     modeActuel = 'vocal';
@@ -1641,6 +1641,8 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
   };
 
   reco.onresult = function(e) {
+    if (recoMutePendantTTS || syntheseEnCours
+        || (vadDebutSynthese > 0 && performance.now() - vadDebutSynthese < VAD_DELAI_POST)) return;
     const transcript = (e.results[0][0].transcript || '').trim();
     if (!transcript) return;
     champ.value = transcript;
@@ -1662,9 +1664,10 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
     // ou synthèse encore active.
     if (recoMutePendantTTS) return;  // TTS prend la main, onend le relancera
     const synthActive = ('speechSynthesis' in window) && window.speechSynthesis.speaking;
-    if (!interruptionDemandee && !reponseEnCours && !synthActive) {
+    if (!interruptionDemandee && !reponseEnCours && !syntheseEnCours && !synthActive) {
       setTimeout(function() {
-        if (!vocalActif || interruptionDemandee || recoEnCours || recoMutePendantTTS) return;
+        if (!vocalActif || interruptionDemandee || recoEnCours || recoMutePendantTTS
+            || reponseEnCours || syntheseEnCours) return;
         const encoreSynth = ('speechSynthesis' in window) && window.speechSynthesis.speaking;
         if (!reponseEnCours && !encoreSynth) {
           recoEnCours = true;
@@ -1677,9 +1680,15 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
   reco.onerror = function(e) {
     btnMicro.classList.remove('actif');
     if (vocalActif && e.error !== 'aborted') {
-      afficherEtatVocal('attente', 'En attente du micro...');
-      afficherStatutVocal("🎧 Petit souci, je réessaie...");
-      setTimeout(demarrerEcouteVocale, 700);
+      if (!recoMutePendantTTS && !syntheseEnCours && !reponseEnCours) {
+        afficherEtatVocal('attente', 'En attente du micro...');
+        afficherStatutVocal("🎧 Petit souci, je réessaie...");
+      }
+      setTimeout(function() {
+        if (vocalActif && !recoMutePendantTTS && !syntheseEnCours && !reponseEnCours) {
+          demarrerEcouteVocale();
+        }
+      }, 700);
     }
   };
 
@@ -1814,7 +1823,8 @@ function lireReponse(bouton) {
     // On attend VAD_DELAI_POST ms (délai anti-écho) avant d'écouter.
     if (vocalActif && window._dashleVocal && !interruptionDemandee && !recoEnCours) {
       setTimeout(function() {
-        if (vocalActif && !recoEnCours && !interruptionDemandee && !syntheseEnCours) {
+        if (vocalActif && !recoEnCours && !interruptionDemandee && !recoMutePendantTTS
+            && !reponseEnCours && !syntheseEnCours) {
           demarrerEcouteVocale();
         }
       }, VAD_DELAI_POST);
