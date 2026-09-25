@@ -1277,7 +1277,7 @@ if ('serviceWorker' in navigator) {
 <div id="chat">
   {% if not messages %}
     <section class="accueil-vide" aria-label="Accueil DASHLE">
-      <img src="{{ url_for('static', filename='logo.png') }}" alt="Logo DASHLE">
+      <img src="{{ url_for('static', filename='icons/dashle-logo-header.png') }}" alt="Logo DASHLE">
       <h1>Bonjour, que veux-tu faire ?</h1>
       <p>Pose une question ou choisis une idée pour commencer.</p>
       <div class="suggestions">
@@ -2949,7 +2949,7 @@ p a{color:#22C55E;font-weight:600;text-decoration:none}
 </style></head>
 <body><main class="carte">
 <div class="logo-titre">
-  <img class="logo" src="/static/logo.png" alt="Dashle">
+  <img class="logo" src="/static/icons/dashle-logo-header.png" alt="Dashle">
   <h1>Dashle</h1>
 </div>
 <h2>{{ titre }}</h2>

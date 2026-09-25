@@ -97,7 +97,9 @@ def toggle_sidebar():
 bouton_plat(entete, text="☰", command=toggle_sidebar, bg=ACCENT, fg="white",
             font=("Segoe UI", 13)).pack(side=tk.LEFT, padx=8)
 
-logo_brut = tk.PhotoImage(file="dashle_logo.png")
+logo_brut = tk.PhotoImage(
+    file=os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "icons", "dashle-logo-header.png")
+).subsample(2, 2)
 logo_img = logo_brut
 tk.Label(entete, image=logo_img, bg=ACCENT, bd=0,
          highlightthickness=0).pack(side=tk.LEFT, padx=(0, 4))
