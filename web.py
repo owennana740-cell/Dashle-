@@ -14,6 +14,7 @@ import os
 import io
 import base64
 import json
+import random
 import secrets
 from datetime import datetime
 from flask import (
@@ -47,6 +48,27 @@ initialiser_base()
 
 # Nombre maximal de messages conservés en session pour les visiteurs anonymes.
 MAX_HISTORIQUE_VISITEUR = 30
+
+MESSAGES_ACCUEIL_VISITEUR = (
+    "Bonjour, que veux-tu faire aujourd’hui ?",
+    "Prêt à commencer ?",
+    "Sur quoi je peux t’aider ?",
+    "Qu’aimerais-tu explorer aujourd’hui ?",
+    "On commence par quoi ?",
+    "Quelle idée veux-tu faire avancer ?",
+    "Je suis là — qu’est-ce qui t’amène ?",
+    "Tu as quelque chose en tête ?",
+)
+MESSAGES_ACCUEIL_PERSONNALISES = (
+    "Bonjour {prenom}, que fais-tu de beau aujourd’hui ?",
+    "{prenom}, prêt à avancer sur quelque chose ?",
+    "Ravi de te retrouver, {prenom}. Qu’aimerais-tu faire ?",
+    "Bonjour {prenom} ! Par quoi veux-tu commencer ?",
+    "Qu’est-ce qui te ferait plaisir aujourd’hui, {prenom} ?",
+    "On s’y met ensemble, {prenom} ?",
+    "Une idée à explorer ensemble, {prenom} ?",
+    "Qu’aimerais-tu faire avancer aujourd’hui, {prenom} ?",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -1278,7 +1300,7 @@ if ('serviceWorker' in navigator) {
   {% if not messages %}
     <section class="accueil-vide" aria-label="Accueil DASHLE">
       <img src="{{ url_for('static', filename='icons/dashle-logo-header.png') }}" alt="Logo DASHLE">
-      <h1>Bonjour, que veux-tu faire ?</h1>
+      <h1>{{ message_accueil }}</h1>
       <p>Pose une question ou choisis une idée pour commencer.</p>
       <div class="suggestions">
         <button type="button" class="suggestion">Aide-moi à organiser ma journée</button>
@@ -2970,7 +2992,23 @@ p a{color:#22C55E;font-weight:600;text-decoration:none}
 # Helper : rendu de PAGE avec toutes les variables communes
 # ---------------------------------------------------------------------------
 
-def _rendre_page(messages, utilisateur=None, conversations=None, conversation_id=None, preferences=None):
+def _prenom_accueil(user_id):
+    valeur = session.get("prenom") or session.get("first_name") or session.get("user_name")
+    if not valeur and user_id:
+        with session_base() as db:
+            souvenir = db.query(UserMemory).filter_by(user_id=user_id, cle="nom").one_or_none()
+            valeur = souvenir.valeur if souvenir else None
+    if not isinstance(valeur, str):
+        return None
+    prenom = valeur.strip().split(maxsplit=1)[0] if valeur.strip() else ""
+    if (not prenom or len(prenom) > 40
+            or not all(caractere.isalpha() or caractere in "-'" for caractere in prenom)):
+        return None
+    return prenom[:1].upper() + prenom[1:]
+
+
+def _rendre_page(messages, utilisateur=None, conversations=None, conversation_id=None,
+                 preferences=None, prenom=None):
     """Rend le template PAGE en injectant CSS, données JSON et tokens."""
     prefs = preferences or _PREFS_VISITEUR
     est_connecte = utilisateur is not None
@@ -2984,10 +3022,15 @@ def _rendre_page(messages, utilisateur=None, conversations=None, conversation_id
     # La clé CSRF n'est jamais exposée aux visiteurs non connectés via JS ;
     # elle est remplacée par null pour que le JS sache ne pas l'envoyer.
 
+    message_accueil = (
+        random.choice(MESSAGES_ACCUEIL_PERSONNALISES).format(prenom=prenom)
+        if prenom else random.choice(MESSAGES_ACCUEIL_VISITEUR)
+    )
     html = render_template_string(
         PAGE,
         css=_CSS,
         messages=messages,
+        message_accueil=message_accueil,
         utilisateur={"email": utilisateur} if utilisateur else None,
         conversations=conversations or [],
         conversation_id=conversation_id or 0,
@@ -3024,6 +3067,7 @@ def accueil():
         return _rendre_page(
             messages=_messages_conversation(user_id, conversation_id),
             utilisateur=session["user_email"],
+            prenom=_prenom_accueil(user_id),
             conversations=_liste_conversations(user_id),
             conversation_id=conversation_id,
             preferences=_preferences(user_id),
