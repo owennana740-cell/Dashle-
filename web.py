@@ -1293,7 +1293,7 @@ if ('serviceWorker' in navigator) {
     {% if utilisateur %}
       <div class="user-badge" title="{{ utilisateur.email }}"><span class="user-avatar">{{ utilisateur.email[0].upper() }}</span><span class="email-label">{{ utilisateur.email }}</span></div>
       <div class="sidebar-account-links">
-        <a href="{{ url_for('parametres') }}">Profil et param&egrave;tres</a>
+        <a href="{{ url_for('parametres') }}">&#9881; Param&egrave;tres</a>
         <form action="{{ url_for('deconnexion') }}" method="post" style="margin:0;flex:1;">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <button type="submit" style="width:100%;padding:8px 6px;border:0;border-radius:8px;background:transparent;font:inherit;font-size:13px;cursor:pointer;">&D&eacute;connexion</button>
