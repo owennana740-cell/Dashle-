@@ -1208,6 +1208,7 @@ PAGE = _HEADER_USER_MACRO + """
 <html lang="fr">
 <head>
 <meta charset="UTF-8">
+<meta name="google-site-verification" content="Thfhw3_kxuum7bWPLLuLgOrubxOw298KvLDBChfO3Tg" />
 <title>Dashle</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="manifest" href="/static/manifest.json">
