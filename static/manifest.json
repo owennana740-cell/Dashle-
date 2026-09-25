@@ -7,13 +7,23 @@
   "theme_color": "#000000",
   "icons": [
     {
-      "src": "/static/icon-192.png",
+      "src": "/static/icons/dashle-icon-1024.png",
+      "sizes": "1024x1024",
+      "type": "image/png"
+    },
+    {
+      "src": "/static/icons/dashle-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "/static/icons/dashle-icon-192.png",
       "sizes": "192x192",
       "type": "image/png"
     },
     {
-      "src": "/static/icon-512.png",
-      "sizes": "512x512",
+      "src": "/static/icons/dashle-icon-48.png",
+      "sizes": "48x48",
       "type": "image/png"
     }
   ]

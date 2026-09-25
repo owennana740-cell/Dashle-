@@ -1137,6 +1137,11 @@ PAGE = _HEADER_USER_MACRO + """
 <title>Dashle</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="manifest" href="/static/manifest.json">
+<link rel="icon" type="image/png" sizes="1024x1024" href="/static/icons/dashle-icon-1024.png">
+<link rel="icon" type="image/png" sizes="512x512" href="/static/icons/dashle-icon-512.png">
+<link rel="icon" type="image/png" sizes="192x192" href="/static/icons/dashle-icon-192.png">
+<link rel="icon" type="image/png" sizes="48x48" href="/static/icons/dashle-icon-48.png">
+<link rel="apple-touch-icon" sizes="192x192" href="/static/icons/dashle-icon-192.png">
 <meta name="theme-color" content="#10A37F">
 <script>
 if ('serviceWorker' in navigator) {
