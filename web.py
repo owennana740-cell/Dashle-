@@ -1585,12 +1585,18 @@ function interrompreDashle() {
   recoResultatsAutorises = false;
   recoEnCours = true;
   try { reco && reco.abort(); } catch(e) {}
-  setTimeout(function() {
+  function relancerRecoApresInterruption(tentative) {
     if (!vocalActif || !reco) { recoEnCours = false; return; }
     interruptionDemandee = false;
     recoEnCours = false;
-    demarrerEcouteVocale();
-  }, 120);
+    if (demarrerEcouteVocale()) return;
+    // abort() peut mettre plus de 120 ms à libérer SpeechRecognition.
+    // Réessayer brièvement évite que son InvalidStateError laisse le vocal bloqué.
+    if (tentative < 12) {
+      setTimeout(function() { relancerRecoApresInterruption(tentative + 1); }, 150);
+    }
+  }
+  setTimeout(function() { relancerRecoApresInterruption(0); }, 120);
 }
 
 // =====================================================================
@@ -1606,9 +1612,9 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
 
   function demarrerEcouteVocale() {
     if (!vocalActif || recoMutePendantTTS || syntheseEnCours || reponseEnCours
-        || (('speechSynthesis' in window) && window.speechSynthesis.speaking)) return;
+        || (('speechSynthesis' in window) && window.speechSynthesis.speaking)) return false;
     // Ne pas démarrer si un démarrage est déjà en vol (guard anti-doublon).
-    if (recoEnCours) return;
+    if (recoEnCours) return false;
     modeActuel = 'vocal';
     ouvrirModeVocal();
     afficherEtatVocal('ecoute', 'Dashle écoute...');
@@ -1617,7 +1623,14 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
     afficherStatutVocal("🎧 Je t'écoute...");
     recoEnCours = true;
     recoResultatsAutorises = false;
-    try { reco.start(); } catch(e) { recoEnCours = false; }
+    try {
+      reco.start();
+      return true;
+    } catch(e) {
+      recoEnCours = false;
+      console.warn('[DASHLE] Échec du démarrage de la reconnaissance vocale :', e);
+      return false;
+    }
   }
 
   btnMicro.onclick = function() {
