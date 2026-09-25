@@ -308,17 +308,20 @@ _CSS = """
 * { box-sizing: border-box; }
 
 :root {
-  --vert: #10A37F;
-  --vert-fonce: #087355;
-  --vert-clair: #e6f7f1;
+  --accent-vert: #22C55E;
+  --accent-bleu: #3B82F6;
+  --accent-gradient: linear-gradient(110deg, var(--accent-vert) 0%, var(--accent-bleu) 100%);
+  --vert: var(--accent-vert);
+  --vert-fonce: #2563eb;
+  --vert-clair: #eaf8ef;
   --texte: #17251f;
   --fond: #ffffff;
   --fond-secondaire: #f7fbf9;
   --bordure: #dce7e2;
-  --msg-user: #DCF8C6;
+  --msg-user: linear-gradient(110deg, #dcfce7 0%, #dbeafe 100%);
   --msg-bot: #f0f0f0;
   --sidebar-bg: #ffffff;
-  --header-bg: #10A37F;
+  --header-bg: var(--accent-gradient);
   --radius: 16px;
   --transition: 0.18s ease;
   /* Taille de texte des messages — modifiable via JS depuis les paramètres */
@@ -332,6 +335,8 @@ body.theme-sombre {
   --bordure: #294238;
   --msg-bot: #1e2e29;
   --sidebar-bg: #17231f;
+  --vert-clair: rgba(59,130,246,.16);
+  --msg-user: linear-gradient(110deg, rgba(34,197,94,.2), rgba(59,130,246,.22));
 }
 
 body {
@@ -704,7 +709,18 @@ form.bas textarea {
 
 form.bas textarea:focus {
   outline: none;
-  border-color: var(--vert);
+  border-color: transparent;
+  background: linear-gradient(var(--fond-secondaire),var(--fond-secondaire)) padding-box,
+              var(--accent-gradient) border-box;
+  box-shadow: 0 0 0 2px rgba(59,130,246,.12);
+}
+
+.recherche-conversations:focus {
+  outline:none;
+  border-color:transparent;
+  background:linear-gradient(var(--fond-secondaire),var(--fond-secondaire)) padding-box,
+             var(--accent-gradient) border-box;
+  box-shadow:0 0 0 2px rgba(59,130,246,.12);
 }
 
 .groupe-actions {
@@ -731,10 +747,10 @@ button.micro {
 }
 
 button.micro:hover { background: var(--vert-clair); color: var(--vert); }
-button.micro.actif { color: var(--vert); background: var(--vert-clair); }
+button.micro.actif { color: #fff; background: var(--accent-gradient); }
 
 button.vocal {
-  background: #3B82F6;
+  background: var(--accent-gradient);
   border: none;
   cursor: pointer;
   width: 34px;
@@ -745,18 +761,18 @@ button.vocal {
   justify-content: center;
   color: white;
   box-shadow: 0 1px 4px rgba(0,0,0,0.18);
-  transition: background var(--transition), box-shadow var(--transition);
+  transition: filter var(--transition), box-shadow var(--transition);
   flex-shrink: 0;
 }
 
-button.vocal:hover   { background: #2563eb; }
+button.vocal:hover   { filter: brightness(.95); }
 button.vocal.vocal-on { box-shadow: 0 0 0 2px var(--vert); }
 
 button.vocal.ecoute {
   animation: pulse-vocal 1.1s infinite ease-in-out;
 }
 
-button.vocal.parle { background: #1d4ed8; }
+button.vocal.parle { background: var(--accent-gradient); }
 
 @keyframes pulse-vocal {
   0%, 100% { box-shadow: 0 0 0 0   rgba(59,130,246,0.55); }
@@ -764,7 +780,7 @@ button.vocal.parle { background: #1d4ed8; }
 }
 
 button.envoyer {
-  background: var(--vert);
+  background: var(--accent-gradient);
   color: white;
   border: none;
   border-radius: 50%;
@@ -776,11 +792,11 @@ button.envoyer {
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: background var(--transition), opacity var(--transition), transform var(--transition);
+  transition: filter var(--transition), opacity var(--transition), transform var(--transition);
 }
 
 button.envoyer:hover:not(:disabled) {
-  background: var(--vert-fonce);
+  filter: brightness(.94);
   transform: scale(1.05);
 }
 
@@ -843,7 +859,7 @@ video#apercu-fichier-media { object-fit: contain; }
   gap: 6px;
   margin: 0 12px 6px;
   padding: 7px 14px;
-  background: #2563eb;
+  background: var(--accent-gradient);
   color: white;
   border: none;
   border-radius: 20px;
@@ -851,9 +867,9 @@ video#apercu-fichier-media { object-fit: contain; }
   font-weight: 600;
   cursor: pointer;
   flex-shrink: 0;
-  transition: background var(--transition);
+  transition: filter var(--transition);
 }
-.btn-rouvrir-vocal:hover { background: #1d4ed8; }
+.btn-rouvrir-vocal:hover { filter: brightness(.94); }
 .btn-rouvrir-vocal.actif { display: flex; }
 
 /* ---- Statut vocal (texte) ---- */
@@ -1033,7 +1049,7 @@ video#apercu-fichier-media { object-fit: contain; }
 .sidebar-conversations { min-height:0; overflow-y:auto; }
 .sidebar-account { margin-top:auto; padding:12px 16px 0; border-top:1px solid var(--bordure); }
 .sidebar-account .user-badge { width:100%; justify-content:flex-start; color:var(--texte); background:transparent; border-color:var(--bordure); }
-.sidebar-account .user-avatar { color:#fff; background:var(--vert); }
+.sidebar-account .user-avatar { color:#fff; background:var(--accent-gradient); }
 .sidebar-account a, .sidebar-account button { color:var(--texte); }
 .sidebar-account .sidebar-account-links { display:flex; gap:8px; margin-top:8px; }
 .sidebar-account-links a { flex:1; padding:8px 6px; border-radius:8px; text-align:center; text-decoration:none; font-size:13px; }
@@ -1041,7 +1057,12 @@ video#apercu-fichier-media { object-fit: contain; }
 .ligne-conversation { min-height:44px; padding:0 8px 0 12px; }
 .ligne-conversation > a { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; border:0 !important; background:transparent !important; }
 .ligne-conversation .epingle-conversation { padding:6px; border:0; background:transparent; color:#81928b; cursor:pointer; }
-.ligne-conversation .epingle-conversation[aria-pressed="true"] { color:var(--vert); }
+.ligne-conversation .epingle-conversation[aria-pressed="true"] { color:#fff; background:var(--accent-gradient); }
+.ligne-conversation > a.actif { border-radius:8px; background:var(--accent-gradient) !important; color:#fff !important; }
+#sidebar button.nouvelle { border-color:transparent !important; background:var(--accent-gradient); color:#fff; }
+#sidebar button.nouvelle:hover { filter:brightness(.94); }
+.actions-reponse button:hover,.actions-reponse button.actif { background:var(--accent-gradient); color:#fff; }
+.suggestion:hover { border-color:transparent; background:linear-gradient(var(--fond),var(--fond)) padding-box,var(--accent-gradient) border-box; }
 .sidebar-vide { padding:4px 18px 12px; color:#71837b; font-size:13px; }
 .accueil-vide { min-height:100%; display:flex; flex-direction:column; justify-content:center; align-items:center; gap:20px; text-align:center; padding:36px 16px; }
 .accueil-vide img { width:76px; height:76px; border-radius:50%; }
@@ -1142,7 +1163,7 @@ PAGE = _HEADER_USER_MACRO + """
 <link rel="icon" type="image/png" sizes="192x192" href="/static/icons/dashle-icon-192.png">
 <link rel="icon" type="image/png" sizes="48x48" href="/static/icons/dashle-icon-48.png">
 <link rel="apple-touch-icon" sizes="192x192" href="/static/icons/dashle-icon-192.png">
-<meta name="theme-color" content="#10A37F">
+<meta name="theme-color" content="#22C55E">
 <script>
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/static/service-worker.js');
@@ -1198,7 +1219,7 @@ if ('serviceWorker' in navigator) {
         {% for conv in conversations %}
           <div class="ligne-conversation" data-conv-id="{{ conv.id }}" data-titre="{{ conv.titre|lower }}" style="display:flex;align-items:center;">
             <button type="button" class="epingle-conversation" aria-pressed="false" title="&Eacute;pingler" aria-label="&Eacute;pingler cette conversation">&#9734;</button>
-            <a href="{{ url_for('charger_conv', i=conv.id) }}" style="flex:1;">{{ conv.titre }}</a>
+            <a href="{{ url_for('charger_conv', i=conv.id) }}" class="{{ 'actif' if conv.id == conversation_id else '' }}" style="flex:1;">{{ conv.titre }}</a>
             <button type="button" title="Partager" aria-label="Partager" onclick="partagerConversation({{ conv.id }})" style="border:0;background:none;cursor:pointer;padding:8px;">&#128279;</button>
             <form action="{{ url_for('archiver_conv', i=conv.id) }}" method="post" style="margin:0;"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit" title="Archiver" aria-label="Archiver" style="border:0;background:none;cursor:pointer;padding:8px;">&#128451;</button></form>
             <form action="{{ url_for('supprimer_conv', i=conv.id) }}" method="post" style="margin:0;">
@@ -2644,10 +2665,10 @@ SHARE_PAGE = """
 <style>
 body{font-family:Segoe UI,sans-serif;background:#f4f8f6;color:#14251f;margin:0}
 .partage{max-width:760px;margin:0 auto;padding:28px 18px}
-.marque{color:#10A37F;font-weight:700;font-size:18px}
+.marque{color:#22C55E;font-weight:700;font-size:18px}
 h1{margin:4px 0 20px;font-size:20px}
 .message{padding:12px 16px;margin:12px 0;border-radius:14px;white-space:pre-wrap;line-height:1.5;background:#fff;box-shadow:0 2px 8px rgba(0,0,0,0.06)}
-.user{margin-left:15%;background:#e2f7ed}
+.user{margin-left:15%;background:linear-gradient(110deg,#dcfce7,#dbeafe)}
 .bot{margin-right:15%}
 </style></head>
 <body><main class="partage">
@@ -2667,16 +2688,16 @@ SETTINGS_PAGE = """
 *{box-sizing:border-box}body{margin:0}
 .page{max-width:760px;margin:auto;padding:24px 18px 50px}
 .bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:22px}
-.bar a{color:#10A37F;text-decoration:none;font-weight:600;margin-left:12px}
+.bar a{color:#22C55E;text-decoration:none;font-weight:600;margin-left:12px}
 .carte{background:#fff;border:1px solid #dceae4;border-radius:14px;padding:18px;margin:12px 0}
-.carte h2{font-size:15px;margin:0 0 14px;color:#10A37F}
+.carte h2{font-size:15px;margin:0 0 14px;color:#22C55E}
 label{display:flex;justify-content:space-between;gap:14px;align-items:center;padding:10px 0;border-top:1px solid #edf2f0}
 label:first-of-type{border-top:0}
-select,input[type=checkbox],input[type=range]{accent-color:#10A37F}
+select,input[type=checkbox],input[type=range]{accent-color:#22C55E}
 select{max-width:100%;padding:7px;border:1px solid #dceae4;border-radius:7px}
 input[type=range]{width:160px}
-button{border:0;border-radius:9px;background:#10A37F;color:#fff;padding:10px 14px;cursor:pointer}
-.secondaire{background:#e5f3ed;color:#087355}
+button{border:0;border-radius:9px;background:linear-gradient(110deg,#22C55E,#3B82F6);color:#fff;padding:10px 14px;cursor:pointer}
+.secondaire{background:#eef6ff;color:#2563eb}
 .note{color:#71837b;font-size:13px}
 </style></head>
 <body><main class="page">
@@ -2796,15 +2817,15 @@ SECURITY_PAGE = """
 :root{font-family:Segoe UI,sans-serif;color:#17251f;background:#f4f8f6}*{box-sizing:border-box}body{margin:0}
 .page{max-width:620px;margin:auto;padding:24px 18px 50px}
 .bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:22px}
-.bar a{color:#10A37F;text-decoration:none;font-weight:600}
+.bar a{color:#22C55E;text-decoration:none;font-weight:600}
 .carte{background:#fff;border:1px solid #dceae4;border-radius:14px;padding:18px;margin:12px 0}
-.carte h2{font-size:15px;margin:0 0 14px;color:#10A37F}
+.carte h2{font-size:15px;margin:0 0 14px;color:#22C55E}
 label{display:block;margin-top:12px;font-size:14px}
 input{display:block;width:100%;margin-top:5px;padding:10px;border:1px solid #dceae4;border-radius:8px}
-button{border:0;border-radius:9px;background:#10A37F;color:#fff;padding:10px 14px;margin-top:16px;cursor:pointer}
+button{border:0;border-radius:9px;background:linear-gradient(110deg,#22C55E,#3B82F6);color:#fff;padding:10px 14px;margin-top:16px;cursor:pointer}
 .danger{background:#b42318}
 .note{color:#71837b;font-size:13px}
-.message{padding:10px;border-radius:8px;background:#e5f3ed;color:#087355}
+.message{padding:10px;border-radius:8px;background:#eef6ff;color:#2563eb}
 </style></head>
 <body><main class="page">
 <div class="bar"><div><strong>Dashle</strong><h1>Sécurité</h1></div><a href="{{ url_for('parametres') }}">← Paramètres</a></div>
@@ -2838,19 +2859,19 @@ body{font-family:Segoe UI,sans-serif;background:#f5f7f6;margin:0;display:grid;pl
 .carte{width:min(380px,90vw);padding:32px 28px;background:#fff;border-radius:16px;box-shadow:0 4px 24px rgba(0,0,0,0.09)}
 .logo-titre{display:flex;align-items:center;gap:10px;margin-bottom:4px}
 img.logo{height:36px;border-radius:50%}
-h1{color:#10A37F;margin:0;font-size:22px}
+h1{color:#22C55E;margin:0;font-size:22px}
 h2{color:#333;margin:0 0 20px;font-size:16px;font-weight:500}
 label,input,button{display:block;width:100%;box-sizing:border-box}
 label{margin-top:14px;font-size:14px;color:#444}
 input{padding:10px 12px;margin-top:5px;border:1px solid #ddd;border-radius:8px;font:inherit;font-size:15px}
-input:focus{outline:none;border-color:#10A37F}
-button{margin-top:22px;padding:12px;border:0;border-radius:10px;background:#10A37F;color:#fff;cursor:pointer;font-size:15px;font-weight:600;transition:background .15s}
-button:hover{background:#087355}
+input:focus{outline:none;border-color:#3B82F6;box-shadow:0 0 0 2px rgba(34,197,94,.16)}
+button{margin-top:22px;padding:12px;border:0;border-radius:10px;background:linear-gradient(110deg,#22C55E,#3B82F6);color:#fff;cursor:pointer;font-size:15px;font-weight:600;transition:background .15s}
+button:hover{filter:brightness(.94)}
 .erreur{color:#b00020;font-size:13px;margin-top:8px}
 p{font-size:14px;color:#555;margin-top:16px}
-p a{color:#10A37F;font-weight:600;text-decoration:none}
+p a{color:#22C55E;font-weight:600;text-decoration:none}
 .visiteur{display:block;text-align:center;margin-top:12px;font-size:13px;color:#71837b}
-.visiteur a{color:#10A37F}
+.visiteur a{color:#22C55E}
 </style></head>
 <body><main class="carte">
 <div class="logo-titre">

@@ -3,8 +3,8 @@
   "short_name": "Dashle",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#000000",
-  "theme_color": "#000000",
+  "background_color": "#F7FBF9",
+  "theme_color": "#22C55E",
   "icons": [
     {
       "src": "/static/icons/dashle-icon-1024.png",
