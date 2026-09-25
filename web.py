@@ -1291,8 +1291,8 @@ let syntheseEnCours = false;
 // Empêche reco.onend de relancer reco automatiquement pendant la synthèse.
 let recoMutePendantTTS = false;
 
-const VAD_SEUIL       = 0.052; // RMS minimal pour "parole humaine"
-const VAD_DUREE_MIN   = 180;   // ms continus avant interruption (↑ anti-plosive)
+const VAD_SEUIL       = 0.06;  // RMS minimal pour "parole humaine"
+const VAD_DUREE_MIN   = 350;   // ms continus avant interruption (↑ anti-plosive)
 const VAD_COOLDOWN    = 1200;  // ms minimum entre deux interruptions
 const VAD_DELAI_POST  = 350;   // ms de délai anti-écho après fin réelle de synthèse
 
