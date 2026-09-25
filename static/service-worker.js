@@ -1,9 +1,12 @@
-const CACHE = 'dashle-static-v1';
+const CACHE = 'dashle-static-v2';
 const ASSETS = [
   '/static/manifest.json',
   '/static/logo.png',
-  '/static/icon-192.png',
-  '/static/icon-512.png',
+  '/static/icons/dashle-icon-1024.png',
+  '/static/icons/dashle-icon-512.png',
+  '/static/icons/dashle-icon-192.png',
+  '/static/icons/dashle-icon-48.png',
+  '/static/icons/dashle-logo-header.png',
   '/static/icon-attach.png'
 ];
 
