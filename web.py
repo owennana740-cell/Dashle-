@@ -1256,6 +1256,7 @@ const urlImage         = __URL_IMAGE__;
 const conversationId   = __CONV_ID__;
 
 let reco = null;
+let recoEnCours = false;
 
 // États vocaux
 let vocalActif          = false;
