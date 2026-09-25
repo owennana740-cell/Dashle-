@@ -124,7 +124,7 @@ def verifier_csrf():
 _ROUTES_PUBLIQUES = {
     "static", "connexion", "inscription", "partage",
     "accueil", "repondre_flux", "repondre", "repondre_image",
-    "confirmer_message",
+    "confirmer_message", "nouvelle_conv",
     "health",
 }
 
@@ -1025,6 +1025,67 @@ video#apercu-fichier-media { object-fit: contain; }
   #mode-vocal::before, .orbite, .orbe-dashle, .orbe-dashle::after { animation-play-state: paused; }
   .message-wrap { animation: none; }
 }
+
+/* ---- Interface de conversation desktop et mobile ---- */
+#sidebar { display:flex; flex-direction:column; width:272px; max-width:none; padding-bottom:12px; }
+.sidebar-brand { display:flex; align-items:center; gap:10px; padding:18px 18px 14px; color:var(--texte); font-size:18px; font-weight:700; }
+.sidebar-brand img { width:30px; height:30px; border-radius:50%; }
+.sidebar-conversations { min-height:0; overflow-y:auto; }
+.sidebar-account { margin-top:auto; padding:12px 16px 0; border-top:1px solid var(--bordure); }
+.sidebar-account .user-badge { width:100%; justify-content:flex-start; color:var(--texte); background:transparent; border-color:var(--bordure); }
+.sidebar-account .user-avatar { color:#fff; background:var(--vert); }
+.sidebar-account a, .sidebar-account button { color:var(--texte); }
+.sidebar-account .sidebar-account-links { display:flex; gap:8px; margin-top:8px; }
+.sidebar-account-links a { flex:1; padding:8px 6px; border-radius:8px; text-align:center; text-decoration:none; font-size:13px; }
+.sidebar-account-links a:hover { background:var(--vert-clair); }
+.ligne-conversation { min-height:44px; padding:0 8px 0 12px; }
+.ligne-conversation > a { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; border:0 !important; background:transparent !important; }
+.ligne-conversation .epingle-conversation { padding:6px; border:0; background:transparent; color:#81928b; cursor:pointer; }
+.ligne-conversation .epingle-conversation[aria-pressed="true"] { color:var(--vert); }
+.sidebar-vide { padding:4px 18px 12px; color:#71837b; font-size:13px; }
+.accueil-vide { min-height:100%; display:flex; flex-direction:column; justify-content:center; align-items:center; gap:20px; text-align:center; padding:36px 16px; }
+.accueil-vide img { width:76px; height:76px; border-radius:50%; }
+.accueil-vide h1 { margin:0; font-size:clamp(24px,4vw,34px); }
+.accueil-vide p { margin:0; color:#71837b; }
+.suggestions { width:min(720px,100%); display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+.suggestion { padding:14px 16px; border:1px solid var(--bordure); border-radius:14px; background:var(--fond); color:var(--texte); text-align:left; font:inherit; cursor:pointer; transition:border-color var(--transition),background var(--transition),transform var(--transition); }
+.suggestion:hover { border-color:var(--vert); background:var(--fond-secondaire); transform:translateY(-2px); }
+.msg.bot h1,.msg.bot h2,.msg.bot h3 { margin:.7em 0 .35em; line-height:1.3; }
+.msg.bot pre { max-width:100%; overflow:auto; padding:12px; border-radius:10px; background:#101816; color:#e8f5ef; }
+.msg.bot code { padding:2px 5px; border-radius:5px; background:rgba(16,163,127,.12); font-family:Consolas,monospace; font-size:.92em; }
+.msg.bot pre code { padding:0; background:transparent; }
+.bloc-code { position:relative; padding-top:28px; }
+.bloc-code .copier-code { position:absolute; top:4px; right:8px; padding:4px 8px; border:1px solid #496157; border-radius:6px; background:#1e2e29; color:#e8f5ef; cursor:pointer; font-size:12px; }
+.bloc-code pre { margin:0; }
+.msg.bot ul,.msg.bot ol { padding-left:1.5em; }
+.msg.bot a { color:var(--vert-fonce); }
+.message-wrap { max-width:min(82%,760px); }
+
+/* L'orbe conserve sa base verte dans les trois états. */
+.orbe-dashle { background:radial-gradient(circle at 34% 28%,#d5fff0 0%,#62dcb0 18%,#10a37f 53%,#087355 78%,#043d31 100%); box-shadow:0 0 22px rgba(16,163,127,.55),0 0 72px rgba(8,115,85,.35),inset -16px -18px 28px rgba(0,40,28,.35); }
+.orbe-dashle::after { border-color:rgba(169,255,221,.48); }
+#mode-vocal[data-etat="ecoute"] .orbe-dashle,
+#mode-vocal[data-etat="parle"] .orbe-dashle { box-shadow:0 0 30px rgba(16,163,127,.7),0 0 100px rgba(8,115,85,.45),inset -16px -18px 28px rgba(0,40,28,.35); }
+#mode-vocal[data-etat="reflexion"] .orbe-dashle { filter:hue-rotate(12deg) brightness(1.08); box-shadow:0 0 32px rgba(16,163,127,.68),0 0 100px rgba(8,115,85,.42),inset -16px -18px 28px rgba(0,40,28,.35); }
+
+@media (min-width: 851px) {
+  #sidebar { display:flex !important; }
+  #voile, header > .icon-btn:first-child { display:none !important; }
+  header, #banniere-visiteur { margin-left:272px; }
+  #chat { width:min(900px,calc(100% - 304px)); margin-left:calc(272px + max(16px,(100vw - 272px - 900px)/2)); margin-right:16px; }
+  form.bas, #apercu-fichier, #statut-vocal, .btn-rouvrir-vocal { width:min(900px,calc(100% - 304px)); margin-left:calc(272px + max(16px,(100vw - 272px - 900px)/2)); margin-right:16px; }
+  #sidebar .user-menu-wrap { display:none; }
+}
+@media (max-width: 850px) {
+  #sidebar { display:none; width:82%; max-width:320px; }
+  #sidebar[style*="display: block"] { display:flex !important; }
+  .sidebar-brand { padding-top:20px; }
+  .sidebar-account { margin-top:16px; }
+}
+@media (max-width: 600px) {
+  .suggestions { grid-template-columns:1fr; }
+  .message-wrap { max-width:92%; }
+}
 """
 
 
@@ -1113,42 +1174,81 @@ if ('serviceWorker' in navigator) {
 
 <div id="voile" onclick="document.getElementById('sidebar').style.display='none';this.style.display='none';"></div>
 
-<div id="sidebar">
-  <h2>Dashle</h2>
+<div id="sidebar" data-compte="{{ utilisateur.email if utilisateur else 'visiteur' }}">
+  <div class="sidebar-brand">
+    <img src="{{ url_for('static', filename='logo.png') }}" alt="">
+    <span>DASHLE</span>
+  </div>
+  <form action="{{ url_for('nouvelle_conv') }}" method="post" style="margin:0 12px 10px;">
+    {% if utilisateur %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endif %}
+    <button class="nouvelle" type="submit" style="width:100%;text-align:left;border:1px solid var(--bordure);border-radius:10px;">&#43; Nouvelle conversation</button>
+  </form>
   {% if utilisateur %}
     <input class="recherche-conversations" id="recherche-conversations" type="search" placeholder="Rechercher dans l'historique..." aria-label="Rechercher dans l'historique">
-    <form action="{{ url_for('nouvelle_conv') }}" method="post" style="margin:0;">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <button class="nouvelle" type="submit" style="width:100%;text-align:left;">+ Nouvelle conversation</button>
-    </form>
-    {% for conv in conversations %}
-      <div class="ligne-conversation" data-titre="{{ conv.titre|lower }}" style="display:flex;align-items:center;">
-        <a href="{{ url_for('charger_conv', i=conv.id) }}" style="flex:1;">{{ conv.titre }}</a>
-        <button type="button" title="Partager" aria-label="Partager" onclick="partagerConversation({{ conv.id }})" style="border:0;background:none;cursor:pointer;padding:8px;">🔗</button>
-        <form action="{{ url_for('archiver_conv', i=conv.id) }}" method="post" style="margin:0;"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit" title="Archiver" style="border:0;background:none;cursor:pointer;padding:8px;">🗃</button></form>
-        <form action="{{ url_for('supprimer_conv', i=conv.id) }}" method="post" style="margin:0;">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-          <button type="submit" onclick="return confirm('Supprimer cette conversation ?');" aria-label="Supprimer" style="color:#c00;padding:8px 12px;border:0;background:none;cursor:pointer;font-size:20px;">&times;</button>
-        </form>
+    <div class="sidebar-conversations">
+      <div class="menu-section">&Eacute;pingl&eacute;es</div>
+      <div id="conversations-epinglees"></div>
+      <div class="menu-section">R&eacute;centes</div>
+      <div id="conversations-recentes">
+        {% for conv in conversations %}
+          <div class="ligne-conversation" data-conv-id="{{ conv.id }}" data-titre="{{ conv.titre|lower }}" style="display:flex;align-items:center;">
+            <button type="button" class="epingle-conversation" aria-pressed="false" title="&Eacute;pingler" aria-label="&Eacute;pingler cette conversation">&#9734;</button>
+            <a href="{{ url_for('charger_conv', i=conv.id) }}" style="flex:1;">{{ conv.titre }}</a>
+            <button type="button" title="Partager" aria-label="Partager" onclick="partagerConversation({{ conv.id }})" style="border:0;background:none;cursor:pointer;padding:8px;">&#128279;</button>
+            <form action="{{ url_for('archiver_conv', i=conv.id) }}" method="post" style="margin:0;"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit" title="Archiver" aria-label="Archiver" style="border:0;background:none;cursor:pointer;padding:8px;">&#128451;</button></form>
+            <form action="{{ url_for('supprimer_conv', i=conv.id) }}" method="post" style="margin:0;">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button type="submit" onclick="return confirm('Supprimer cette conversation ?');" aria-label="Supprimer" style="color:#c00;padding:8px 12px;border:0;background:none;cursor:pointer;font-size:20px;">&times;</button>
+            </form>
+          </div>
+        {% else %}
+          <div class="sidebar-vide">Tes conversations appara&icirc;tront ici.</div>
+        {% endfor %}
       </div>
-    {% endfor %}
-  {% else %}
-    <div style="padding:16px 18px;font-size:14px;color:#71837b;">
-      Connecte-toi pour sauvegarder tes conversations.
     </div>
-    <a href="{{ url_for('connexion') }}">→ Se connecter</a>
-    <a href="{{ url_for('inscription') }}">✚ Créer un compte</a>
+  {% else %}
+    <div class="sidebar-vide">Mode visiteur : cette conversation est temporaire.</div>
   {% endif %}
   <div class="menu-section">Navigation</div>
   {% if utilisateur %}
-    <a href="{{ url_for('parametres') }}">⚙ Paramètres</a>
+    <a href="{{ url_for('parametres') }}">&#9881; Param&egrave;tres</a>
   {% endif %}
-  <a href="#" onclick="return false;" title="Bientôt disponible">📅 Planification <small>(bientôt)</small></a>
-  <a href="#" onclick="return false;" title="Bientôt disponible">🔌 Plugins <small>(bientôt)</small></a>
-  <a href="#" onclick="return false;" title="Bientôt disponible">📁 Projets <small>(bientôt)</small></a>
+  <a href="#" onclick="return false;" title="Bient&ocirc;t disponible">&#128197; Planification <small>(bient&ocirc;t)</small></a>
+  <a href="#" onclick="return false;" title="Bient&ocirc;t disponible">&#128268; Plugins <small>(bient&ocirc;t)</small></a>
+  <a href="#" onclick="return false;" title="Bient&ocirc;t disponible">&#128193; Projets <small>(bient&ocirc;t)</small></a>
+  <div class="sidebar-account">
+    {% if utilisateur %}
+      <div class="user-badge" title="{{ utilisateur.email }}"><span class="user-avatar">{{ utilisateur.email[0].upper() }}</span><span class="email-label">{{ utilisateur.email }}</span></div>
+      <div class="sidebar-account-links">
+        <a href="{{ url_for('parametres') }}">Profil et param&egrave;tres</a>
+        <form action="{{ url_for('deconnexion') }}" method="post" style="margin:0;flex:1;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button type="submit" style="width:100%;padding:8px 6px;border:0;border-radius:8px;background:transparent;font:inherit;font-size:13px;cursor:pointer;">&D&eacute;connexion</button>
+        </form>
+      </div>
+    {% else %}
+      <div class="sidebar-account-links">
+        <a href="{{ url_for('connexion') }}">Se connecter</a>
+        <a href="{{ url_for('inscription') }}">Cr&eacute;er un compte</a>
+      </div>
+    {% endif %}
+  </div>
 </div>
 
 <div id="chat">
+  {% if not messages %}
+    <section class="accueil-vide" aria-label="Accueil DASHLE">
+      <img src="{{ url_for('static', filename='logo.png') }}" alt="Logo DASHLE">
+      <h1>Bonjour, que veux-tu faire ?</h1>
+      <p>Pose une question ou choisis une idée pour commencer.</p>
+      <div class="suggestions">
+        <button type="button" class="suggestion">Aide-moi à organiser ma journée</button>
+        <button type="button" class="suggestion">Explique-moi un sujet simplement</button>
+        <button type="button" class="suggestion">Aide-moi à écrire un message</button>
+        <button type="button" class="suggestion">Donne-moi des idées de repas</button>
+      </div>
+    </section>
+  {% endif %}
   {% for m in messages %}
     <div class="message-wrap {{ 'user' if m.auteur == 'user' else 'bot' }}">
       <div class="msg {{ 'user' if m.auteur == 'user' else 'bot' }}" data-message-id="{{ m.get('id','') }}">{{ m.texte }}</div>
@@ -1375,7 +1475,52 @@ function afficherStatutVocal(texte) {
   statutVocal.classList.toggle('visible', !!texte);
 }
 
+function echapperHtml(texte) {
+  return String(texte).replace(/[&<>"']/g, function(c) {
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+  });
+}
+
+function rendreMarkdown(texte) {
+  const blocsCode = [];
+  let html = echapperHtml(texte).replace(/```([\w+-]*)\s*\n([\s\S]*?)```/g, function(_, langue, code) {
+    const classe = /^[\w+-]*$/.test(langue) ? langue : '';
+    const bouton = '<button type="button" class="copier-code">Copier le code</button>';
+    blocsCode.push('<div class="bloc-code">' + bouton + '<pre><code' + (classe ? ' class="language-' + classe + '"' : '') + '>' + code.replace(/\n$/, '') + '</code></pre></div>');
+    return '\u0000CODE' + (blocsCode.length - 1) + '\u0000';
+  });
+  html = html
+    .replace(/^###\s+(.+)$/gm, '<h3>$1</h3>')
+    .replace(/^##\s+(.+)$/gm, '<h2>$1</h2>')
+    .replace(/^#\s+(.+)$/gm, '<h1>$1</h1>')
+    .replace(/(?:^|\n)((?:[-*+]\s+.+(?:\n|$))+)/g, function(_, liste) {
+      return '\n<ul>' + liste.trim().split('\n').map(function(ligne) { return '<li>' + ligne.replace(/^[-*+]\s+/, '') + '</li>'; }).join('') + '</ul>';
+    })
+    .replace(/(?:^|\n)((?:\d+\.\s+.+(?:\n|$))+)/g, function(_, liste) {
+      return '\n<ol>' + liste.trim().split('\n').map(function(ligne) { return '<li>' + ligne.replace(/^\d+\.\s+/, '') + '</li>'; }).join('') + '</ol>';
+    })
+    .replace(/`([^`\n]+)`/g, '<code>$1</code>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/__(.+?)__/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    .replace(/_(.+?)_/g, '<em>$1</em>')
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" rel="noopener noreferrer" target="_blank">$1</a>')
+    .replace(/\n/g, '<br>');
+  return html.replace(/\u0000CODE(\d+)\u0000/g, function(_, index) { return blocsCode[Number(index)]; });
+}
+
+function afficherMarkdown(message, texte) {
+  message.dataset.markdownSource = String(texte);
+  message.innerHTML = rendreMarkdown(texte);
+}
+
+document.querySelectorAll('#chat .msg.bot').forEach(function(message) {
+  afficherMarkdown(message, message.textContent);
+});
+
 function ajouterMessage(texte, classe) {
+  const accueil = document.querySelector('.accueil-vide');
+  if (accueil) accueil.remove();
   const enveloppe = document.createElement('div');
   enveloppe.className = 'message-wrap ' + classe;
   const div = document.createElement('div');
@@ -1388,12 +1533,14 @@ function ajouterMessage(texte, classe) {
 }
 
 function ajouterReponse(texte, messageId) {
+  const accueil = document.querySelector('.accueil-vide');
+  if (accueil) accueil.remove();
   const enveloppe = document.createElement('div');
   enveloppe.className = 'message-wrap bot';
   const message = document.createElement('div');
   message.className = 'msg bot';
   message.dataset.messageId = messageId || '';
-  message.textContent = texte;
+  afficherMarkdown(message, texte);
 
   let actionsHtml = '<div class="actions-reponse">'
     + '<button type="button" class="action-copier" title="Copier">📋</button>';
@@ -1840,7 +1987,8 @@ function lireReponse(bouton, texteForce) {
   }
   const texte = typeof texteForce === 'string'
     ? texteForce
-    : bouton.closest('.message-wrap').querySelector('.msg').textContent;
+    : (bouton.closest('.message-wrap').querySelector('.msg').dataset.markdownSource
+        || bouton.closest('.message-wrap').querySelector('.msg').textContent);
   if (lectureActuelle === bouton && window.speechSynthesis.speaking) {
     if (window.speechSynthesis.paused) {
       window.speechSynthesis.resume();
@@ -2035,17 +2183,79 @@ if (badgeBtn && dropdown) {
 }
 
 // =====================================================================
-// Recherche dans le sidebar (utilisateurs connectés)
+// Recherche et épinglage des conversations dans le sidebar.
 // =====================================================================
 const rechercheEl = document.getElementById('recherche-conversations');
-if (rechercheEl) {
-  rechercheEl.addEventListener('input', function() {
-    const terme = this.value.toLowerCase().trim();
-    document.querySelectorAll('.ligne-conversation').forEach(function(l) {
-      l.style.display = !terme || l.dataset.titre.includes(terme) ? 'flex' : 'none';
-    });
+const sidebarEl = document.getElementById('sidebar');
+const epingleesEl = document.getElementById('conversations-epinglees');
+const recentesEl = document.getElementById('conversations-recentes');
+const cleEpinglees = 'dashle:conversations:epinglees:' + (sidebarEl.dataset.compte || 'visiteur');
+let conversationsEpinglees = [];
+if (epingleesEl && recentesEl) {
+  try {
+    const stockees = JSON.parse(localStorage.getItem(cleEpinglees) || '[]');
+    conversationsEpinglees = Array.isArray(stockees) ? stockees.map(String) : [];
+  } catch(err) {
+    console.warn('Lecture des conversations épinglées impossible :', err);
+  }
+  document.querySelectorAll('.ligne-conversation').forEach(function(ligne) {
+    const estEpinglee = conversationsEpinglees.includes(ligne.dataset.convId);
+    const bouton = ligne.querySelector('.epingle-conversation');
+    bouton.setAttribute('aria-pressed', estEpinglee ? 'true' : 'false');
+    bouton.textContent = estEpinglee ? '★' : '☆';
+    bouton.title = estEpinglee ? 'Désépingler' : 'Épingler';
+    (estEpinglee ? epingleesEl : recentesEl).appendChild(ligne);
+  });
+  sidebarEl.addEventListener('click', function(e) {
+    const bouton = e.target.closest('.epingle-conversation');
+    if (!bouton) return;
+    const ligne = bouton.closest('.ligne-conversation');
+    const id = ligne.dataset.convId;
+    const epinglee = conversationsEpinglees.includes(id);
+    conversationsEpinglees = epinglee
+      ? conversationsEpinglees.filter(function(item) { return item !== id; })
+      : conversationsEpinglees.concat(id);
+    try {
+      localStorage.setItem(cleEpinglees, JSON.stringify(conversationsEpinglees));
+    } catch(err) {
+      console.warn('Enregistrement des conversations épinglées impossible :', err);
+    }
+    bouton.setAttribute('aria-pressed', epinglee ? 'false' : 'true');
+    bouton.textContent = epinglee ? '☆' : '★';
+    bouton.title = epinglee ? 'Épingler' : 'Désépingler';
+    (epinglee ? recentesEl : epingleesEl).appendChild(ligne);
   });
 }
+if (rechercheEl) {
+  let minuteurRecherche = null;
+  rechercheEl.addEventListener('input', function() {
+    const terme = this.value.trim();
+    clearTimeout(minuteurRecherche);
+    if (!terme) {
+      document.querySelectorAll('.ligne-conversation').forEach(function(ligne) { ligne.style.display = 'flex'; });
+      return;
+    }
+    minuteurRecherche = setTimeout(async function() {
+      try {
+        const res = await fetch('/rechercher?q=' + encodeURIComponent(terme), { headers: { 'Accept': 'application/json' } });
+        if (!res.ok) throw new Error('Recherche indisponible (' + res.status + ')');
+        const ids = new Set((await res.json()).resultats.map(function(item) { return String(item.id); }));
+        document.querySelectorAll('.ligne-conversation').forEach(function(ligne) {
+          ligne.style.display = ids.has(ligne.dataset.convId) ? 'flex' : 'none';
+        });
+      } catch(err) {
+        console.warn('Recherche de conversations impossible :', err);
+      }
+    }, 250);
+  });
+}
+
+document.querySelectorAll('.suggestion').forEach(function(bouton) {
+  bouton.addEventListener('click', function() {
+    champ.value = bouton.textContent.trim();
+    form.requestSubmit();
+  });
+});
 
 // =====================================================================
 // Partage
@@ -2071,9 +2281,16 @@ chat.addEventListener('click', async function(e) {
   if (!message) return;
 
   if (bouton.classList.contains('action-copier')) {
-    await navigator.clipboard.writeText(message.textContent);
+    await navigator.clipboard.writeText(message.dataset.markdownSource || message.innerText || message.textContent);
     bouton.classList.add('actif');
     setTimeout(function() { bouton.classList.remove('actif'); }, 1200);
+
+  } else if (bouton.classList.contains('copier-code')) {
+    const code = bouton.parentElement.querySelector('code');
+    if (!code) return;
+    await navigator.clipboard.writeText(code.textContent);
+    bouton.textContent = 'Copié';
+    setTimeout(function() { bouton.textContent = 'Copier le code'; }, 1200);
 
   } else if (bouton.classList.contains('action-lire')) {
     lireReponse(bouton);
@@ -2249,6 +2466,8 @@ form.addEventListener('submit', async function(e) {
       }
     }
 
+    const quotaVisuel = reponseTexte.replace(/^QUOTA:\d+:/, '');
+    afficherMarkdown(messageElement, quotaVisuel);
     messageElement.dataset.messageId = messageId || '';
     reponseEnCours = false;
     requeteActiveController = null;
@@ -2269,7 +2488,7 @@ form.addEventListener('submit', async function(e) {
       if (quotaMatch) {
         const delai = parseInt(quotaMatch[1], 10) || 30;
         // Remplacer le préfixe technique par un message lisible avant affichage.
-        messageElement.textContent = reponseTexte.replace(/^QUOTA:\d+:/, '');
+        afficherMarkdown(messageElement, reponseTexte.replace(/^QUOTA:\d+:/, ''));
         bloquerEnvoi(delai);
       } else if (reponseTexte.toLowerCase().includes('quota')) {
         bloquerEnvoi(30);
