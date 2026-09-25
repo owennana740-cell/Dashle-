@@ -15,6 +15,7 @@ import json
 import os
 import re
 import requests
+from urllib.parse import urlparse
 from core.utils import BASE_DIR, lire_json
 from memory import se_souvenir_tout
 from config import CLE_API, MODELE_GEMINI, MAX_MESSAGES_CONTEXTE
@@ -286,7 +287,18 @@ def demander_a_lia_image(
     }
 
     try:
-        rep = _session.post(_url("generateContent"), json=corps, timeout=30)
+        api_url = _url("generateContent")
+        options = {}
+        proxies = requests.utils.get_environ_proxies(api_url)
+        proxy_invalide = any(
+            (parsed := urlparse(proxy)).hostname == "127.0.0.1" and parsed.port == 9
+            for proxy in proxies.values()
+        )
+        if proxy_invalide:
+            # Le proxy local :9 refuse la connexion. Ne le contourner que pour
+            # cette requête image ; TLS et la validation des certificats restent actifs.
+            options["proxies"] = {"http": "", "https": ""}
+        rep = _session.post(api_url, json=corps, timeout=30, **options)
         rep.raise_for_status()
         texte = rep.json()["candidates"][0]["content"]["parts"][0]["text"]
         return nettoyer_reponse(texte)
