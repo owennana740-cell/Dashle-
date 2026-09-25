@@ -365,7 +365,7 @@ header .logo-wrap {
   flex: 1;
 }
 
-header img.logo { height: 28px; border-radius: 50%; }
+header img.logo { height: 30px; width: auto; border-radius: 0; object-fit: contain; }
 
 header .titre {
   font-weight: 700;
@@ -1029,7 +1029,7 @@ video#apercu-fichier-media { object-fit: contain; }
 /* ---- Interface de conversation desktop et mobile ---- */
 #sidebar { display:flex; flex-direction:column; width:272px; max-width:none; padding-bottom:12px; }
 .sidebar-brand { display:flex; align-items:center; gap:10px; padding:18px 18px 14px; color:var(--texte); font-size:18px; font-weight:700; }
-.sidebar-brand img { width:30px; height:30px; border-radius:50%; }
+.sidebar-brand img { width:auto; height:30px; border-radius:0; object-fit:contain; }
 .sidebar-conversations { min-height:0; overflow-y:auto; }
 .sidebar-account { margin-top:auto; padding:12px 16px 0; border-top:1px solid var(--bordure); }
 .sidebar-account .user-badge { width:100%; justify-content:flex-start; color:var(--texte); background:transparent; border-color:var(--bordure); }
@@ -1155,7 +1155,7 @@ if ('serviceWorker' in navigator) {
 <header>
   <button class="icon-btn" onclick="document.getElementById('sidebar').style.display='block';document.getElementById('voile').style.display='block';" aria-label="Menu" title="Menu">&#9776;</button>
   <div class="logo-wrap">
-    <img class="logo" src="{{ url_for('static', filename='logo.png') }}" alt="Dashle">
+    <img class="logo" src="{{ url_for('static', filename='icons/dashle-logo-header.png') }}" alt="Dashle">
     <span class="titre">Dashle</span>
   </div>
   {% if utilisateur %}
@@ -1181,7 +1181,7 @@ if ('serviceWorker' in navigator) {
 
 <div id="sidebar" data-compte="{{ utilisateur.email if utilisateur else 'visiteur' }}">
   <div class="sidebar-brand">
-    <img src="{{ url_for('static', filename='logo.png') }}" alt="">
+    <img src="{{ url_for('static', filename='icons/dashle-logo-header.png') }}" alt="">
     <span>DASHLE</span>
   </div>
   <form action="{{ url_for('nouvelle_conv') }}" method="post" style="margin:0 12px 10px;">
