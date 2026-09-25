@@ -239,6 +239,9 @@ def streamer_a_lia(message: str, historique=None, resume: str = "", user_id=None
             stream=True,
         )
         rep.raise_for_status()
+        # Gemini renvoie text/event-stream sans charset ; Requests choisirait
+        # ISO-8859-1 par défaut et corromprait les caractères UTF-8.
+        rep.encoding = "utf-8"
         for ligne in rep.iter_lines(decode_unicode=True):
             if not ligne or not ligne.startswith("data:"):
                 continue

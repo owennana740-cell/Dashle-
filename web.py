@@ -2206,6 +2206,9 @@ function lireReponse(bouton, texteForce) {
   arreterLecture();
   const etat = bouton.closest('.actions-reponse').querySelector('.lecture-etat');
   utteranceActuelle = new SpeechSynthesisUtterance(nettoyerPourLecture(texte));
+  if (utteranceActuelle.text.toLowerCase().includes('copyright')) {
+    console.warn('[DASHLE TTS] Texte transmis contenant Copyright :', utteranceActuelle.text);
+  }
   const utteranceLancee = utteranceActuelle;
   indexCaractereUtterance = 0;
   utteranceActuelle.lang   = 'fr-FR';
