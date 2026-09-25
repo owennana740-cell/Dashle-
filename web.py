@@ -47,6 +47,14 @@ app.config.update(
 )
 initialiser_base()
 
+
+@app.after_request
+def definir_charset_json_utf8(response):
+    """Annonce explicitement UTF-8 pour les réponses JSON de l'API."""
+    if response.mimetype == "application/json":
+        response.headers["Content-Type"] = "application/json; charset=utf-8"
+    return response
+
 # Nombre maximal de messages conservés en session pour les visiteurs anonymes.
 MAX_HISTORIQUE_VISITEUR = 30
 
