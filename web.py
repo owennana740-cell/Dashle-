@@ -1075,10 +1075,6 @@ body.debug-vocal-actif #debug-vocal { display: block; }
   animation: halo-orbe 2.8s ease-in-out infinite;
 }
 
-#mode-vocal[data-etat="ecoute"]    .orbe-dashle { animation-duration: 1.35s; box-shadow: 0 0 30px rgba(96,165,250,.95), 0 0 100px rgba(37,99,235,.8), inset -16px -18px 28px rgba(0,10,60,.48); }
-#mode-vocal[data-etat="reflexion"] .orbe-dashle { animation-duration: 1.9s;  filter: hue-rotate(0deg) brightness(1.15); box-shadow: 0 0 32px rgba(80,160,255,.95), 0 0 110px rgba(50,120,255,.7), inset -16px -18px 28px rgba(0,20,60,.45); }
-#mode-vocal[data-etat="parle"]     .orbe-dashle { animation-duration: .85s;  box-shadow: 0 0 34px rgba(147,197,253,1), 0 0 120px rgba(59,130,246,.9), inset -16px -18px 28px rgba(0,10,60,.48); }
-
 @keyframes respiration-orbe { 0%,100% { transform:translate(-50%,-50%) scale(.96); } 50% { transform:translate(-50%,-50%) scale(1.04); } }
 @keyframes halo-orbe         { 0%,100% { transform:scale(.92); opacity:.3; } 50% { transform:scale(1.08); opacity:.8; } }
 
@@ -1161,11 +1157,11 @@ body.debug-vocal-actif #debug-vocal { display: block; }
 .option-fichier:hover .option-fichier-icone { background:#e7ebef; }
 
 /* L'orbe conserve sa base verte dans les trois états. */
-.orbe-dashle { background:radial-gradient(circle at 34% 28%,#d5fff0 0%,#62dcb0 18%,#10a37f 53%,#087355 78%,#043d31 100%); box-shadow:0 0 22px rgba(16,163,127,.55),0 0 72px rgba(8,115,85,.35),inset -16px -18px 28px rgba(0,40,28,.35); }
+.orbe-dashle { background:radial-gradient(circle at 34% 28%,#d5fff0 0%,#62dcb0 18%,#10a37f 53%,#087355 78%,#043d31 100%); box-shadow:0 0 22px rgba(16,163,127,.55),0 0 72px rgba(8,115,85,.35),inset -16px -18px 28px rgba(0,40,28,.35); transition:filter .45s ease,box-shadow .45s ease; }
 .orbe-dashle::after { border-color:rgba(169,255,221,.48); }
 #mode-vocal[data-etat="ecoute"] .orbe-dashle,
 #mode-vocal[data-etat="parle"] .orbe-dashle { box-shadow:0 0 30px rgba(16,163,127,.7),0 0 100px rgba(8,115,85,.45),inset -16px -18px 28px rgba(0,40,28,.35); }
-#mode-vocal[data-etat="reflexion"] .orbe-dashle { filter:hue-rotate(12deg) brightness(1.08); box-shadow:0 0 32px rgba(16,163,127,.68),0 0 100px rgba(8,115,85,.42),inset -16px -18px 28px rgba(0,40,28,.35); }
+#mode-vocal[data-etat="reflexion"] .orbe-dashle { filter:hue-rotate(26deg) brightness(1.16) saturate(1.12); box-shadow:0 0 36px rgba(34,211,238,.78),0 0 100px rgba(16,163,127,.62),inset -16px -18px 28px rgba(0,40,28,.35); }
 
 @media (min-width: 851px) {
   #sidebar { display:flex !important; }
@@ -1630,9 +1626,14 @@ function afficherEtatVocal(etat, libelle) {
   etatVocalEl.textContent  = libelle;
 }
 
+function actualiserDebugVocalActif() {
+  document.body.classList.toggle('debug-vocal-actif', DEBUG_VOCAL && vocalActif);
+}
+
 function ouvrirModeVocal() {
   modeVocalEl.classList.add('visible');
   modeVocalEl.setAttribute('aria-hidden', 'false');
+  actualiserDebugVocalActif();
 }
 
 function fermerModeVocal() {
@@ -2014,7 +2015,7 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
 
   btnVocal.onclick = async function() {
     vocalActif = !vocalActif;
-    document.body.classList.toggle('debug-vocal-actif', DEBUG_VOCAL && vocalActif);
+    actualiserDebugVocalActif();
     if (vocalActif) {
       btnVocal.classList.add('vocal-on');
       ouvrirModeVocal();
@@ -2363,7 +2364,7 @@ document.getElementById('reduire-vocal').addEventListener('click', function() {
 
 document.getElementById('fermer-vocal').addEventListener('click', function() {
   vocalActif = false;
-  document.body.classList.remove('debug-vocal-actif');
+  actualiserDebugVocalActif();
   btnVocal.classList.remove('vocal-on', 'ecoute', 'parle');
   try { reco && reco.stop(); } catch(e) {}
   afficherStatutVocal('');
