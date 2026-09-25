@@ -37,6 +37,8 @@ try:
 except Exception:
     PIL_DISPONIBLE = False
 
+DEBUG_VOCAL = True
+
 app = Flask(__name__)
 app.config.update(
     SECRET_KEY=os.environ.get("FLASK_SECRET_KEY") or os.urandom(32),
@@ -923,6 +925,29 @@ video#apercu-fichier-media { object-fit: contain; }
 }
 #statut-vocal.visible { display: block; }
 
+# Journal temporaire, affiché uniquement pendant une session vocale active.
+#debug-vocal {
+  display: none;
+  position: fixed;
+  z-index: 8;
+  left: 50%;
+  bottom: calc(66px + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  width: min(92vw, 640px);
+  max-height: 108px;
+  overflow: hidden;
+  margin: 0;
+  padding: 7px 9px;
+  border: 1px solid rgba(255,255,255,.18);
+  border-radius: 8px;
+  background: rgba(0,0,0,.55);
+  color: #effff8;
+  font: 10px/1.4 Consolas, monospace;
+  white-space: pre-wrap;
+  pointer-events: none;
+}
+body.debug-vocal-actif #debug-vocal { display: block; }
+
 /* ---- Mode vocal plein écran ---- */
 #mode-vocal {
   display: none;
@@ -1386,6 +1411,7 @@ if ('serviceWorker' in navigator) {
     <div class="etat-vocal" id="etat-vocal">En attente</div>
   </div>
 </section>
+<pre id="debug-vocal" aria-label="Journal de debug vocal"></pre>
 
 <form class="bas" id="form-message" autocomplete="off" method="post" action="">
   <input type="file" id="image-input" accept="image/*,video/*" style="display:none;">
@@ -1477,6 +1503,27 @@ const estConnecte      = __EST_CONNECTE__;
 const urlFlux          = __URL_FLUX__;
 const urlImage         = __URL_IMAGE__;
 const conversationId   = __CONV_ID__;
+const DEBUG_VOCAL = __DEBUG_VOCAL__;
+const debugVocalLines = [];
+let debugVocalRenderPending = false;
+let debugVocalDernierRms = -Infinity;
+const DEBUG_VOCAL_RMS_INTERVALLE = 2000;
+
+function journaliserDebugVocal(message) {
+  if (!DEBUG_VOCAL) return;
+  const maintenant = new Date();
+  const horodatage = [maintenant.getHours(), maintenant.getMinutes(), maintenant.getSeconds()]
+    .map(function(partie) { return String(partie).padStart(2, '0'); }).join(':');
+  debugVocalLines.push(horodatage + ' ' + message);
+  if (debugVocalLines.length > 5) debugVocalLines.shift();
+  if (debugVocalRenderPending) return;
+  debugVocalRenderPending = true;
+  window.setTimeout(function() {
+    debugVocalRenderPending = false;
+    const panneau = document.getElementById('debug-vocal');
+    if (panneau) panneau.textContent = debugVocalLines.join('\n');
+  }, 80);
+}
 
 let reco = null;
 let recoEnCours = false;
@@ -1808,6 +1855,10 @@ function surveillerParole() {
     }
     const rms = Math.sqrt(somme / donnees.length);
     const now = performance.now();
+    if (now - debugVocalDernierRms >= DEBUG_VOCAL_RMS_INTERVALLE) {
+      debugVocalDernierRms = now;
+      journaliserDebugVocal('VAD rms=' + rms.toFixed(3) + ' seuil=' + VAD_SEUIL);
+    }
 
     // Dashle est occupé si SSE en cours OU synthèse en cours.
     const dashleOccupe = reponseEnCours
@@ -1943,10 +1994,12 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
     recoEnCours = true;
     recoResultatsAutorises = false;
     try {
+      journaliserDebugVocal('reco.start()');
       reco.start();
       return true;
     } catch(e) {
       recoEnCours = false;
+      journaliserDebugVocal('reco.start() échec: ' + (e.name || e.message || e));
       console.warn('[DASHLE] Échec du démarrage de la reconnaissance vocale :', e);
       return false;
     }
@@ -1956,11 +2009,12 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
     if (vocalActif) return;
     modeActuel = 'dictee';
     btnMicro.classList.add('actif');
-    try { reco.start(); } catch(e) {}
+    try { journaliserDebugVocal('reco.start() dictée'); reco.start(); } catch(e) { journaliserDebugVocal('reco.start() échec: ' + (e.name || e.message || e)); }
   };
 
   btnVocal.onclick = async function() {
     vocalActif = !vocalActif;
+    document.body.classList.toggle('debug-vocal-actif', DEBUG_VOCAL && vocalActif);
     if (vocalActif) {
       btnVocal.classList.add('vocal-on');
       ouvrirModeVocal();
@@ -1983,10 +2037,12 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
   };
 
   reco.onstart = function() {
+    journaliserDebugVocal('reco.onstart');
     recoResultatsAutorises = !recoMutePendantTTS && !syntheseEnCours && !reponseEnCours;
   };
 
   reco.onresult = function(e) {
+    journaliserDebugVocal('reco.onresult');
     if (!recoResultatsAutorises || recoMutePendantTTS || syntheseEnCours
         || (vadDebutSynthese > 0 && performance.now() - vadDebutSynthese < VAD_DELAI_POST)) return;
     const transcript = (e.results[0][0].transcript || '').trim();
@@ -2021,13 +2077,14 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
         const encoreSynth = ('speechSynthesis' in window) && window.speechSynthesis.speaking;
         if (!reponseEnCours && !encoreSynth) {
           recoEnCours = true;
-          try { reco.start(); } catch(e) { recoEnCours = false; }
+          try { journaliserDebugVocal('reco.start() retry reco.onend'); reco.start(); } catch(e) { recoEnCours = false; journaliserDebugVocal('reco.start() échec: ' + (e.name || e.message || e)); }
         }
       }, 200);
     }
   };
 
   reco.onerror = function(e) {
+    journaliserDebugVocal('reco.onerror: ' + e.error);
     btnMicro.classList.remove('actif');
     recoResultatsAutorises = false;
     if (vocalActif && e.error !== 'aborted') {
@@ -2306,6 +2363,7 @@ document.getElementById('reduire-vocal').addEventListener('click', function() {
 
 document.getElementById('fermer-vocal').addEventListener('click', function() {
   vocalActif = false;
+  document.body.classList.remove('debug-vocal-actif');
   btnVocal.classList.remove('vocal-on', 'ecoute', 'parle');
   try { reco && reco.stop(); } catch(e) {}
   afficherStatutVocal('');
@@ -3236,6 +3294,7 @@ def _rendre_page(messages, utilisateur=None, conversations=None, conversation_id
     html = html.replace("__URL_FLUX__",      json.dumps(url_flux))
     html = html.replace("__URL_IMAGE__",     json.dumps(url_image))
     html = html.replace("__CONV_ID__",       str(conversation_id or 0))
+    html = html.replace("__DEBUG_VOCAL__",   "true" if DEBUG_VOCAL else "false")
     return html
 
 
