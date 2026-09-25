@@ -1221,7 +1221,7 @@ if ('serviceWorker' in navigator) {
 </div>
 
 <div id="statut-vocal" aria-live="polite"></div>
-<button type="button" id="btn-rouvrir-vocal" class="btn-rouvrir-vocal" title="Rouvrir la conversation vocale" aria-label="Rouvrir le mode vocal" style="display:none;">
+<button type="button" id="btn-rouvrir-vocal" class="btn-rouvrir-vocal" title="Rouvrir la conversation vocale" aria-label="Rouvrir le mode vocal">
   🎙 Vue vocale
 </button>
 """
