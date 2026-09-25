@@ -30,6 +30,19 @@ _cache_mtime = None
 # Session HTTP réutilisable — évite de créer une connexion TCP à chaque appel
 # ---------------------------------------------------------------------------
 _session = requests.Session()
+CLE_CONSIGNES_UTILISATEUR = "__dashle_consignes_personnalisees__"
+CLE_LONGUEUR_REPONSE = "__dashle_longueur_reponse__"
+
+
+def _reglages_reponse(user_id=None):
+    if not user_id:
+        return "", "standard"
+    souvenirs = se_souvenir_tout(user_id)
+    consignes = str(souvenirs.get(CLE_CONSIGNES_UTILISATEUR, ""))[:2000]
+    longueur = souvenirs.get(CLE_LONGUEUR_REPONSE, "standard")
+    if longueur not in {"courte", "standard", "detaillee"}:
+        longueur = "standard"
+    return consignes, longueur
 
 
 # ---------------------------------------------------------------------------
@@ -94,7 +107,7 @@ def _historique_recent(historique) -> list:
     return list(historique)[-MAX_MESSAGES_CONTEXTE:]
 
 
-def _instruction_systeme(resume: str = "") -> str:
+def _instruction_systeme(resume: str = "", consignes: str = "") -> str:
     instruction = (
         "Tu es Dashle, une IA personnelle créée par Owen. "
         "Ne dis jamais que tu es Gemini ou que tu as été créé par Google. "
@@ -102,6 +115,11 @@ def _instruction_systeme(resume: str = "") -> str:
     )
     if resume:
         instruction += "\nRésumé fiable des échanges précédents :\n" + resume
+    if consignes:
+        instruction += (
+            "\nConsignes personnalisées de l'utilisateur (à suivre si elles restent "
+            "compatibles avec les consignes précédentes) :\n" + consignes[:2000]
+        )
     return instruction
 
 
@@ -132,9 +150,10 @@ def _construire_contents(message: str, historique) -> list:
     return contents
 
 
-def _gen_config() -> dict:
+def _gen_config(longueur: str = "standard") -> dict:
     """Configuration de génération commune à tous les appels."""
-    return {"temperature": 0.7, "maxOutputTokens": 2048}
+    limites = {"courte": 768, "standard": 2048, "detaillee": 4096}
+    return {"temperature": 0.7, "maxOutputTokens": limites.get(longueur, 2048)}
 
 
 def _message_erreur_http(code, detail: str = "", retry_after: int = 0) -> str:
@@ -160,15 +179,16 @@ def _message_erreur_http(code, detail: str = "", retry_after: int = 0) -> str:
 # API publique
 # ---------------------------------------------------------------------------
 
-def demander_a_lia(message: str, historique=None, resume: str = "") -> str:
+def demander_a_lia(message: str, historique=None, resume: str = "",
+                   consignes: str = "", longueur: str = "standard") -> str:
     """Requête synchrone (non-streaming) vers Gemini."""
     if not CLE_API:
         return "La clé Gemini n'est pas configurée. Ajoute GEMINI_API_KEY dans le fichier .env."
 
     corps = {
-        "system_instruction": {"parts": [{"text": _instruction_systeme(resume)}]},
+        "system_instruction": {"parts": [{"text": _instruction_systeme(resume, consignes)}]},
         "contents": _construire_contents(message, historique),
-        "generationConfig": _gen_config(),
+        "generationConfig": _gen_config(longueur),
     }
 
     try:
@@ -194,7 +214,7 @@ def demander_a_lia(message: str, historique=None, resume: str = "") -> str:
         return "Impossible de joindre le service IA. Vérifie la connexion puis réessaie."
 
 
-def streamer_a_lia(message: str, historique=None, resume: str = ""):
+def streamer_a_lia(message: str, historique=None, resume: str = "", user_id=None):
     """Diffuse les morceaux texte de Gemini via SSE (Server-Sent Events).
 
     CORRECTION : _construire_contents() garantit désormais que le message
@@ -204,10 +224,11 @@ def streamer_a_lia(message: str, historique=None, resume: str = ""):
         yield "La clé Gemini n'est pas configurée. Ajoute GEMINI_API_KEY dans le fichier .env."
         return
 
+    consignes, longueur = _reglages_reponse(user_id)
     corps = {
-        "system_instruction": {"parts": [{"text": _instruction_systeme(resume)}]},
+        "system_instruction": {"parts": [{"text": _instruction_systeme(resume, consignes)}]},
         "contents": _construire_contents(message, historique),
-        "generationConfig": _gen_config(),
+        "generationConfig": _gen_config(longueur),
     }
 
     try:
@@ -372,7 +393,10 @@ def reflechir(message: str, historique=None, user_id=None, resume: str = "") -> 
 
     appris = se_souvenir_tout(user_id)
     for question, reponse in appris.items():
+        if question.startswith("__dashle_"):
+            continue
         if question.strip().lower() == message_lower:
             return reponse
 
-    return demander_a_lia(message, historique, resume)
+    consignes, longueur = _reglages_reponse(user_id)
+    return demander_a_lia(message, historique, resume, consignes, longueur)

@@ -25,6 +25,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from sqlalchemy.exc import IntegrityError
 from app import streamer_message, traiter_message, traiter_message_image
 from brain import resumer_conversation
+from config import MODELE_GEMINI
 from database import (
     Conversation, Message, MessageFeedback, ShareLink, User,
     UserMemory, UserPreference, initialiser_base, session_base,
@@ -146,7 +147,7 @@ def verifier_csrf():
 _ROUTES_PUBLIQUES = {
     "static", "connexion", "inscription", "partage",
     "accueil", "repondre_flux", "repondre", "repondre_image",
-    "confirmer_message", "nouvelle_conv",
+    "confirmer_message", "nouvelle_conv", "conditions_utilisation",
     "health",
 }
 
@@ -641,6 +642,9 @@ header button.icon-btn:hover { background: rgba(255,255,255,0.18); }
   background: var(--msg-bot);
   border-bottom-left-radius: 4px;
 }
+
+body[data-densite="compacte"] .message-wrap { margin-bottom: 8px; }
+body[data-densite="compacte"] .msg { padding: 7px 11px; }
 
 body.theme-sombre .msg.bot { color: var(--texte); }
 
@@ -1430,6 +1434,12 @@ const inputImage      = document.getElementById('image-input');
 // CSRF token injecté côté serveur
 const csrfToken        = __CSRF_TOKEN__;
 const preferencesVocales = __PREFS_VOCALES__;
+if (preferencesVocales.voix_active === false) {
+  btnVocal.disabled = true;
+  btnMicro.disabled = true;
+  btnVocal.title = 'Mode vocal désactivé dans les paramètres';
+  btnMicro.title = 'Mode vocal désactivé dans les paramètres';
+}
 const estConnecte      = __EST_CONNECTE__;
 const urlFlux          = __URL_FLUX__;
 const urlImage         = __URL_IMAGE__;
@@ -2600,6 +2610,9 @@ form.addEventListener('submit', async function(e) {
       vocal.marquerParle();
       lireReponse(reponseElement.querySelector('.action-lire'));
       // L'écoute reprendra via utteranceActuelle.onend (après la synthèse)
+    } else if (preferencesVocales.voix_active && preferencesVocales.lecture_automatique
+        && reponseTexte && reponseElement) {
+      lireReponse(reponseElement.querySelector('.action-lire'));
     }
 
     if (reponseTexte) {
@@ -2723,9 +2736,29 @@ if (btnArreter) {
 
 // Applique le thème sans rechargement de page.
 function appliquerTheme(theme) {
-  document.body.classList.toggle('theme-sombre', theme === 'sombre');
-  document.body.classList.toggle('theme-clair',  theme === 'clair');
+  var systemeSombre = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  var sombre = theme === 'sombre' || (theme === 'systeme' && systemeSombre);
+  document.body.classList.toggle('theme-sombre', sombre);
+  document.body.classList.toggle('theme-clair', !sombre);
   try { localStorage.setItem('dashle_theme', theme); } catch(e) {}
+}
+
+function appliquerAccent(accent) {
+  var palettes = {
+    'vert-bleu': ['#22C55E', '#3B82F6'],
+    'bleu': ['#2563EB', '#06B6D4'],
+    'violet': ['#7C3AED', '#DB2777'],
+    'ambre': ['#D97706', '#DC2626'],
+  };
+  var couleurs = palettes[accent] || palettes['vert-bleu'];
+  document.documentElement.style.setProperty('--accent-vert', couleurs[0]);
+  document.documentElement.style.setProperty('--accent-bleu', couleurs[1]);
+  try { localStorage.setItem('dashle_accent', accent); } catch(e) {}
+}
+
+function appliquerDensite(densite) {
+  document.body.dataset.densite = densite === 'compacte' ? 'compacte' : 'confortable';
+  try { localStorage.setItem('dashle_densite', document.body.dataset.densite); } catch(e) {}
 }
 
 // Applique la taille de texte des messages sans rechargement.
@@ -2738,12 +2771,20 @@ function appliquerTailleMsg(taille) {
 // n'est pas connecté ou si la page vient de charger).
 (function() {
   try {
-    var t = localStorage.getItem('dashle_theme');
-    if (t === 'sombre' || t === 'clair') appliquerTheme(t);
+    var t = localStorage.getItem('dashle_theme') || preferencesVocales.theme;
+    if (t === 'sombre' || t === 'clair' || t === 'systeme') appliquerTheme(t);
+    var accent = localStorage.getItem('dashle_accent');
+    if (accent) appliquerAccent(accent);
+    appliquerDensite(localStorage.getItem('dashle_densite') || 'confortable');
     var tm = localStorage.getItem('dashle_taille_msg');
     if (tm) appliquerTailleMsg(tm);
   } catch(e) {}
 })();
+if (window.matchMedia) {
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function() {
+    try { if (localStorage.getItem('dashle_theme') === 'systeme') appliquerTheme('systeme'); } catch(e) {}
+  });
+}
 </script>
 """
 
@@ -2816,11 +2857,16 @@ button{border:0;border-radius:9px;background:linear-gradient(110deg,#22C55E,#3B8
       <select name="theme">
         <option value="clair"  {% if preferences.theme == 'clair'  %}selected{% endif %}>Clair</option>
         <option value="sombre" {% if preferences.theme == 'sombre' %}selected{% endif %}>Sombre</option>
+        <option value="systeme" {% if preferences.theme == 'systeme' %}selected{% endif %}>Syst&egrave;me</option>
       </select>
     </label>
+    <label>Couleur d'accent<select id="accent-select"><option value="vert-bleu">Vert - bleu</option><option value="bleu">Bleu</option><option value="violet">Violet</option><option value="ambre">Ambre</option></select></label>
+    <label>Densit&eacute;<select id="densite-select"><option value="confortable">Confortable</option><option value="compacte">Compacte</option></select></label>
   </section>
   <section class="carte"><h2>Voix</h2>
-    <label>Voix activée<input type="checkbox" name="voix_active" {% if preferences.voix_active %}checked{% endif %}></label>
+    <label>Lecture automatique des r&eacute;ponses<input type="checkbox" name="lecture_automatique" {% if preferences.lecture_automatique %}checked{% endif %}></label>
+    <p class="note">L'autorisation du microphone se g&egrave;re dans les permissions du navigateur.</p>
+    <label>Mode vocal et microphone activés<input type="checkbox" name="voix_active" {% if preferences.voix_active %}checked{% endif %}></label>
     <label>Voix française<select id="voix-select" name="voix_nom" data-selection="{{ preferences.voix_nom }}"><option value="">Automatique</option></select></label>
     <label>Vitesse<input type="range" name="voix_vitesse" min="0.6" max="1.4" step="0.05" value="{{ preferences.voix_vitesse }}"><output id="vitesse-valeur">{{ preferences.voix_vitesse }}</output></label>
     <label>Tonalité<input type="range" name="voix_tonalite" min="0.7" max="1.3" step="0.05" value="{{ preferences.voix_tonalite }}"><output id="tonalite-valeur">{{ preferences.voix_tonalite }}</output></label>
@@ -2829,6 +2875,9 @@ button{border:0;border-radius:9px;background:linear-gradient(110deg,#22C55E,#3B8
     <p class="note">Dashle privilégie automatiquement une voix féminine française. La lecture automatique reste désactivée par défaut.</p>
   </section>
   <section class="carte"><h2>Conversations et confidentialité</h2>
+    <label>Longueur des r&eacute;ponses<select name="longueur_reponse"><option value="courte" {% if longueur_reponse == 'courte' %}selected{% endif %}>Courte</option><option value="standard" {% if longueur_reponse == 'standard' %}selected{% endif %}>Normale</option><option value="detaillee" {% if longueur_reponse == 'detaillee' %}selected{% endif %}>D&eacute;taill&eacute;e</option></select></label>
+    <label for="consignes-personnalisees">Consignes personnalis&eacute;es</label>
+    <textarea id="consignes-personnalisees" name="consignes_personnalisees" maxlength="2000" rows="4" style="width:100%;resize:vertical">{{ consignes_personnalisees }}</textarea>
     <label>Conserver l'historique<input type="checkbox" name="conserver_historique" {% if preferences.conserver_historique %}checked{% endif %}></label>
     <p class="note">Les conversations partagées utilisent un lien révocable et ne montrent pas les informations du compte.</p>
   </section>
@@ -2836,8 +2885,8 @@ button{border:0;border-radius:9px;background:linear-gradient(110deg,#22C55E,#3B8
     <p class="note">Les mots de passe sont hachés. <a href="{{ url_for('securite') }}">Gérer la sécurité du compte →</a></p>
   </section>
   <section class="carte"><h2>Données et confidentialité</h2>
-    <label>Conserver l'historique après déconnexion<input type="checkbox" name="conserver_historique" {% if preferences.conserver_historique %}checked{% endif %}></label>
-    <p class="note">L'export des conversations et la gestion fine de la mémoire arriveront prochainement.</p>
+    <p><a href="{{ url_for('gestion_donnees') }}">Exporter les données et gérer la mémoire</a></p>
+    <p class="note">L'export et la gestion de la m&eacute;moire sont disponibles sur la page <a href="{{ url_for('gestion_donnees') }}">Donn&eacute;es et m&eacute;moire</a>.</p>
     <p class="note">Les conversations partagées utilisent un lien révocable et ne montrent pas les informations du compte.</p>
   </section>
   <section class="carte"><h2>Apparence avancée</h2>
@@ -2851,11 +2900,16 @@ button{border:0;border-radius:9px;background:linear-gradient(110deg,#22C55E,#3B8
     </label>
   </section>
   <section class="carte"><h2>À propos de Dashle</h2>
-    <p class="note"><strong>Version :</strong> 2.0</p>
-    <p class="note"><strong>Modèle IA :</strong> Gemini 2.5 Flash (Google AI)</p>
+    <p class="note"><strong>Version :</strong> version du projet non déclarée</p>
+    <p class="note"><strong>Modèle IA :</strong> {{ modele_gemini }} (Google AI)</p>
     <p class="note">Dashle est un assistant personnel conçu par Owen. Il mémorise le contexte de tes conversations et s'améliore avec le temps.</p>
+    <p><a href="{{ url_for('conditions_utilisation') }}">Conditions d'utilisation</a></p>
   </section>
   <button type="submit">Enregistrer</button>
+</form>
+<form method="post" action="{{ url_for('nouvelle_conv') }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <button type="submit" class="secondaire">Commencer une nouvelle conversation</button>
 </form>
 <script>
 const sv = document.getElementById('voix-select');
@@ -2890,6 +2944,10 @@ document.getElementById('tester-voix').addEventListener('click', () => {
 // synchroniser avec le chat (la page principale lit localStorage au chargement).
 var themeSelect = document.querySelector('[name=theme]');
 if (themeSelect) {
+  try {
+    var savedTheme = localStorage.getItem('dashle_theme');
+    if (savedTheme && ['clair', 'sombre', 'systeme'].includes(savedTheme)) themeSelect.value = savedTheme;
+  } catch(e) {}
   themeSelect.addEventListener('change', function() {
     try { localStorage.setItem('dashle_theme', this.value); } catch(e) {}
   });
@@ -2898,12 +2956,48 @@ if (themeSelect) {
 // Taille de texte en temps réel.
 var tailleSelect = document.getElementById('taille-msg-select');
 if (tailleSelect) {
+  try { tailleSelect.value = localStorage.getItem('dashle_taille_msg') || '15px'; } catch(e) {}
   tailleSelect.addEventListener('change', function() {
     try { localStorage.setItem('dashle_taille_msg', this.value); } catch(e) {}
   });
 }
+var accentSelect = document.getElementById('accent-select');
+var densiteSelect = document.getElementById('densite-select');
+try {
+  if (accentSelect) accentSelect.value = localStorage.getItem('dashle_accent') || 'vert-bleu';
+  if (densiteSelect) densiteSelect.value = localStorage.getItem('dashle_densite') || 'confortable';
+} catch(e) {}
+if (accentSelect) accentSelect.addEventListener('change', function() {
+  try { localStorage.setItem('dashle_accent', this.value); } catch(e) {}
+});
+if (densiteSelect) densiteSelect.addEventListener('change', function() {
+  try { localStorage.setItem('dashle_densite', this.value); } catch(e) {}
+});
 </script>
 </main></body></html>
+"""
+
+DATA_PAGE = """
+<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Dashle - Donn&eacute;es</title>
+<style>:root{font-family:Segoe UI,sans-serif;color:#17251f;background:#f4f8f6}*{box-sizing:border-box}body{margin:0}.page{max-width:760px;margin:auto;padding:24px 18px 50px}.carte{background:#fff;border:1px solid #dceae4;border-radius:14px;padding:18px;margin:12px 0}.carte h2{font-size:16px;color:#22C55E}.note{color:#71837b;font-size:13px}a{color:#22C55E}button{border:0;border-radius:9px;background:linear-gradient(110deg,#22C55E,#3B82F6);color:#fff;padding:10px 14px;cursor:pointer}.danger{background:#b42318}li{margin:10px 0}.valeur{white-space:pre-wrap;overflow-wrap:anywhere}</style></head>
+<body><main class="page"><a href="{{ url_for('parametres') }}">&larr; Param&egrave;tres</a><h1>Donn&eacute;es et m&eacute;moire</h1>
+{% if erreur %}<p class="note">{{ erreur }}</p>{% endif %}{% if succes %}<p class="note">{{ succes }}</p>{% endif %}
+<section class="carte"><h2>Exporter</h2><p>Une copie JSON comprend tes conversations et les souvenirs enregistr&eacute;s dans Dashle.</p><a href="{{ url_for('exporter_donnees') }}">T&eacute;l&eacute;charger mes donn&eacute;es</a></section>
+<section class="carte"><h2>M&eacute;moire</h2>{% if memoires %}<ul>{% for souvenir in memoires %}<li><strong>{{ souvenir.cle }}</strong><div class="valeur">{{ souvenir.valeur }}</div><form method="post" action="{{ url_for('supprimer_souvenir', cle=souvenir.cle) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">Retirer ce souvenir</button></form></li>{% endfor %}</ul>{% else %}<p class="note">Aucun souvenir enregistr&eacute;.</p>{% endif %}
+<form method="post" action="{{ url_for('effacer_memoire') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>Pour tout effacer, saisis EFFACER <input name="confirmation" required></label><button class="danger" type="submit">Effacer toute la m&eacute;moire</button></form></section>
+<section class="carte"><h2>Historique</h2><p>Cette action supprime les conversations de ton compte ainsi que leurs liens de partage.</p><form method="post" action="{{ url_for('effacer_historique') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>Pour confirmer, saisis EFFACER <input name="confirmation" required></label><button class="danger" type="submit">Effacer tout l'historique</button></form></section>
+</main></body></html>
+"""
+
+CONDITIONS_PAGE = """
+<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Conditions d'utilisation - Dashle</title>
+<style>body{font:16px/1.6 'Segoe UI',sans-serif;color:#17251f;background:#f4f8f6;margin:0}.page{max-width:760px;margin:auto;padding:28px 18px}main{background:#fff;border:1px solid #dceae4;border-radius:14px;padding:22px}a{color:#22C55E}</style></head>
+<body><main class="page"><a href="{{ url_for('accueil') }}">&larr; Dashle</a><h1>Conditions d'utilisation</h1>
+<p>Dashle est un assistant personnel. Les r&eacute;ponses peuvent contenir des erreurs : v&eacute;rifie les informations importantes.</p>
+<p>Les messages envoy&eacute;s au service peuvent &ecirc;tre trait&eacute;s par Google Gemini pour g&eacute;n&eacute;rer une r&eacute;ponse. Ne partage pas d'informations que tu ne souhaites pas transmettre &agrave; ce service.</p>
+<p>Les utilisateurs connect&eacute;s peuvent exporter ou supprimer leurs conversations et souvenirs depuis les param&egrave;tres. Les visiteurs utilisent une conversation temporaire dans leur session.</p>
+<p>En utilisant Dashle, tu acceptes ces modalit&eacute;s d'utilisation du service.</p></main></body></html>
 """
 
 SECURITY_PAGE = """
@@ -2927,6 +3021,10 @@ button{border:0;border-radius:9px;background:linear-gradient(110deg,#22C55E,#3B8
 <div class="bar"><div><strong>Dashle</strong><h1>Sécurité</h1></div><a href="{{ url_for('parametres') }}">← Paramètres</a></div>
 {% if erreur %}<p class="note">{{ erreur }}</p>{% endif %}
 {% if succes %}<p class="message">{{ succes }}</p>{% endif %}
+<section class="carte"><h2>Session active</h2>
+  <p class="note">Cette session est active dans le navigateur courant. Les sessions ne sont pas enregistr&eacute;es individuellement par Dashle.</p>
+  <form method="post" action="{{ url_for('deconnexion') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">Fermer cette session</button></form>
+</section>
 <section class="carte"><h2>Modifier le mot de passe</h2>
   <form method="post" action="{{ url_for('changer_mot_de_passe') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -3045,6 +3143,9 @@ def _rendre_page(messages, utilisateur=None, conversations=None, conversation_id
         "voix_vitesse":  float(prefs["voix_vitesse"] or 1.0),
         "voix_tonalite": float(prefs["voix_tonalite"] or 1.0),
         "voix_volume":   float(prefs["voix_volume"] or 1.0),
+        "voix_active":   bool(prefs["voix_active"]),
+        "lecture_automatique": bool(prefs["lecture_automatique"]),
+        "theme": prefs["theme"],
     }))
     html = html.replace("__EST_CONNECTE__",  "true" if est_connecte else "false")
     html = html.replace("__URL_FLUX__",      json.dumps(url_flux))
@@ -3286,6 +3387,11 @@ def partage(token):
 # Routes — paramètres et sécurité
 # ---------------------------------------------------------------------------
 
+@app.route("/conditions")
+def conditions_utilisation():
+    return render_template_string(CONDITIONS_PAGE)
+
+
 @app.route("/parametres", methods=["GET", "POST"])
 def parametres():
     user_id = session.get("user_id")
@@ -3304,24 +3410,154 @@ def parametres():
             if prefs is None:
                 prefs = UserPreference(user_id=user_id)
                 db.add(prefs)
-            prefs.theme = "sombre" if request.form.get("theme") == "sombre" else "clair"
+            theme = request.form.get("theme")
+            prefs.theme = theme if theme in {"clair", "sombre", "systeme"} else "clair"
             prefs.voix_active = request.form.get("voix_active") == "on"
-            prefs.lecture_automatique = False
+            prefs.lecture_automatique = request.form.get("lecture_automatique") == "on"
             prefs.conserver_historique = request.form.get("conserver_historique") == "on"
             prefs.voix_nom     = request.form.get("voix_nom", "")[:160]
             prefs.voix_vitesse = num("voix_vitesse", 0.6, 1.4, 1.0)
             prefs.voix_tonalite = num("voix_tonalite", 0.7, 1.3, 1.0)
             prefs.voix_volume  = num("voix_volume", 0.2, 1.0, 1.0)
+            consignes = request.form.get("consignes_personnalisees", "").strip()[:2000]
+            longueur = request.form.get("longueur_reponse", "standard")
+            if longueur not in {"courte", "standard", "detaillee"}:
+                longueur = "standard"
+            for cle, valeur in (
+                ("__dashle_consignes_personnalisees__", consignes),
+                ("__dashle_longueur_reponse__", longueur),
+            ):
+                souvenir = db.query(UserMemory).filter_by(user_id=user_id, cle=cle).one_or_none()
+                if souvenir is None:
+                    db.add(UserMemory(user_id=user_id, cle=cle, valeur=valeur))
+                else:
+                    souvenir.valeur = valeur
         return redirect(url_for("parametres"))
 
+    with session_base() as db:
+        souvenirs = db.query(UserMemory).filter_by(user_id=user_id).all()
+    reglages = {souvenir.cle: souvenir.valeur for souvenir in souvenirs}
+    cle_consignes = "__dashle_consignes_personnalisees__"
+    cle_longueur = "__dashle_longueur_reponse__"
+    memoires = [
+        {"cle": s.cle, "valeur": s.valeur}
+        for s in souvenirs
+        if s.cle not in {cle_consignes, cle_longueur}
+    ]
     return render_template_string(
         SETTINGS_PAGE,
         utilisateur=session["user_email"],
         preferences=_preferences(user_id),
+        modele_gemini=MODELE_GEMINI,
+        consignes_personnalisees=reglages.get(cle_consignes, ""),
+        longueur_reponse=reglages.get(cle_longueur, "standard"),
+        memoires=memoires,
         csrf_token=jeton_csrf(),
         erreur=request.args.get("erreur"),
         succes=request.args.get("succes"),
     )
+
+
+@app.route("/parametres/donnees")
+def gestion_donnees():
+    user_id = session.get("user_id")
+    if not user_id:
+        return redirect(url_for("connexion"))
+    with session_base() as db:
+        souvenirs = db.query(UserMemory).filter_by(user_id=user_id).all()
+    memoires = [
+        {"cle": item.cle, "valeur": item.valeur}
+        for item in souvenirs
+        if not item.cle.startswith("__dashle_")
+    ]
+    return render_template_string(
+        DATA_PAGE,
+        memoires=memoires,
+        csrf_token=jeton_csrf(),
+        erreur=request.args.get("erreur"),
+        succes=request.args.get("succes"),
+    )
+
+
+@app.route("/parametres/exporter")
+def exporter_donnees():
+    user_id = session.get("user_id")
+    if not user_id:
+        return redirect(url_for("connexion"))
+    with session_base() as db:
+        user = db.query(User).filter_by(id=user_id).one_or_none()
+        if user is None:
+            return redirect(url_for("connexion"))
+        conversations = db.query(Conversation).filter_by(user_id=user_id).all()
+        export = {
+            "email": user.email,
+            "conversations": [
+                {
+                    "titre": conv.title,
+                    "resume": conv.resume,
+                    "messages": [
+                        {"auteur": msg.auteur, "texte": msg.texte,
+                         "date": msg.created_at.isoformat() if msg.created_at else None}
+                        for msg in conv.messages
+                    ],
+                }
+                for conv in conversations
+            ],
+            "memoire": [
+                {"cle": item.cle, "valeur": item.valeur}
+                for item in db.query(UserMemory).filter_by(user_id=user_id).all()
+            ],
+        }
+    response = Response(
+        json.dumps(export, ensure_ascii=False, indent=2),
+        mimetype="application/json; charset=utf-8",
+    )
+    response.headers["Content-Disposition"] = 'attachment; filename="dashle-export.json"'
+    return response
+
+
+@app.route("/parametres/memoire/supprimer/<path:cle>", methods=["POST"])
+def supprimer_souvenir(cle):
+    user_id = session.get("user_id")
+    if not user_id:
+        return redirect(url_for("connexion"))
+    if cle.startswith("__dashle_"):
+        return redirect(url_for("gestion_donnees", erreur="Ce réglage ne peut pas être supprimé ici."))
+    with session_base() as db:
+        db.query(UserMemory).filter_by(user_id=user_id, cle=cle).delete()
+    return redirect(url_for("gestion_donnees", succes="Souvenir supprimé."))
+
+
+@app.route("/parametres/memoire/effacer", methods=["POST"])
+def effacer_memoire():
+    user_id = session.get("user_id")
+    if not user_id:
+        return redirect(url_for("connexion"))
+    if request.form.get("confirmation", "").strip().upper() != "EFFACER":
+        return redirect(url_for("gestion_donnees", erreur="Confirmation incorrecte."))
+    with session_base() as db:
+        db.query(UserMemory).filter_by(user_id=user_id).delete()
+    return redirect(url_for("gestion_donnees", succes="Mémoire effacée."))
+
+
+@app.route("/parametres/historique/effacer", methods=["POST"])
+def effacer_historique():
+    user_id = session.get("user_id")
+    if not user_id:
+        return redirect(url_for("connexion"))
+    if request.form.get("confirmation", "").strip().upper() != "EFFACER":
+        return redirect(url_for("gestion_donnees", erreur="Confirmation incorrecte."))
+    with session_base() as db:
+        conversations = db.query(Conversation).filter_by(user_id=user_id).all()
+        conversation_ids = [conversation.id for conversation in conversations]
+        if conversation_ids:
+            db.query(ShareLink).filter(ShareLink.conversation_id.in_(conversation_ids)).delete(
+                synchronize_session=False
+            )
+        for conversation in conversations:
+            db.delete(conversation)
+    session.pop("conversation_id", None)
+    return redirect(url_for("gestion_donnees", succes="Historique effacé."))
 
 
 @app.route("/securite")

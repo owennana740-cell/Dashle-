@@ -57,7 +57,7 @@ def streamer_message(message, historique=None, user_id=None, resume=""):
     if est_local:
         yield traiter_message(message, historique, user_id, resume)
         return
-    yield from streamer_a_lia(message, historique, resume)
+    yield from streamer_a_lia(message, historique, resume, user_id=user_id)
 
 
 if __name__ == "__main__":
