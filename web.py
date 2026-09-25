@@ -357,6 +357,7 @@ _CSS = """
   --transition: 0.18s ease;
   /* Taille de texte des messages — modifiable via JS depuis les paramètres */
   --taille-msg: 15px;
+  --largeur-conversation: 760px;
 }
 
 body.theme-sombre {
@@ -653,6 +654,11 @@ header button.icon-btn:hover { background: rgba(255,255,255,0.18); }
 
 body[data-densite="compacte"] .message-wrap { margin-bottom: 8px; }
 body[data-densite="compacte"] .msg { padding: 7px 11px; }
+body[data-animations="reduites"] .message-wrap,
+body[data-animations="desactivees"] .message-wrap,
+body[data-animations="desactivees"] .dot { animation: none; }
+body[data-animations="reduites"] .suggestion { transition-duration: 0.01ms; }
+body[data-animations="desactivees"] .suggestion { transition: none; transform: none; }
 
 body.theme-sombre .msg.bot { color: var(--texte); }
 
@@ -1114,7 +1120,7 @@ video#apercu-fichier-media { object-fit: contain; }
 .bloc-code pre { margin:0; }
 .msg.bot ul,.msg.bot ol { padding-left:1.5em; }
 .msg.bot a { color:var(--vert-fonce); }
-.message-wrap { max-width:min(82%,760px); }
+.message-wrap { max-width:min(95%,var(--largeur-conversation)); }
 .image-message-lien { display:block; margin-top:4px; }
 .image-message { display:block; max-width:min(280px,70vw); max-height:320px; object-fit:contain; border-radius:12px; cursor:zoom-in; }
 .btn-attach { display:grid; place-items:center; flex-shrink:0; width:40px; height:40px; padding:0; border:0; border-radius:50%; background:transparent; color:var(--texte); font-size:30px; font-weight:300; line-height:1; cursor:pointer; }
@@ -2769,6 +2775,19 @@ function appliquerDensite(densite) {
   try { localStorage.setItem('dashle_densite', document.body.dataset.densite); } catch(e) {}
 }
 
+function appliquerLargeurConversation(largeur) {
+  var largeurs = { 'etroite': '620px', 'standard': '760px', 'large': '980px' };
+  var valeur = largeurs[largeur] ? largeur : 'standard';
+  document.documentElement.style.setProperty('--largeur-conversation', largeurs[valeur]);
+  try { localStorage.setItem('dashle_largeur_conversation', valeur); } catch(e) {}
+}
+
+function appliquerAnimations(mode) {
+  var modes = ['normales', 'reduites', 'desactivees'];
+  document.body.dataset.animations = modes.includes(mode) ? mode : 'normales';
+  try { localStorage.setItem('dashle_animations', document.body.dataset.animations); } catch(e) {}
+}
+
 // Applique la taille de texte des messages sans rechargement.
 function appliquerTailleMsg(taille) {
   document.documentElement.style.setProperty('--taille-msg', taille);
@@ -2786,6 +2805,8 @@ function appliquerTailleMsg(taille) {
     appliquerDensite(localStorage.getItem('dashle_densite') || 'confortable');
     var tm = localStorage.getItem('dashle_taille_msg');
     if (tm) appliquerTailleMsg(tm);
+    appliquerLargeurConversation(localStorage.getItem('dashle_largeur_conversation') || 'standard');
+    appliquerAnimations(localStorage.getItem('dashle_animations') || 'normales');
   } catch(e) {}
 })();
 if (window.matchMedia) {
@@ -2870,6 +2891,8 @@ button{border:0;border-radius:9px;background:linear-gradient(110deg,#22C55E,#3B8
     </label>
     <label>Couleur d'accent<select id="accent-select"><option value="vert-bleu">Vert - bleu</option><option value="bleu">Bleu</option><option value="violet">Violet</option><option value="ambre">Ambre</option></select></label>
     <label>Densit&eacute;<select id="densite-select"><option value="confortable">Confortable</option><option value="compacte">Compacte</option></select></label>
+    <label>Largeur de conversation<select id="largeur-conversation-select"><option value="etroite">&Eacute;troite</option><option value="standard">Standard</option><option value="large">Large</option></select></label>
+    <label>Animations<select id="animations-select"><option value="normales">Normales</option><option value="reduites">R&eacute;duites</option><option value="desactivees">D&eacute;sactiv&eacute;es</option></select></label>
   </section>
   <section class="carte"><h2>Voix</h2>
     <label>Lecture automatique des r&eacute;ponses<input type="checkbox" name="lecture_automatique" {% if preferences.lecture_automatique %}checked{% endif %}></label>
@@ -2971,15 +2994,25 @@ if (tailleSelect) {
 }
 var accentSelect = document.getElementById('accent-select');
 var densiteSelect = document.getElementById('densite-select');
+var largeurSelect = document.getElementById('largeur-conversation-select');
+var animationsSelect = document.getElementById('animations-select');
 try {
   if (accentSelect) accentSelect.value = localStorage.getItem('dashle_accent') || 'vert-bleu';
   if (densiteSelect) densiteSelect.value = localStorage.getItem('dashle_densite') || 'confortable';
+  if (largeurSelect) largeurSelect.value = localStorage.getItem('dashle_largeur_conversation') || 'standard';
+  if (animationsSelect) animationsSelect.value = localStorage.getItem('dashle_animations') || 'normales';
 } catch(e) {}
 if (accentSelect) accentSelect.addEventListener('change', function() {
   try { localStorage.setItem('dashle_accent', this.value); } catch(e) {}
 });
 if (densiteSelect) densiteSelect.addEventListener('change', function() {
   try { localStorage.setItem('dashle_densite', this.value); } catch(e) {}
+});
+if (largeurSelect) largeurSelect.addEventListener('change', function() {
+  try { localStorage.setItem('dashle_largeur_conversation', this.value); } catch(e) {}
+});
+if (animationsSelect) animationsSelect.addEventListener('change', function() {
+  try { localStorage.setItem('dashle_animations', this.value); } catch(e) {}
 });
 </script>
 </main></body></html>
