@@ -1081,6 +1081,8 @@ video#apercu-fichier-media { object-fit: contain; }
 .msg.bot ul,.msg.bot ol { padding-left:1.5em; }
 .msg.bot a { color:var(--vert-fonce); }
 .message-wrap { max-width:min(82%,760px); }
+.image-message-lien { display:block; margin-top:4px; }
+.image-message { display:block; max-width:min(280px,70vw); max-height:320px; object-fit:contain; border-radius:12px; cursor:zoom-in; }
 
 /* L'orbe conserve sa base verte dans les trois états. */
 .orbe-dashle { background:radial-gradient(circle at 34% 28%,#d5fff0 0%,#62dcb0 18%,#10a37f 53%,#087355 78%,#043d31 100%); box-shadow:0 0 22px rgba(16,163,127,.55),0 0 72px rgba(8,115,85,.35),inset -16px -18px 28px rgba(0,40,28,.35); }
@@ -1556,6 +1558,27 @@ function ajouterMessage(texte, classe) {
   chat.appendChild(enveloppe);
   chat.scrollTop = chat.scrollHeight;
   return div;
+}
+
+function ajouterMessageImage(texte, fichier) {
+  if (!fichier || !fichier.type.startsWith('image/')) {
+    return ajouterMessage(texte || '📎 Fichier envoyé', 'user');
+  }
+  const message = ajouterMessage(texte, 'user');
+  const url = URL.createObjectURL(fichier);
+  const lien = document.createElement('a');
+  lien.className = 'image-message-lien';
+  lien.href = url;
+  lien.target = '_blank';
+  lien.rel = 'noopener noreferrer';
+  lien.setAttribute('aria-label', 'Ouvrir l’image envoyée');
+  const image = document.createElement('img');
+  image.className = 'image-message';
+  image.src = url;
+  image.alt = fichier.name ? 'Image envoyée : ' + fichier.name : 'Image envoyée';
+  lien.appendChild(image);
+  message.appendChild(lien);
+  return message;
 }
 
 function ajouterReponse(texte, messageId) {
@@ -2368,7 +2391,7 @@ form.addEventListener('submit', async function(e) {
 
   // --- Envoi image ---
   if (fichierImage) {
-    ajouterMessage(texte || '📷 Image envoyée', 'user');
+    ajouterMessageImage(texte, fichierImage);
     champ.value = '';
     champ.style.height = 'auto';
     afficherReflexion();
