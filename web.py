@@ -1548,6 +1548,8 @@ function surveillerParole() {
 function interrompreDashle() {
   if (!vocalActif) return;
   interruptionDemandee = true;
+  const ttsEtaitActif = ('speechSynthesis' in window)
+    && (syntheseEnCours || window.speechSynthesis.speaking);
 
   // 1. Stopper immédiatement la synthèse vocale.
   // syntheseEnCours et vadDebutSynthese sont remis à 0 : la période
@@ -1556,6 +1558,7 @@ function interrompreDashle() {
   recoMutePendantTTS = false;
   vadDebutSynthese = 0;
   if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+  vadDebutSynthese = ttsEtaitActif ? performance.now() : 0;
 
   // 2. Stopper la génération SSE
   arreterGeneration();
@@ -1648,8 +1651,7 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
   };
 
   reco.onstart = function() {
-    recoResultatsAutorises = !recoMutePendantTTS && !syntheseEnCours && !reponseEnCours
-      && !(vadDebutSynthese > 0 && performance.now() - vadDebutSynthese < VAD_DELAI_POST);
+    recoResultatsAutorises = !recoMutePendantTTS && !syntheseEnCours && !reponseEnCours;
   };
 
   reco.onresult = function(e) {
