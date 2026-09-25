@@ -154,7 +154,7 @@ def verifier_csrf():
 # Routes accessibles sans connexion (visiteur ou public)
 _ROUTES_PUBLIQUES = {
     "static", "connexion", "inscription", "partage",
-    "accueil", "repondre_flux", "repondre", "repondre_image",
+    "accueil", "actualites", "repondre_flux", "repondre", "repondre_image",
     "confirmer_message", "nouvelle_conv", "conditions_utilisation",
     "health",
 }
@@ -1289,6 +1289,7 @@ if ('serviceWorker' in navigator) {
     <div class="sidebar-vide">Mode visiteur : cette conversation est temporaire.</div>
   {% endif %}
   <div class="menu-section">Navigation</div>
+  <a href="{{ url_for('actualites') }}">&#128240; Nouveaut&eacute;s DASHLE</a>
   {% if utilisateur %}
     <a href="{{ url_for('parametres') }}">&#9881; Param&egrave;tres</a>
   {% endif %}
@@ -3041,6 +3042,31 @@ CONDITIONS_PAGE = """
 <p>En utilisant Dashle, tu acceptes ces modalit&eacute;s d'utilisation du service.</p></main></body></html>
 """
 
+NEWS_PAGE = """
+<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Nouveaut&eacute;s DASHLE</title>
+<style>
+body{font:16px/1.6 'Segoe UI',sans-serif;color:#17251f;background:#f4f8f6;margin:0}
+.page{max-width:760px;margin:auto;padding:28px 18px 48px}
+.bar{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:22px}
+.bar a,.carte a{color:#16803d;text-decoration:none}
+.carte{background:#fff;border:1px solid #dceae4;border-radius:14px;padding:18px;margin:12px 0}
+.carte h2{margin:0 0 8px;color:#16803d;font-size:18px}
+.categorie{color:#52645b;font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
+.note{color:#71837b;font-size:14px}
+</style></head><body><main class="page">
+<div class="bar"><h1>Nouveaut&eacute;s DASHLE</h1><a href="{{ url_for('accueil') }}">&larr; Retour au chat</a></div>
+<p class="note">Annonces et informations du projet, publi&eacute;es directement dans DASHLE.</p>
+<article class="carte"><span class="categorie">Fonctionnalit&eacute;s</span><h2>Personnalise ton interface</h2>
+<p>Les param&egrave;tres permettent de choisir le th&egrave;me, l'accent, la taille du texte, la largeur de conversation et le niveau d'animation. Ces pr&eacute;f&eacute;rences d'interface sont conserv&eacute;es dans ce navigateur.</p>
+<a href="{{ url_for('parametres') }}">Ouvrir les Param&egrave;tres</a></article>
+<article class="carte"><span class="categorie">Fonctionnalit&eacute;s</span><h2>Images et vid&eacute;os dans la conversation</h2>
+<p>Tu peux joindre une image ou une vid&eacute;o au chat pour demander &agrave; DASHLE de l'examiner.</p></article>
+<article class="carte"><span class="categorie">Projet</span><h2>Un flux interne</h2>
+<p>Cette page regroupe les annonces et les informations DASHLE. Son contenu est g&eacute;r&eacute; dans l'application et ne d&eacute;pend pas d'une API d'actualit&eacute;s externe.</p></article>
+</main></body></html>
+"""
+
 SECURITY_PAGE = """
 <!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Dashle - Sécurité</title>
@@ -3431,6 +3457,11 @@ def partage(token):
 @app.route("/conditions")
 def conditions_utilisation():
     return render_template_string(CONDITIONS_PAGE)
+
+
+@app.route("/actualites")
+def actualites():
+    return render_template_string(NEWS_PAGE)
 
 
 @app.route("/parametres", methods=["GET", "POST"])
