@@ -1265,6 +1265,9 @@ let modeActuel          = 'texte';   // 'texte' | 'dictee' | 'vocal'
 let requeteActiveController = null;
 let reponseEnCours      = false;
 let interruptionDemandee = false;
+let indexCaractereUtterance = 0;
+let reprisePhraseInterrompue = null;
+let minuteurReprisePhrase = null;
 
 // VAD (Voice Activity Detection) — interruption pendant que Dashle parle
 let vadStream       = null;
@@ -1550,6 +1553,16 @@ function interrompreDashle() {
   interruptionDemandee = true;
   const ttsEtaitActif = ('speechSynthesis' in window)
     && (syntheseEnCours || window.speechSynthesis.speaking);
+  const utteranceInterrompue = utteranceActuelle;
+  if (minuteurReprisePhrase) clearTimeout(minuteurReprisePhrase);
+  minuteurReprisePhrase = null;
+  reprisePhraseInterrompue = ttsEtaitActif && utteranceInterrompue
+    ? {
+        texte: utteranceInterrompue.text || '',
+        charIndex: indexCaractereUtterance,
+        bouton: lectureActuelle,
+      }
+    : null;
 
   // 1. Stopper immédiatement la synthèse vocale.
   // syntheseEnCours et vadDebutSynthese sont remis à 0 : la période
@@ -1589,7 +1602,22 @@ function interrompreDashle() {
     if (!vocalActif || !reco) { recoEnCours = false; return; }
     interruptionDemandee = false;
     recoEnCours = false;
-    if (demarrerEcouteVocale()) return;
+    if (demarrerEcouteVocale()) {
+      if (reprisePhraseInterrompue) {
+        const repriseEnAttente = reprisePhraseInterrompue;
+        minuteurReprisePhrase = setTimeout(function() {
+          if (reprisePhraseInterrompue !== repriseEnAttente) return;
+          reprisePhraseInterrompue = null;
+          minuteurReprisePhrase = null;
+          if (!vocalActif) return;
+          const texteRestant = repriseEnAttente.texte.substring(repriseEnAttente.charIndex);
+          if (texteRestant.trim() && repriseEnAttente.bouton && repriseEnAttente.bouton.isConnected) {
+            lireReponse(repriseEnAttente.bouton, texteRestant);
+          }
+        }, 2500);
+      }
+      return;
+    }
     // abort() peut mettre plus de 120 ms à libérer SpeechRecognition.
     // Réessayer brièvement évite que son InvalidStateError laisse le vocal bloqué.
     if (tentative < 12) {
@@ -1672,6 +1700,9 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
         || (vadDebutSynthese > 0 && performance.now() - vadDebutSynthese < VAD_DELAI_POST)) return;
     const transcript = (e.results[0][0].transcript || '').trim();
     if (!transcript) return;
+    if (minuteurReprisePhrase) clearTimeout(minuteurReprisePhrase);
+    minuteurReprisePhrase = null;
+    reprisePhraseInterrompue = null;
     champ.value = transcript;
     champ.style.height = 'auto';
     if (modeActuel === 'vocal') {
@@ -1802,12 +1833,14 @@ function nettoyerPourLecture(texte) {
   return propre;
 }
 
-function lireReponse(bouton) {
+function lireReponse(bouton, texteForce) {
   if (!('speechSynthesis' in window)) {
     bouton.closest('.actions-reponse').querySelector('.lecture-etat').textContent = 'Voix indisponible';
     return;
   }
-  const texte = bouton.closest('.message-wrap').querySelector('.msg').textContent;
+  const texte = typeof texteForce === 'string'
+    ? texteForce
+    : bouton.closest('.message-wrap').querySelector('.msg').textContent;
   if (lectureActuelle === bouton && window.speechSynthesis.speaking) {
     if (window.speechSynthesis.paused) {
       window.speechSynthesis.resume();
@@ -1823,6 +1856,8 @@ function lireReponse(bouton) {
   arreterLecture();
   const etat = bouton.closest('.actions-reponse').querySelector('.lecture-etat');
   utteranceActuelle = new SpeechSynthesisUtterance(nettoyerPourLecture(texte));
+  const utteranceLancee = utteranceActuelle;
+  indexCaractereUtterance = 0;
   utteranceActuelle.lang   = 'fr-FR';
   utteranceActuelle.voice  = choisirVoixFrancaise();
   utteranceActuelle.rate   = Number(preferencesVocales.voix_vitesse) || 1;
@@ -1832,6 +1867,11 @@ function lireReponse(bouton) {
   bouton.classList.add('actif');
   bouton.textContent = '⏸';
   etat.textContent = 'Lecture';
+
+  utteranceActuelle.onboundary = function(e) {
+    if (utteranceActuelle !== utteranceLancee || !Number.isFinite(e.charIndex)) return;
+    indexCaractereUtterance = Math.max(0, e.charIndex);
+  };
 
   utteranceActuelle.onstart = function() {
     // L'audio démarre réellement : on arme le verrou d'état.
