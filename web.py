@@ -683,13 +683,16 @@ body.theme-sombre .msg.bot { color: var(--texte); }
 .actions-reponse button {
   border: 0;
   background: transparent;
-  color: #6b7c76;
+  color: #278a70;
   border-radius: 7px;
   padding: 4px 7px;
   cursor: pointer;
   font-size: 13px;
-  transition: background var(--transition), color var(--transition);
+  transition: background var(--transition), color var(--transition), transform var(--transition), box-shadow var(--transition);
 }
+
+.actions-reponse button svg { display:block; width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:1.65; stroke-linecap:round; stroke-linejoin:round; }
+.actions-reponse button:hover { transform:translateY(-1px); box-shadow:0 2px 8px rgba(34,160,125,.18); }
 
 .actions-reponse button:hover,
 .actions-reponse button.actif {
@@ -1367,15 +1370,16 @@ if ('serviceWorker' in navigator) {
       <div class="msg {{ 'user' if m.auteur == 'user' else 'bot' }}" data-message-id="{{ m.get('id','') }}">{{ m.texte }}</div>
       {% if m.auteur == 'bot' %}
       <div class="actions-reponse">
-        <button type="button" class="action-copier" title="Copier">📋</button>
+        <button type="button" class="action-copier" title="Copier" aria-label="Copier"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h3"/></svg></button>
         {% if utilisateur %}
-          <button type="button" class="action-feedback" data-valeur="positif" title="J'aime">👍</button>
-          <button type="button" class="action-feedback" data-valeur="negatif" title="Je n'aime pas">👎</button>
-          <button type="button" class="action-partager" title="Partager">🔗</button>
-          <button type="button" class="action-regenerer" title="Régénérer">🔄</button>
+          <button type="button" class="action-feedback" data-valeur="positif" title="J'aime" aria-label="J'aime"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10v11H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3Zm0 0 5-7a3 3 0 0 1 2 3v4h5a2 2 0 0 1 2 2l-2 7a2 2 0 0 1-2 2H7"/></svg></button>
+          <button type="button" class="action-feedback" data-valeur="negatif" title="Je n'aime pas" aria-label="Je n'aime pas"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 14V3H4a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3Zm0 0 5 7a3 3 0 0 0 2-3v-4h5a2 2 0 0 0 2-2l-2-7a2 2 0 0 0-2-2H7"/></svg></button>
+          <button type="button" class="action-partager" title="Partager" aria-label="Partager"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m-5 5 5-5 5 5M5 12v7h14v-7"/></svg></button>
+          <button type="button" class="action-regenerer" title="Régénérer" aria-label="Régénérer"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M20 12a8 8 0 1 0 2 5"/></svg></button>
         {% endif %}
-        <button type="button" class="action-lire" title="Lecture / pause">▶</button>
-        <button type="button" class="action-stop" title="Arrêter">⏹</button>
+        <button type="button" class="action-repondre" title="Répondre à ce message" aria-label="Répondre à ce message"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 14-5-5 5-5M4 9h10a6 6 0 0 1 0 12h-1"/></svg></button>
+        <button type="button" class="action-lire" title="Lecture / pause" aria-label="Lecture / pause"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 12 7-12 7z"/></svg></button>
+        <button type="button" class="action-stop" title="Arrêter" aria-label="Arrêter"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2"/></svg></button>
         <span class="lecture-etat"></span>
       </div>
       {% endif %}
@@ -1689,6 +1693,20 @@ function ajouterMessageImage(texte, fichier) {
   return message;
 }
 
+function iconeAction(nom) {
+  const chemins = {
+    copier: '<rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h3"/>',
+    positif: '<path d="M7 10v11H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3Zm0 0 5-7a3 3 0 0 1 2 3v4h5a2 2 0 0 1 2 2l-2 7a2 2 0 0 1-2 2H7"/>',
+    negatif: '<path d="M7 14V3H4a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3Zm0 0 5 7a3 3 0 0 0 2-3v-4h5a2 2 0 0 0 2-2l-2-7a2 2 0 0 0-2-2H7"/>',
+    partager: '<path d="M12 16V4m-5 5 5-5 5 5M5 12v7h14v-7"/>',
+    regenerer: '<path d="M20 7v5h-5M20 12a8 8 0 1 0 2 5"/>',
+    repondre: '<path d="m9 14-5-5 5-5M4 9h10a6 6 0 0 1 0 12h-1"/>',
+    lire: '<path d="m8 5 12 7-12 7z"/>',
+    stop: '<rect x="5" y="5" width="14" height="14" rx="2"/>'
+  };
+  return '<svg viewBox="0 0 24 24" aria-hidden="true">' + (chemins[nom] || '') + '</svg>';
+}
+
 function ajouterReponse(texte, messageId) {
   const accueil = document.querySelector('.accueil-vide');
   if (accueil) accueil.remove();
@@ -1700,15 +1718,16 @@ function ajouterReponse(texte, messageId) {
   afficherMarkdown(message, texte);
 
   let actionsHtml = '<div class="actions-reponse">'
-    + '<button type="button" class="action-copier" title="Copier">📋</button>';
+    + '<button type="button" class="action-copier" title="Copier" aria-label="Copier">' + iconeAction('copier') + '</button>';
   if (estConnecte) {
-    actionsHtml += '<button type="button" class="action-feedback" data-valeur="positif" title="J\'aime">👍</button>'
-      + '<button type="button" class="action-feedback" data-valeur="negatif" title="Je n\'aime pas">👎</button>'
-      + '<button type="button" class="action-partager" title="Partager">🔗</button>'
-      + '<button type="button" class="action-regenerer" title="Régénérer">🔄</button>';
+    actionsHtml += '<button type="button" class="action-feedback" data-valeur="positif" title="J\'aime" aria-label="J\'aime">' + iconeAction('positif') + '</button>'
+      + '<button type="button" class="action-feedback" data-valeur="negatif" title="Je n\'aime pas" aria-label="Je n\'aime pas">' + iconeAction('negatif') + '</button>'
+      + '<button type="button" class="action-partager" title="Partager" aria-label="Partager">' + iconeAction('partager') + '</button>'
+      + '<button type="button" class="action-regenerer" title="Régénérer" aria-label="Régénérer">' + iconeAction('regenerer') + '</button>';
   }
-  actionsHtml += '<button type="button" class="action-lire" title="Lecture / pause">▶</button>'
-    + '<button type="button" class="action-stop" title="Arrêter">⏹</button>'
+  actionsHtml += '<button type="button" class="action-repondre" title="Répondre à ce message" aria-label="Répondre à ce message">' + iconeAction('repondre') + '</button>'
+    + '<button type="button" class="action-lire" title="Lecture / pause" aria-label="Lecture / pause">' + iconeAction('lire') + '</button>'
+    + '<button type="button" class="action-stop" title="Arrêter" aria-label="Arrêter">' + iconeAction('stop') + '</button>'
     + '<span class="lecture-etat"></span></div>';
 
   enveloppe.innerHTML = actionsHtml;
@@ -2491,6 +2510,15 @@ chat.addEventListener('click', async function(e) {
     await navigator.clipboard.writeText(code.textContent);
     bouton.textContent = 'Copié';
     setTimeout(function() { bouton.textContent = 'Copier le code'; }, 1200);
+
+  } else if (bouton.classList.contains('action-repondre')) {
+    const texteCite = (message.dataset.markdownSource || message.innerText || message.textContent || '').trim();
+    if (!texteCite) return;
+    const citation = texteCite.split('\n').map(function(ligne) { return '> ' + ligne; }).join('\n');
+    champ.value = (champ.value.trim() ? champ.value.trimEnd() + '\n\n' : '') + citation + '\n\n';
+    champ.focus();
+    champ.style.height = 'auto';
+    champ.style.height = Math.min(champ.scrollHeight, 120) + 'px';
 
   } else if (bouton.classList.contains('action-lire')) {
     lireReponse(bouton);
