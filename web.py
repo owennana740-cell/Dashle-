@@ -3399,11 +3399,11 @@ p a{color:#22C55E;font-weight:600;text-decoration:none}
 # ---------------------------------------------------------------------------
 
 def _prenom_accueil(user_id):
-    valeur = session.get("prenom") or session.get("first_name") or session.get("user_name")
-    if not valeur and user_id:
-        with session_base() as db:
-            souvenir = db.query(UserMemory).filter_by(user_id=user_id, cle="nom").one_or_none()
-            valeur = souvenir.valeur if souvenir else None
+    if not user_id:
+        return None
+    with session_base() as db:
+        user = db.get(User, user_id)
+        valeur = user.nom if user else None
     if not isinstance(valeur, str):
         return None
     prenom = valeur.strip().split(maxsplit=1)[0] if valeur.strip() else ""

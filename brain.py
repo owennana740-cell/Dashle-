@@ -158,7 +158,10 @@ def _instruction_systeme(resume: str = "", consignes: str = "", niveau: str = "f
         "Réponds toujours en tant que Dashle."
     )
     if nom_utilisateur and nom_utilisateur.strip():
-        instruction += " Le nom de l'utilisateur connecté est : " + nom_utilisateur.strip()[:160] + "."
+        instruction += (
+            " Le nom de l'utilisateur connecté est : " + nom_utilisateur.strip()[:160]
+            + ". Utilise ce nom avec parcimonie et ne répète pas une salutation à chaque réponse."
+        )
     if niveau in {"pro", "prime"}:
         instruction += (
             " Tu maîtrises la statistique descriptive, les probabilités, les tests "
