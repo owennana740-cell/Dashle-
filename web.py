@@ -1111,7 +1111,7 @@ video#apercu-fichier-media { object-fit: contain; }
 .suggestion:hover { border-color:transparent; background:linear-gradient(var(--fond),var(--fond)) padding-box,var(--accent-gradient) border-box; }
 .sidebar-vide { padding:4px 18px 12px; color:#71837b; font-size:13px; }
 .accueil-vide { min-height:100%; display:flex; flex-direction:column; justify-content:center; align-items:center; gap:20px; text-align:center; padding:36px 16px; }
-.accueil-vide img { width:76px; height:76px; border-radius:50%; }
+.accueil-vide img { width:auto; height:92px; max-width:min(220px,70vw); object-fit:contain; border-radius:0; }
 .accueil-vide h1 { margin:0; font-size:clamp(24px,4vw,34px); }
 .accueil-vide p { margin:0; color:#71837b; }
 .suggestions { width:min(720px,100%); display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
