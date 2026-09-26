@@ -32,8 +32,9 @@ from brain import resumer_conversation
 from config import MODELE_GEMINI
 from database import (
     Conversation, Message, MessageFeedback, ShareLink, SubscriptionPayment, User,
-    UserMemory, UserPreference, initialiser_base, session_base,
+    UserMemory, UserPreference, StatisticalAnalysisUsage, initialiser_base, session_base,
 )
+from statistiques import analyser_fichier
 
 try:
     from PIL import Image
@@ -1314,6 +1315,7 @@ if ('serviceWorker' in navigator) {
   <a href="{{ url_for('tarifs') }}">&#9733; Tarifs</a>
   {% if utilisateur %}
     <a href="{{ url_for('parametres') }}">&#9881; Param&egrave;tres</a>
+    <a href="{{ url_for('statistiques') }}">&#128202; Statistiques</a>
   {% endif %}
   <a href="#" onclick="return false;" title="Bient&ocirc;t disponible">&#128197; Planification <small>(bient&ocirc;t)</small></a>
   <a href="#" onclick="return false;" title="Bient&ocirc;t disponible">&#128268; Plugins <small>(bient&ocirc;t)</small></a>
@@ -3157,6 +3159,22 @@ button{border:0;border-radius:9px;background:linear-gradient(110deg,#22C55E,#3B8
 </main></body></html>
 """
 
+STATISTIQUES_PAGE = """
+<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Analyses statistiques — DASHLE</title><style>
+:root{font-family:Inter,Segoe UI,sans-serif;color:#18352c;background:#f3f8f6}*{box-sizing:border-box}body{margin:0;padding:28px 16px}.wrap{max-width:850px;margin:auto}a{color:#16765b;text-decoration:none;font-weight:600}h1{font-size:clamp(28px,5vw,40px);margin:30px 0 8px}.intro{color:#627970;line-height:1.55}.card{background:#fff;border:1px solid #dce9e4;border-radius:16px;padding:22px;margin:18px 0;box-shadow:0 10px 28px #173a2b0c}label{display:block;font-weight:600;margin:14px 0 6px}input,textarea{display:block;width:100%;padding:11px;border:1px solid #d5e3dd;border-radius:9px;font:inherit}textarea{min-height:100px;resize:vertical}button,.cta{display:inline-block;padding:11px 16px;border:0;border-radius:9px;background:linear-gradient(110deg,#25bd80,#3b82f6);color:white;font-family:inherit;font-size:14px;font-weight:600;text-decoration:none;cursor:pointer;margin-top:14px}.result{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.5;background:#f7faf8;padding:14px;border-radius:10px;max-height:55vh;overflow:auto}.error{background:#fff0ed;color:#9b3828;padding:12px;border-radius:9px}.meta{font-size:13px;color:#627970}.notice{background:#e8f5ef;padding:14px;border-radius:10px}
+</style></head><body><main class="wrap"><a href="{{ url_for('accueil') }}">← Retour à DASHLE</a><h1>Analyse de données</h1>
+<p class="intro">Importe un CSV ou un classeur Excel (8 Mo maximum). DASHLE calcule des statistiques descriptives et, selon ta question, des analyses avec SciPy. Le fichier est traité en mémoire et n’est pas conservé.</p>
+{% if erreur %}<p class="error">{{ erreur }}</p>{% endif %}
+{% if not autorise %}<section class="card"><h2>Fonction réservée à Dashle Pro et Prime</h2><p>Débloque les analyses statistiques avancées et jusqu’à 25 analyses par jour.</p><a class="cta" href="{{ url_for('tarifs') }}">Voir les offres</a></section>
+{% else %}<p class="meta">Offre {{ niveau|capitalize }} · {{ restant }} analyse(s) restante(s) aujourd’hui (limite : 25).</p>
+<form class="card" method="post" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label for="fichier">Fichier CSV ou Excel</label><input id="fichier" name="fichier" type="file" accept=".csv,.xls,.xlsx,.xlsm" required><label for="question">Que veux-tu analyser ?</label><textarea id="question" name="question" maxlength="1000" required placeholder="Ex. : Compare les ventes selon la région, teste la différence entre les groupes, ou calcule la probabilité que ventes > 100."></textarea><button type="submit">Analyser</button></form>
+{% endif %}
+{% if metriques %}<section class="card"><h2>Calculs Python</h2><p class="meta">{{ metriques.lignes }} lignes · {{ metriques.colonnes }} colonnes · {{ restant }} analyse(s) restante(s) aujourd’hui</p><pre class="result">{{ calculs }}</pre><h2>Interprétation DASHLE</h2><pre class="result">{{ interpretation }}</pre></section>{% endif %}
+</main></body></html>
+"""
+
+
 TARIFS_PAGE = """
 <!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Tarifs — DASHLE</title><style>
@@ -4000,6 +4018,89 @@ def fichier_trop_volumineux(_erreur):
 # ---------------------------------------------------------------------------
 # Routes — comptes utilisateurs
 # ---------------------------------------------------------------------------
+
+@app.route("/statistiques", methods=["GET", "POST"])
+def statistiques():
+    user_id = session.get("user_id")
+    maintenant = datetime.utcnow()
+    jour_debut = maintenant.replace(hour=0, minute=0, second=0, microsecond=0)
+    jour_fin = jour_debut + timedelta(days=1)
+    erreur = None
+    calculs = interpretation = metriques = None
+
+    with session_base() as db:
+        user = db.get(User, user_id)
+        if not user:
+            return redirect(url_for("connexion"))
+        niveau = user.subscription_level or "free"
+        if user.subscription_expires_at and user.subscription_expires_at <= maintenant:
+            niveau = "free"
+            user.subscription_level = "free"
+        autorise = niveau in {"pro", "prime"}
+        utilise = db.query(StatisticalAnalysisUsage).filter(
+            StatisticalAnalysisUsage.user_id == user_id,
+            StatisticalAnalysisUsage.created_at >= jour_debut,
+            StatisticalAnalysisUsage.created_at < jour_fin,
+        ).count() if autorise else 0
+
+    restant = max(0, 25 - utilise) if autorise else 0
+    if request.method == "POST" and not autorise:
+        erreur = "Les analyses statistiques nécessitent Dashle Pro ou Dashle Prime."
+    elif request.method == "POST":
+        fichier = request.files.get("fichier")
+        question = request.form.get("question", "").strip()[:1000]
+        if not fichier or not fichier.filename or not question:
+            erreur = "Choisis un fichier et précise la question à analyser."
+        elif restant <= 0:
+            erreur = "La limite de 25 analyses statistiques par jour est atteinte. Réessaie demain."
+        else:
+            try:
+                contenu = fichier.read()
+                calculs, metriques = analyser_fichier(contenu, fichier.filename, question)
+            except ValueError as exc:
+                erreur = str(exc)
+            except Exception as exc:
+                print("ERREUR analyse statistique :", type(exc).__name__)
+                erreur = "Le fichier n’a pas pu être lu. Vérifie son format, ses colonnes et son encodage."
+
+            if metriques:
+                # Le verrou utilisateur empêche deux requêtes simultanées de
+                # dépasser le quota sur PostgreSQL.
+                with session_base() as db:
+                    user = db.query(User).filter_by(id=user_id).with_for_update().one_or_none()
+                    if not user:
+                        return redirect(url_for("connexion"))
+                    utilise = db.query(StatisticalAnalysisUsage).filter(
+                        StatisticalAnalysisUsage.user_id == user_id,
+                        StatisticalAnalysisUsage.created_at >= jour_debut,
+                        StatisticalAnalysisUsage.created_at < jour_fin,
+                    ).count()
+                    if utilise >= 25:
+                        metriques = None
+                        erreur = "La limite de 25 analyses statistiques par jour est atteinte. Réessaie demain."
+                    else:
+                        db.add(StatisticalAnalysisUsage(user_id=user_id))
+                        restant = 24 - utilise
+                if metriques:
+                    prompt = (
+                        "Analyse statistique calculée côté serveur (résultats numériques fiables) :\n"
+                        + calculs + "\n\nQuestion de l’utilisateur : " + question
+                        + "\nInterprète les résultats sans modifier les nombres et rappelle les hypothèses utiles."
+                    )
+                    interpretation = traiter_message(prompt, [], user_id, "")
+
+    return render_template_string(
+        STATISTIQUES_PAGE,
+        autorise=autorise,
+        niveau=niveau,
+        restant=restant,
+        erreur=erreur,
+        calculs=calculs,
+        interpretation=interpretation,
+        metriques=metriques,
+        csrf_token=jeton_csrf(),
+    ), (403 if request.method == "POST" and not autorise else 200)
+
 
 OFFRES_ABONNEMENT = {
     "pro": {

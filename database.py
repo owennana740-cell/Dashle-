@@ -62,6 +62,14 @@ class SubscriptionPayment(Base):
     paid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
+class StatisticalAnalysisUsage(Base):
+    __tablename__ = "statistical_analysis_usage"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+
 class Conversation(Base):
     __tablename__ = "conversations"
 

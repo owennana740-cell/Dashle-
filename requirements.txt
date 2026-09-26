@@ -6,3 +6,8 @@ Pillow
 gTTS
 SQLAlchemy
 psycopg[binary]
+pandas
+numpy
+scipy
+openpyxl
+xlrd
