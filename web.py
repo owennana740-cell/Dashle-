@@ -16,7 +16,7 @@ import base64
 import json
 import random
 import secrets
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask import (
     Flask, Response, request, render_template_string,
     redirect, stream_with_context, url_for, session, jsonify,
@@ -45,6 +45,7 @@ app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
     SESSION_COOKIE_SECURE=os.environ.get("SESSION_COOKIE_SECURE", "1") != "0",
+    PERMANENT_SESSION_LIFETIME=timedelta(days=3650),
 )
 initialiser_base()
 
@@ -3989,6 +3990,7 @@ def inscription():
                     # Proposer le transfert de la conversation visiteur
                     hist_visiteur = list(_historique_visiteur())
                     session.clear()
+                    session.permanent = True
                     session["user_id"]    = user.id
                     session["user_email"] = user.email
                     if hist_visiteur:
@@ -4020,6 +4022,7 @@ def connexion():
             if user and check_password_hash(user.password_hash, request.form.get("password", "")):
                 hist_visiteur = list(_historique_visiteur())
                 session.clear()
+                session.permanent = True
                 session["user_id"]    = user.id
                 session["user_email"] = user.email
                 # Mémoriser l'historique visiteur pour proposer le transfert
