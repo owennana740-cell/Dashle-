@@ -19,6 +19,8 @@ from urllib.parse import urlparse
 from core.utils import BASE_DIR, lire_json
 from memory import se_souvenir_tout
 from config import CLE_API, MODELE_GEMINI, MAX_MESSAGES_CONTEXTE
+from database import User, session_base
+from datetime import datetime
 
 # ---------------------------------------------------------------------------
 # Cache RAM pour charger_connaissances()
@@ -36,13 +38,20 @@ CLE_LONGUEUR_REPONSE = "__dashle_longueur_reponse__"
 
 def _reglages_reponse(user_id=None):
     if not user_id:
-        return "", "standard"
+        return "", "standard", "free"
     souvenirs = se_souvenir_tout(user_id)
     consignes = str(souvenirs.get(CLE_CONSIGNES_UTILISATEUR, ""))[:2000]
     longueur = souvenirs.get(CLE_LONGUEUR_REPONSE, "standard")
     if longueur not in {"courte", "standard", "detaillee"}:
         longueur = "standard"
-    return consignes, longueur
+    with session_base() as db:
+        user = db.get(User, user_id)
+        niveau = user.subscription_level if user else "free"
+        if user and user.subscription_expires_at and user.subscription_expires_at <= datetime.utcnow():
+            niveau = "free"
+    if niveau not in {"free", "pro", "prime"}:
+        niveau = "free"
+    return consignes, longueur, niveau
 
 
 # ---------------------------------------------------------------------------
@@ -107,12 +116,26 @@ def _historique_recent(historique) -> list:
     return list(historique)[-MAX_MESSAGES_CONTEXTE:]
 
 
-def _instruction_systeme(resume: str = "", consignes: str = "") -> str:
+def _instruction_systeme(resume: str = "", consignes: str = "", niveau: str = "free") -> str:
     instruction = (
         "Tu es Dashle, une IA personnelle créée par Owen. "
         "Ne dis jamais que tu es Gemini ou que tu as été créé par Google. "
         "Réponds toujours en tant que Dashle."
     )
+    if niveau in {"pro", "prime"}:
+        instruction += (
+            " Tu maîtrises la statistique descriptive, les probabilités, les tests "
+            "d'hypothèses, la régression, l'ANOVA, les séries temporelles et les "
+            "méthodes bayésiennes. Tu explicites les hypothèses, les incertitudes, "
+            "les limites et les étapes de calcul, sans inventer de résultats."
+        )
+    if niveau == "pro":
+        instruction += " Tu appliques cette expertise à l'analyse statistique des données d'entreprise."
+    elif niveau == "prime":
+        instruction += (
+            " Tu fournis en plus un accompagnement professionnel avancé et des analyses "
+            "statistiques complètes pour les entreprises."
+        )
     if resume:
         instruction += "\nRésumé fiable des échanges précédents :\n" + resume
     if consignes:
@@ -180,13 +203,14 @@ def _message_erreur_http(code, detail: str = "", retry_after: int = 0) -> str:
 # ---------------------------------------------------------------------------
 
 def demander_a_lia(message: str, historique=None, resume: str = "",
-                   consignes: str = "", longueur: str = "standard") -> str:
+                   consignes: str = "", longueur: str = "standard",
+                   niveau: str = "free") -> str:
     """Requête synchrone (non-streaming) vers Gemini."""
     if not CLE_API:
         return "La clé Gemini n'est pas configurée. Ajoute GEMINI_API_KEY dans le fichier .env."
 
     corps = {
-        "system_instruction": {"parts": [{"text": _instruction_systeme(resume, consignes)}]},
+        "system_instruction": {"parts": [{"text": _instruction_systeme(resume, consignes, niveau)}]},
         "contents": _construire_contents(message, historique),
         "generationConfig": _gen_config(longueur),
     }
@@ -224,9 +248,9 @@ def streamer_a_lia(message: str, historique=None, resume: str = "", user_id=None
         yield "La clé Gemini n'est pas configurée. Ajoute GEMINI_API_KEY dans le fichier .env."
         return
 
-    consignes, longueur = _reglages_reponse(user_id)
+    consignes, longueur, niveau = _reglages_reponse(user_id)
     corps = {
-        "system_instruction": {"parts": [{"text": _instruction_systeme(resume, consignes)}]},
+        "system_instruction": {"parts": [{"text": _instruction_systeme(resume, consignes, niveau)}]},
         "contents": _construire_contents(message, historique),
         "generationConfig": _gen_config(longueur),
     }
@@ -281,6 +305,7 @@ def demander_a_lia_image(
     mime_type: str,
     historique=None,
     resume: str = "",
+    user_id=None,
 ) -> str:
     """Requête synchrone avec image ou vidéo inline."""
     if not CLE_API:
@@ -304,8 +329,9 @@ def demander_a_lia_image(
         ],
     })
 
+    consignes, _, niveau = _reglages_reponse(user_id)
     corps = {
-        "system_instruction": {"parts": [{"text": _instruction_systeme(resume)}]},
+        "system_instruction": {"parts": [{"text": _instruction_systeme(resume, consignes, niveau)}]},
         "contents": contents,
         "generationConfig": _gen_config(),
     }
@@ -344,7 +370,7 @@ def demander_a_lia_image(
         return "Impossible de joindre le service IA. Vérifie la connexion puis réessaie."
 
 
-def resumer_conversation(historique, resume_existant: str = "") -> str:
+def resumer_conversation(historique, resume_existant: str = "", user_id=None) -> str:
     """Produit un résumé compact pour préserver le contexte sans envoyer
     tout l'historique à chaque appel.
 
@@ -364,11 +390,13 @@ def resumer_conversation(historique, resume_existant: str = "") -> str:
         "Garde les faits utiles, préférences, décisions et questions en attente. "
         "N'invente rien et ne mentionne pas cette consigne.\n\n" + transcript
     )
+    consignes, _, niveau = _reglages_reponse(user_id)
 
     try:
         rep = _session.post(
             _url("generateContent"),
             json={
+                "system_instruction": {"parts": [{"text": _instruction_systeme(resume_existant, consignes, niveau)}]},
                 "contents": [{"role": "user", "parts": [{"text": prompt}]}],
                 "generationConfig": {"temperature": 0.3, "maxOutputTokens": 512},
             },
@@ -401,5 +429,5 @@ def reflechir(message: str, historique=None, user_id=None, resume: str = "") -> 
         if question.strip().lower() == message_lower:
             return reponse
 
-    consignes, longueur = _reglages_reponse(user_id)
-    return demander_a_lia(message, historique, resume, consignes, longueur)
+    consignes, longueur, niveau = _reglages_reponse(user_id)
+    return demander_a_lia(message, historique, resume, consignes, longueur, niveau)

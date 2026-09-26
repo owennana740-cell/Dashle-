@@ -16,7 +16,11 @@ import base64
 import json
 import random
 import secrets
+import hashlib
+import hmac
+import requests
 from datetime import datetime, timedelta
+import calendar
 from flask import (
     Flask, Response, request, render_template_string,
     redirect, stream_with_context, url_for, session, jsonify,
@@ -27,7 +31,7 @@ from app import streamer_message, traiter_message, traiter_message_image
 from brain import resumer_conversation
 from config import MODELE_GEMINI
 from database import (
-    Conversation, Message, MessageFeedback, ShareLink, User,
+    Conversation, Message, MessageFeedback, ShareLink, SubscriptionPayment, User,
     UserMemory, UserPreference, initialiser_base, session_base,
 )
 
@@ -158,7 +162,8 @@ _ROUTES_PUBLIQUES = {
     "static", "connexion", "inscription", "partage",
     "accueil", "actualites", "repondre_flux", "repondre", "repondre_image",
     "confirmer_message", "nouvelle_conv", "conditions_utilisation",
-    "health", "robots_txt", "sitemap_xml",
+    "health", "robots_txt", "sitemap_xml", "tarifs", "paiement_retour",
+    "cinetpay_notification", "stripe_webhook",
 }
 
 
@@ -276,7 +281,7 @@ def _actualiser_resume(user_id, conversation_id):
     if (n - 20) % 10 != 0:
         return
     resume = _resume_conversation(user_id, conversation_id)
-    nouveau = resumer_conversation(historique, resume)
+    nouveau = resumer_conversation(historique, resume, user_id=user_id)
     if nouveau and nouveau != resume:
         with session_base() as db:
             conv = db.query(Conversation).filter_by(
@@ -1306,6 +1311,7 @@ if ('serviceWorker' in navigator) {
   {% endif %}
   <div class="menu-section">Navigation</div>
   <a href="{{ url_for('actualites') }}">&#128240; Nouveaut&eacute;s DASHLE</a>
+  <a href="{{ url_for('tarifs') }}">&#9733; Tarifs</a>
   {% if utilisateur %}
     <a href="{{ url_for('parametres') }}">&#9881; Param&egrave;tres</a>
   {% endif %}
@@ -3151,6 +3157,33 @@ button{border:0;border-radius:9px;background:linear-gradient(110deg,#22C55E,#3B8
 </main></body></html>
 """
 
+TARIFS_PAGE = """
+<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tarifs — DASHLE</title><style>
+:root{font-family:Inter,Segoe UI,sans-serif;color:#18352c;background:#f3f8f6}*{box-sizing:border-box}body{margin:0;padding:28px 16px 48px}
+header{max-width:1100px;margin:0 auto 28px;display:flex;align-items:center;justify-content:space-between}header a{color:#187a60;text-decoration:none;font-weight:600}
+h1{text-align:center;font-size:clamp(30px,5vw,44px);margin:18px 0 8px} .intro{text-align:center;color:#657b73;margin:0 auto 28px;max-width:640px}
+.plans{max-width:1100px;margin:auto;display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:16px}.plan{background:white;border:1px solid #dce9e4;border-radius:18px;padding:24px;box-shadow:0 10px 28px #173a2b0c;display:flex;flex-direction:column}.plan.featured{border:2px solid #35a982}
+.plan h2{margin:4px 0 10px}.price{font-size:27px;font-weight:750;color:#137d61}.price small{font-size:14px;color:#70847c;font-weight:500}.features{padding-left:20px;line-height:1.65;flex:1;color:#526a61}
+form{margin-top:20px}select{width:100%;padding:10px;border:1px solid #d5e3dd;border-radius:9px;background:#fff;font:inherit}button,.button{display:block;width:100%;margin-top:9px;padding:11px;border:0;border-radius:10px;font-family:inherit;font-size:14px;font-weight:600;text-align:center;text-decoration:none;cursor:pointer;background:linear-gradient(110deg,#25bd80,#3b82f6);color:white}.button.secondary{background:#e8f4ef;color:#17654f}.notice,.error{max-width:740px;margin:14px auto;padding:12px 15px;border-radius:10px;background:#e7f6ef;color:#27634e}.error{background:#fff0ed;color:#9b3828}.current{text-align:center;color:#61796f;margin:14px}
+</style></head><body>
+<header><a href="{{ url_for('accueil') }}">← Retour à DASHLE</a>{% if utilisateur %}<span>{{ utilisateur }} · offre {{ niveau|capitalize }}</span>{% else %}<a href="{{ url_for('connexion') }}">Connexion</a>{% endif %}</header>
+<h1>Un palier adapté à tes besoins</h1><p class="intro">Choisis une formule mensuelle ou annuelle. Les tarifs sont indiqués en FCFA.</p>
+{% if erreur %}<p class="error">{{ erreur }}</p>{% endif %}{% if request.args.get('retour') %}<p class="notice">Le paiement a été transmis. Ton offre sera activée après confirmation du prestataire.</p>{% endif %}
+<div class="plans">
+  <article class="plan"><h2>Dashle Free</h2><div class="price">0 FCFA <small>/ toujours</small></div><ul class="features"><li>Chat conversationnel</li><li>Quota Gemini standard</li></ul><a class="button secondary" href="{{ url_for('accueil') }}">Commencer gratuitement</a></article>
+  {% for code, nom, mensuel, annuel, avantages in offres %}
+  <article class="plan {{ 'featured' if code == 'prime' else '' }}"><h2>{{ nom }}</h2><div class="price"><span data-month="{{ mensuel }}" data-year="{{ annuel }}">{{ '{:,}'.format(mensuel).replace(',', ' ') }}</span> FCFA <small class="period">/ mois</small></div><ul class="features">{% for avantage in avantages %}<li>{{ avantage }}</li>{% endfor %}</ul>
+  {% if utilisateur %}<form method="post" action="{{ url_for('initier_paiement') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="tier" value="{{ code }}"><label class="sr-only" for="cadence-{{ code }}">Périodicité</label><select id="cadence-{{ code }}" name="cadence" class="cadence"><option value="monthly">Mensuel</option><option value="annual">Annuel — 2 mois offerts</option></select><button name="provider" value="cinetpay">Mobile Money · CinetPay</button><button class="button secondary" name="provider" value="stripe">Carte bancaire · Stripe</button></form>
+  {% else %}<a class="button" href="{{ url_for('connexion', next=url_for('tarifs')) }}">Connecte-toi pour choisir</a>{% endif %}</article>
+  {% endfor %}
+</div>
+<p class="current">Le paiement Mobile Money est à renouveler manuellement à l’échéance. La carte bancaire utilise un abonnement Stripe renouvelé automatiquement.</p>
+<script>document.querySelectorAll('.plan').forEach(function(plan){var select=plan.querySelector('.cadence');if(!select)return;var price=plan.querySelector('.price span'),period=plan.querySelector('.period');select.addEventListener('change',function(){var annuel=select.value==='annual';price.textContent=Number(price.dataset[annuel?'year':'month']).toLocaleString('fr-FR');period.textContent=annuel?'/ an':'/ mois';});});</script>
+</body></html>
+"""
+
+
 AUTH_PAGE = """
 <!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Dashle — {{ titre }}</title>
@@ -3947,7 +3980,7 @@ def repondre_image():
     else:
         _ajouter_message_visiteur(texte_msg, "user")
 
-    reponse = traiter_message_image(message, image_b64, mime_type, historique, resume)
+    reponse = traiter_message_image(message, image_b64, mime_type, historique, resume, user_id=user_id)
 
     if user_id:
         mid = ajouter_message(user_id, conversation_id, reponse, "bot")
@@ -3967,6 +4000,299 @@ def fichier_trop_volumineux(_erreur):
 # ---------------------------------------------------------------------------
 # Routes — comptes utilisateurs
 # ---------------------------------------------------------------------------
+
+OFFRES_ABONNEMENT = {
+    "pro": {
+        "nom": "Dashle Pro", "mensuel": 15000, "annuel": 150000,
+        "avantages": ["Assistant professionnel", "Analyses statistiques d’entreprise", "Import de fichiers de données"],
+    },
+    "prime": {
+        "nom": "Dashle Prime", "mensuel": 25000, "annuel": 250000,
+        "avantages": ["Discussion professionnelle avancée", "Analyses statistiques complètes", "Import de fichiers de données", "Priorité aux outils d’analyse"],
+    },
+}
+
+
+def _date_apres_mois(date, nombre):
+    mois_indexe = date.month - 1 + nombre
+    annee = date.year + mois_indexe // 12
+    mois = mois_indexe % 12 + 1
+    jour = min(date.day, calendar.monthrange(annee, mois)[1])
+    return date.replace(year=annee, month=mois, day=jour)
+
+
+def _rendre_tarifs(erreur=None):
+    user_id = session.get("user_id")
+    niveau = "free"
+    if user_id:
+        with session_base() as db:
+            user = db.get(User, user_id)
+            if user:
+                niveau = user.subscription_level or "free"
+                if user.subscription_expires_at and user.subscription_expires_at <= datetime.utcnow():
+                    niveau = "free"
+    offres = [
+        (code, offre["nom"], offre["mensuel"], offre["annuel"], offre["avantages"])
+        for code, offre in OFFRES_ABONNEMENT.items()
+    ]
+    return render_template_string(
+        TARIFS_PAGE,
+        utilisateur=session.get("user_email"),
+        niveau=niveau,
+        offres=offres,
+        csrf_token=jeton_csrf() if user_id else "",
+        erreur=erreur or request.args.get("erreur"),
+    )
+
+
+@app.route("/tarifs")
+def tarifs():
+    return _rendre_tarifs()
+
+
+@app.route("/abonnement/retour")
+def paiement_retour():
+    return _rendre_tarifs()
+
+
+@app.route("/paiement/initier", methods=["POST"])
+def initier_paiement():
+    user_id = session.get("user_id")
+    if not user_id:
+        return redirect(url_for("connexion", next=url_for("tarifs")))
+
+    tier = request.form.get("tier", "")
+    cadence = request.form.get("cadence", "monthly")
+    provider = request.form.get("provider", "")
+    if tier not in OFFRES_ABONNEMENT or cadence not in {"monthly", "annual"}:
+        return _rendre_tarifs("Choix d’offre invalide."), 400
+    offre = OFFRES_ABONNEMENT[tier]
+    amount = offre["mensuel"] if cadence == "monthly" else offre["annuel"]
+    currency = os.environ.get("CINETPAY_CURRENCY", "XOF").upper()
+    if currency not in {"XOF", "XAF"}:
+        return _rendre_tarifs("La devise de paiement doit être XOF ou XAF."), 503
+    stripe_currency = os.environ.get("STRIPE_CURRENCY", "XOF").upper()
+    if stripe_currency not in {"XOF", "XAF"}:
+        return _rendre_tarifs("La devise de paiement doit être XOF ou XAF."), 503
+    reference = "DASHLE-" + secrets.token_hex(16)
+
+    with session_base() as db:
+        user = db.get(User, user_id)
+        if not user:
+            session.clear()
+            return redirect(url_for("connexion"))
+        payment = SubscriptionPayment(
+            user_id=user_id, reference=reference, provider=provider,
+            tier=tier, cadence=cadence, amount=amount,
+            currency=(stripe_currency if provider == "stripe" else currency),
+        )
+        db.add(payment)
+
+    if provider == "cinetpay":
+        api_key = os.environ.get("CINETPAY_API_KEY")
+        site_id = os.environ.get("CINETPAY_SITE_ID")
+        if not api_key or not site_id:
+            return _rendre_tarifs("CinetPay n’est pas encore configuré sur le serveur."), 503
+        with session_base() as db:
+            user = db.get(User, user_id)
+            email = user.email
+        payload = {
+            "apikey": api_key,
+            "site_id": site_id,
+            "transaction_id": reference,
+            "amount": amount,
+            "currency": currency,
+            "description": f"Abonnement {offre['nom']} {cadence}",
+            "return_url": url_for("paiement_retour", _external=True) + "?retour=1",
+            "notify_url": url_for("cinetpay_notification", _external=True),
+            "channels": "MOBILE_MONEY",
+            "lang": "fr",
+            "customer_id": str(user_id),
+            "customer_email": email,
+            "metadata": f"{user_id}:{tier}:{cadence}",
+        }
+        try:
+            response = requests.post(
+                "https://api-checkout.cinetpay.com/v2/payment",
+                json=payload,
+                headers={"User-Agent": "DASHLE/1.0", "Accept": "application/json"},
+                timeout=20,
+            )
+            body = response.json()
+            if response.ok and body.get("code") == "201":
+                with session_base() as db:
+                    payment = db.query(SubscriptionPayment).filter_by(reference=reference).one()
+                    payment.provider_reference = body.get("data", {}).get("payment_token")
+                return redirect(body["data"]["payment_url"], code=303)
+        except (requests.RequestException, ValueError, KeyError):
+            pass
+        with session_base() as db:
+            payment = db.query(SubscriptionPayment).filter_by(reference=reference).one_or_none()
+            if payment:
+                payment.status = "failed"
+        return _rendre_tarifs("Impossible de créer le paiement CinetPay. Réessaie plus tard."), 502
+
+    if provider == "stripe":
+        api_key = os.environ.get("STRIPE_SECRET_KEY")
+        if not api_key:
+            return _rendre_tarifs("Stripe n’est pas encore configuré sur le serveur."), 503
+        interval = "month" if cadence == "monthly" else "year"
+        form = {
+            "mode": "subscription",
+            "line_items[0][price_data][currency]": stripe_currency.lower(),
+            "line_items[0][price_data][unit_amount]": amount,
+            "line_items[0][price_data][product_data][name]": offre["nom"],
+            "line_items[0][price_data][recurring][interval]": interval,
+            "client_reference_id": str(user_id),
+            "metadata[dashle_reference]": reference,
+            "metadata[dashle_tier]": tier,
+            "metadata[dashle_cadence]": cadence,
+            "subscription_data[metadata][dashle_reference]": reference,
+            "subscription_data[metadata][dashle_tier]": tier,
+            "subscription_data[metadata][dashle_cadence]": cadence,
+            "subscription_data[metadata][dashle_user_id]": str(user_id),
+            "success_url": url_for("paiement_retour", _external=True) + "?retour=1&session_id={CHECKOUT_SESSION_ID}",
+            "cancel_url": url_for("tarifs", _external=True),
+        }
+        try:
+            response = requests.post(
+                "https://api.stripe.com/v1/checkout/sessions",
+                data=form,
+                auth=(api_key, ""),
+                timeout=20,
+            )
+            body = response.json()
+            if response.ok and body.get("url"):
+                with session_base() as db:
+                    payment = db.query(SubscriptionPayment).filter_by(reference=reference).one()
+                    payment.provider_reference = body.get("id")
+                return redirect(body["url"], code=303)
+        except (requests.RequestException, ValueError, KeyError):
+            pass
+        with session_base() as db:
+            payment = db.query(SubscriptionPayment).filter_by(reference=reference).one_or_none()
+            if payment:
+                payment.status = "failed"
+        return _rendre_tarifs("Impossible de créer la session Stripe. Vérifie la configuration et réessaie."), 502
+
+    with session_base() as db:
+        payment = db.query(SubscriptionPayment).filter_by(reference=reference).one_or_none()
+        if payment:
+            payment.status = "failed"
+    return _rendre_tarifs("Mode de paiement inconnu."), 400
+
+
+@app.route("/paiement/cinetpay/notification", methods=["GET", "POST"])
+def cinetpay_notification():
+    if request.method == "GET":
+        return jsonify({"ok": True})
+    api_key = os.environ.get("CINETPAY_API_KEY")
+    site_id = os.environ.get("CINETPAY_SITE_ID")
+    if not api_key or not site_id:
+        return jsonify({"erreur": "CinetPay non configuré."}), 503
+    event = request.get_json(silent=True) or request.form
+    reference = str(event.get("cpm_trans_id", event.get("transaction_id", "")))
+    if not reference or (event.get("cpm_site_id") and str(event.get("cpm_site_id")) != site_id):
+        return jsonify({"ok": True})
+    with session_base() as db:
+        payment = db.query(SubscriptionPayment).filter_by(
+            reference=reference, provider="cinetpay"
+        ).one_or_none()
+        if not payment or payment.status == "paid":
+            return jsonify({"ok": True})
+        expected_amount, expected_currency = payment.amount, payment.currency
+    try:
+        response = requests.post(
+            "https://api-checkout.cinetpay.com/v2/payment/check",
+            json={"apikey": api_key, "site_id": site_id, "transaction_id": reference},
+            headers={"User-Agent": "DASHLE/1.0", "Accept": "application/json"},
+            timeout=15,
+        )
+        body = response.json()
+        data = body.get("data", {})
+        if not response.ok or body.get("code") != "00" or data.get("status") != "ACCEPTED":
+            return jsonify({"ok": True})
+        if int(data.get("amount", -1)) != expected_amount or str(data.get("currency", "")).upper() != expected_currency:
+            return jsonify({"ok": True})
+    except (requests.RequestException, ValueError, TypeError):
+        return jsonify({"ok": True})
+
+    maintenant = datetime.utcnow()
+    with session_base() as db:
+        payment = db.query(SubscriptionPayment).filter_by(reference=reference).with_for_update().one_or_none()
+        if not payment or payment.status == "paid":
+            return jsonify({"ok": True})
+        user = db.get(User, payment.user_id)
+        if user:
+            depart = user.subscription_expires_at
+            if not depart or depart < maintenant:
+                depart = maintenant
+            user.subscription_level = payment.tier
+            user.subscription_provider = "cinetpay"
+            user.provider_subscription_id = None
+            user.subscription_expires_at = _date_apres_mois(depart, 1 if payment.cadence == "monthly" else 12)
+            payment.status = "paid"
+            payment.paid_at = maintenant
+    return jsonify({"ok": True})
+
+
+@app.route("/paiement/stripe/webhook", methods=["POST"])
+def stripe_webhook():
+    secret = os.environ.get("STRIPE_WEBHOOK_SECRET")
+    signature = request.headers.get("Stripe-Signature", "")
+    if not secret:
+        return jsonify({"erreur": "Webhook Stripe non configuré."}), 503
+    try:
+        parties = dict(element.split("=", 1) for element in signature.split(",") if "=" in element)
+        timestamp = int(parties["t"])
+        signature_attendue = hmac.new(
+            secret.encode(), str(timestamp).encode() + b"." + request.get_data(), hashlib.sha256
+        ).hexdigest()
+        if abs(datetime.utcnow().timestamp() - timestamp) > 300 or not hmac.compare_digest(signature_attendue, parties["v1"]):
+            return jsonify({"erreur": "Signature invalide."}), 400
+        event = request.get_json(force=True)
+    except (KeyError, ValueError, TypeError):
+        return jsonify({"erreur": "Événement Stripe invalide."}), 400
+
+    event_type = event.get("type", "")
+    subscription = (event.get("data") or {}).get("object") or {}
+    if event_type.startswith("customer.subscription."):
+        subscription_id = subscription.get("id")
+        metadata = subscription.get("metadata") or {}
+        reference = metadata.get("dashle_reference")
+        with session_base() as db:
+            payment = None
+            if reference:
+                payment = db.query(SubscriptionPayment).filter_by(
+                    reference=reference, provider="stripe"
+                ).with_for_update().one_or_none()
+            if payment is None and subscription_id:
+                payment = db.query(SubscriptionPayment).filter_by(
+                    provider="stripe", provider_reference=subscription_id
+                ).with_for_update().order_by(SubscriptionPayment.created_at.desc()).first()
+            if payment:
+                user = db.get(User, payment.user_id)
+                status = subscription.get("status")
+                if user and status in {"active", "trialing"}:
+                    periode_fin = subscription.get("current_period_end")
+                    user.subscription_level = payment.tier
+                    user.subscription_provider = "stripe"
+                    user.provider_subscription_id = subscription_id
+                    user.subscription_expires_at = datetime.utcfromtimestamp(periode_fin) if periode_fin else _date_apres_mois(
+                        datetime.utcnow(), 1 if payment.cadence == "monthly" else 12
+                    )
+                    payment.provider_reference = subscription_id
+                    payment.status = "paid"
+                    payment.paid_at = payment.paid_at or datetime.utcnow()
+                elif user and (status in {"canceled", "incomplete_expired"}) \
+                        and user.subscription_provider == "stripe" \
+                        and user.provider_subscription_id == subscription_id:
+                    user.subscription_level = "free"
+                    user.subscription_expires_at = None
+                    user.subscription_provider = None
+                    user.provider_subscription_id = None
+                    payment.status = "cancelled"
+    return jsonify({"received": True})
 
 @app.route("/inscription", methods=["GET", "POST"])
 def inscription():

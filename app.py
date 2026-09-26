@@ -40,8 +40,8 @@ def traiter_message(message, historique=None, user_id=None, resume=""):
         return reflechir(message, historique, user_id, resume)
 
 
-def traiter_message_image(message, image_b64, mime_type, historique=None, resume=""):
-    return demander_a_lia_image(message, image_b64, mime_type, historique, resume)
+def traiter_message_image(message, image_b64, mime_type, historique=None, resume="", user_id=None):
+    return demander_a_lia_image(message, image_b64, mime_type, historique, resume, user_id)
 
 
 def streamer_message(message, historique=None, user_id=None, resume=""):

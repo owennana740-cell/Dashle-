@@ -36,9 +36,30 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(254), unique=True, index=True, nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    subscription_level: Mapped[str] = mapped_column(String(20), default="free", nullable=False)
+    subscription_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    subscription_provider: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    provider_subscription_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     conversations: Mapped[list["Conversation"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
+
+
+class SubscriptionPayment(Base):
+    __tablename__ = "subscription_payments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
+    reference: Mapped[str] = mapped_column(String(80), unique=True, index=True, nullable=False)
+    provider: Mapped[str] = mapped_column(String(20), nullable=False)
+    tier: Mapped[str] = mapped_column(String(20), nullable=False)
+    cadence: Mapped[str] = mapped_column(String(10), nullable=False)
+    amount: Mapped[int] = mapped_column(Integer, nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False)
+    provider_reference: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class Conversation(Base):
@@ -116,6 +137,18 @@ class UserMemory(Base):
 
 def initialiser_base():
     Base.metadata.create_all(engine)
+    colonnes_utilisateurs = {
+        "subscription_level": "VARCHAR(20) NOT NULL DEFAULT 'free'",
+        "subscription_expires_at": "TIMESTAMP NULL",
+        "subscription_provider": "VARCHAR(20) NULL",
+        "provider_subscription_id": "VARCHAR(255) NULL",
+    }
+    colonnes_existantes = {colonne["name"] for colonne in inspect(engine).get_columns("users")}
+    with engine.begin() as connexion:
+        for nom, definition in colonnes_utilisateurs.items():
+            if nom not in colonnes_existantes:
+                connexion.execute(text(f"ALTER TABLE users ADD COLUMN {nom} {definition}"))
+
     colonnes_conversations = {
         "resume": "TEXT NOT NULL DEFAULT ''",
         "archivee": "BOOLEAN NOT NULL DEFAULT FALSE",

@@ -15,6 +15,18 @@ services:
         generateValue: true
       - key: SESSION_COOKIE_SECURE
         value: "1"
+      - key: CINETPAY_API_KEY
+        sync: false
+      - key: CINETPAY_SITE_ID
+        sync: false
+      - key: CINETPAY_CURRENCY
+        value: XOF
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: STRIPE_CURRENCY
+        value: XOF
 databases:
   - name: dashle-db
     databaseName: dashle
