@@ -1543,6 +1543,46 @@ const DELAI_RELANCE_RECO_INITIAL = 300;
 const DELAI_RELANCE_RECO_MAX = 5000;
 const MAX_PALIERS_RELANCE_RECO = 6;
 
+// Attendre que les résultats finaux se stabilisent avant d'envoyer le tour vocal.
+let transcriptionFinaleVocale = '';
+let dernierIndexFinalVocal = 0;
+let minuteurFinPhraseVocale = null;
+const DELAI_FIN_PHRASE_VOCALE = 1600;
+
+function annulerFinPhraseVocale() {
+  if (minuteurFinPhraseVocale !== null) {
+    clearTimeout(minuteurFinPhraseVocale);
+    minuteurFinPhraseVocale = null;
+  }
+}
+
+function reinitialiserTranscriptionVocale() {
+  annulerFinPhraseVocale();
+  transcriptionFinaleVocale = '';
+  dernierIndexFinalVocal = 0;
+}
+
+function planifierEnvoiFinPhraseVocale() {
+  annulerFinPhraseVocale();
+  minuteurFinPhraseVocale = setTimeout(function() {
+    minuteurFinPhraseVocale = null;
+    if (!vocalActif || reponseEnCours || syntheseEnCours || recoMutePendantTTS) return;
+    const texteComplet = transcriptionFinaleVocale.trim();
+    if (!texteComplet) return;
+
+    transcriptionFinaleVocale = '';
+    dernierIndexFinalVocal = 0;
+    recoResultatsAutorises = false;
+    champ.value = texteComplet;
+    champ.style.height = 'auto';
+    afficherEtatVocal('reflexion', 'Dashle réfléchit...');
+    afficherStatutVocal('');
+    // Le gestionnaire d'envoi coupe l'écoute avant de lancer la requête SSE.
+    try { form.requestSubmit(); }
+    catch(errSub) { form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); }
+  }, DELAI_FIN_PHRASE_VOCALE);
+}
+
 // Identifiant du watchdog d'écoute (clearTimeout pour l'annuler).
 let watchdogEcoute = null;
 
@@ -1833,6 +1873,7 @@ function surveillerParole() {
 
   const verifier = function() {
     if (!vadPret || !vadAnalyser || !vocalActif) return;
+    const now = performance.now();
     vadAnalyser.getByteTimeDomainData(donnees);
     let somme = 0;
     for (let i = 0; i < donnees.length; i++) {
@@ -1873,6 +1914,7 @@ function surveillerParole() {
 function interrompreDashle() {
   if (!vocalActif) return;
   interruptionDemandee = true;
+  reinitialiserTranscriptionVocale();
   const reconnaissanceEnCoursAvantInterruption = recoEnCours;
   const ttsEtaitActif = ('speechSynthesis' in window)
     && (syntheseEnCours || window.speechSynthesis.speaking);
@@ -1950,6 +1992,8 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
     if (recoEnCours) {
       return false;
     }
+    reco.interimResults = true;
+    reco.continuous = true;
     modeActuel = 'vocal';
     ouvrirModeVocal();
     afficherEtatVocal('ecoute', 'Dashle écoute...');
@@ -1995,6 +2039,8 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
   btnMicro.onclick = function() {
     if (vocalActif) return;
     modeActuel = 'dictee';
+    reco.interimResults = false;
+    reco.continuous = false;
     btnMicro.classList.add('actif');
     try { reco.start(); } catch(e) {}
   };
@@ -2002,6 +2048,7 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
   btnVocal.onclick = async function() {
     vocalActif = !vocalActif;
     if (vocalActif) {
+      reinitialiserTranscriptionVocale();
       btnVocal.classList.add('vocal-on');
       ouvrirModeVocal();
       interruptionDemandee = false;
@@ -2010,6 +2057,7 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
       try { reco.stop(); } catch(e) {}
       setTimeout(demarrerEcouteVocale, 80);
     } else {
+      reinitialiserTranscriptionVocale();
       btnVocal.classList.remove('vocal-on', 'ecoute', 'parle');
       fermerModeVocal();
       afficherEtatVocal('attente', 'En attente');
@@ -2023,6 +2071,7 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
   };
 
   reco.onstart = function() {
+    dernierIndexFinalVocal = 0;
     recoResultatsAutorises = !recoMutePendantTTS && !syntheseEnCours && !reponseEnCours;
     if (vocalActif && modeActuel === 'vocal') {
       afficherEtatVocal('ecoute', 'Dashle écoute...');
@@ -2033,29 +2082,51 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
   };
 
   reco.onresult = function(e) {
-    const resultat = e.results && e.results[e.resultIndex || 0];
-    const alternative = resultat && resultat[0];
     if (!recoResultatsAutorises || recoMutePendantTTS || syntheseEnCours
         || (vadDebutSynthese > 0 && performance.now() - vadDebutSynthese < VAD_DELAI_POST)) {
       return;
     }
-    const transcriptBrut = alternative && alternative.transcript || '';
-    const transcript = transcriptBrut.trim();
-    if (!transcript) return;
-    if (modeActuel === 'vocal') {
+    const resultats = e.results || [];
+    if (modeActuel !== 'vocal') {
+      const resultat = resultats[e.resultIndex || 0];
+      const transcript = (resultat && resultat[0] && resultat[0].transcript || '').trim();
+      if (!transcript) return;
+      champ.value = transcript;
+      champ.style.height = 'auto';
+      return;
+    }
+
+    let paroleInterimaire = false;
+    let resultatNonVide = false;
+    for (let i = 0; i < resultats.length; i++) {
+      const texte = resultats[i] && resultats[i][0] && resultats[i][0].transcript;
+      if (texte && texte.trim()) {
+        resultatNonVide = true;
+        if (!resultats[i].isFinal) paroleInterimaire = true;
+      }
+    }
+    const debut = Math.max(Number.isInteger(e.resultIndex) ? e.resultIndex : 0, dernierIndexFinalVocal);
+    for (let i = debut; i < resultats.length; i++) {
+      const resultat = resultats[i];
+      const texte = (resultat && resultat[0] && resultat[0].transcript || '').trim();
+      if (!resultat || !resultat.isFinal || !texte) continue;
+      transcriptionFinaleVocale += (transcriptionFinaleVocale ? ' ' : '') + texte;
+      dernierIndexFinalVocal = i + 1;
+    }
+
+    if (resultatNonVide) {
       nbRelancesVocal = 0;
       if (minuteurRelanceReco !== null) {
         clearTimeout(minuteurRelanceReco);
         minuteurRelanceReco = null;
       }
     }
-    champ.value = transcript;
-    champ.style.height = 'auto';
-    if (modeActuel === 'vocal') {
-      interruptionDemandee = false;
-      afficherEtatVocal('reflexion', 'Dashle réfléchit...');
-      afficherStatutVocal('');
-      try { form.requestSubmit(); } catch(errSub) { form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); }
+    if (!transcriptionFinaleVocale) return;
+    interruptionDemandee = false;
+    if (paroleInterimaire) {
+      annulerFinPhraseVocale();
+    } else {
+      planifierEnvoiFinPhraseVocale();
     }
   };
 
@@ -2597,6 +2668,12 @@ form.addEventListener('submit', async function(e) {
   }
 
   if (!texte) return;
+
+  if (vocalActif && modeActuel === 'vocal') {
+    reinitialiserTranscriptionVocale();
+    recoResultatsAutorises = false;
+    try { if (recoEnCours && reco) reco.stop(); } catch(e) {}
+  }
 
   ajouterMessage(texte, 'user');
   champ.value = '';
