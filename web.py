@@ -32,7 +32,8 @@ from brain import resumer_conversation
 from config import MODELE_GEMINI
 from database import (
     Conversation, Message, MessageFeedback, ShareLink, SubscriptionPayment, User,
-    UserMemory, UserPreference, StatisticalAnalysisUsage, initialiser_base, session_base,
+    UserMemory, UserPreference, StatisticalAnalysisUsage, Project, Reminder, UserPlugin,
+    initialiser_base, session_base,
 )
 from statistiques import analyser_fichier
 from temps_reel import actualites_recentes, meteo_du_jour
@@ -1319,9 +1320,15 @@ if ('serviceWorker' in navigator) {
     <a href="{{ url_for('parametres') }}">&#9881; Param&egrave;tres</a>
     <a href="{{ url_for('statistiques') }}">&#128202; Statistiques</a>
   {% endif %}
-  <a href="#" onclick="return false;" title="Bient&ocirc;t disponible">&#128197; Planification <small>(bient&ocirc;t)</small></a>
-  <a href="#" onclick="return false;" title="Bient&ocirc;t disponible">&#128268; Plugins <small>(bient&ocirc;t)</small></a>
-  <a href="#" onclick="return false;" title="Bient&ocirc;t disponible">&#128193; Projets <small>(bient&ocirc;t)</small></a>
+  {% if utilisateur %}
+    <a href="{{ url_for('planification') }}">&#128197; Planification</a>
+    <a href="{{ url_for('plugins') }}">&#128268; Plugins</a>
+    <a href="{{ url_for('projets') }}">&#128193; Projets</a>
+  {% else %}
+    <a href="{{ url_for('connexion') }}">&#128197; Planification</a>
+    <a href="{{ url_for('connexion') }}">&#128268; Plugins</a>
+    <a href="{{ url_for('connexion') }}">&#128193; Projets</a>
+  {% endif %}
   <div class="sidebar-account">
     {% if utilisateur %}
       <div class="user-badge" title="{{ utilisateur.email }}"><span class="user-avatar">{{ utilisateur.email[0].upper() }}</span><span class="email-label">{{ utilisateur.email }}</span></div>
@@ -3177,6 +3184,25 @@ document.getElementById('charger-meteo').addEventListener('click',function(){cha
 """
 
 
+ESPACE_PAGE = """
+<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{ titre }} — DASHLE</title><style>
+:root{font-family:Inter,Segoe UI,sans-serif;color:#18352c;background:#f3f8f6}*{box-sizing:border-box}body{margin:0;padding:26px 16px}.wrap{max-width:900px;margin:auto}a{color:#16765b;text-decoration:none;font-weight:600}h1{font-size:clamp(28px,5vw,40px);margin:28px 0 8px}.intro,.muted{color:#627970;line-height:1.5}.card{background:white;border:1px solid #dce9e4;border-radius:15px;padding:20px;margin:15px 0;box-shadow:0 10px 28px #173a2b0c}input,select{width:100%;padding:10px;border:1px solid #d5e3dd;border-radius:9px;font:inherit;margin:6px 0 12px}button{padding:10px 14px;border:0;border-radius:9px;background:linear-gradient(110deg,#25bd80,#3b82f6);color:white;font:600 14px inherit;cursor:pointer}form.inline{display:inline}ul{padding-left:20px}li{margin:10px 0}.row{display:flex;align-items:center;gap:12px;justify-content:space-between}.error{color:#9b3828}.check{width:auto;margin:0 8px 0 0}
+</style></head><body><main class="wrap"><a href="{{ url_for('accueil') }}">← Retour à DASHLE</a><h1>{{ titre }}</h1><p class="intro">{{ intro }}</p>{% if erreur %}<p class="error">{{ erreur }}</p>{% endif %}
+{% if mode == 'rappels' %}
+<form class="card" method="post" action="{{ url_for('planification') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>Tâche ou rappel<input name="title" maxlength="200" required placeholder="Ex. Appeler le fournisseur"></label><label>Date et heure locale<input id="due-local" type="datetime-local" required><input id="due-utc" name="due_at" type="hidden"></label><button>Ajouter</button></form>
+<section class="card"><h2>À venir et terminés</h2>{% if rappels %}<ul>{% for rappel in rappels %}<li class="row"><span><strong>{{ rappel.title }}</strong><br><span class="muted">{{ rappel.due_at.strftime('%d/%m/%Y à %H:%M UTC') }} · {{ 'Terminée' if rappel.completed else 'À faire' }}</span></span><form class="inline" method="post" action="{{ url_for('modifier_rappel', reminder_id=rappel.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button>{{ 'Rouvrir' if rappel.completed else 'Terminer' }}</button></form><form class="inline" method="post" action="{{ url_for('supprimer_rappel', reminder_id=rappel.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button aria-label="Supprimer">Supprimer</button></form></li>{% endfor %}</ul>{% else %}<p class="muted">Aucune tâche pour le moment.</p>{% endif %}</section>
+<script>document.querySelector('form.card').addEventListener('submit',function(e){const local=document.getElementById('due-local');if(local.value)document.getElementById('due-utc').value=new Date(local.value).toISOString();else e.preventDefault();});</script>
+{% elif mode == 'projets' %}
+<form class="card" method="post" action="{{ url_for('creer_projet') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>Nom du projet<input name="name" maxlength="100" required placeholder="Ex. Étude de marché"></label><button>Créer un projet</button></form>
+{% for projet in projets %}<section class="card"><h2>{{ projet.name }}</h2><p class="muted">{{ projet.conversations|length }} conversation(s)</p>{% if projet.conversations %}<ul>{% for conv in projet.conversations %}<li>{{ conv.title }}</li>{% endfor %}</ul>{% else %}<p class="muted">Aucune conversation classée ici.</p>{% endif %}</section>{% else %}<section class="card"><p>Aucun projet. Crée un projet pour classer tes conversations.</p></section>{% endfor %}
+{% if conversations %}<section class="card"><h2>Classer une conversation</h2>{% for conv in conversations %}<form class="row" method="post" action="{{ url_for('affecter_conversation', conversation_id=conv.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><span>{{ conv.title }}</span><select name="project_id" aria-label="Projet pour {{ conv.title }}"><option value="">Sans projet</option>{% for option in projets %}<option value="{{ option.id }}" {% if conv.project_id == option.id %}selected{% endif %}>{{ option.name }}</option>{% endfor %}</select><button>Enregistrer</button></form>{% endfor %}</section>{% endif %}
+{% elif mode == 'plugins' %}
+<form method="post" class="card"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><p class="muted">Ces réglages contrôlent les fonctions utilisées par Dashle dans tes conversations. Les analyses restent soumises à l’offre Pro ou Prime.</p>{% for key, label, helptext in options %}<label class="row"><span><strong>{{ label }}</strong><br><span class="muted">{{ helptext }}</span></span><input class="check" type="checkbox" name="plugin_{{ key }}" value="1" {% if etat[key] %}checked{% endif %}></label>{% endfor %}<button>Enregistrer les préférences</button></form>
+{% endif %}</main></body></html>
+"""
+
+
 STATISTIQUES_PAGE = """
 <!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Analyses statistiques — DASHLE</title><style>
@@ -3184,7 +3210,8 @@ STATISTIQUES_PAGE = """
 </style></head><body><main class="wrap"><a href="{{ url_for('accueil') }}">← Retour à DASHLE</a><h1>Analyse de données</h1>
 <p class="intro">Importe un CSV ou un classeur Excel (8 Mo maximum). DASHLE calcule des statistiques descriptives et, selon ta question, des analyses avec SciPy. Le fichier est traité en mémoire et n’est pas conservé.</p>
 {% if erreur %}<p class="error">{{ erreur }}</p>{% endif %}
-{% if not autorise %}<section class="card"><h2>Fonction réservée à Dashle Pro et Prime</h2><p>Débloque les analyses statistiques avancées et jusqu’à 25 analyses par jour.</p><a class="cta" href="{{ url_for('tarifs') }}">Voir les offres</a></section>
+{% if not plugin_active %}<section class="card"><h2>Mode statistique désactivé</h2><p>Active-le depuis la page Plugins pour analyser tes fichiers.</p><a class="cta" href="{{ url_for('plugins') }}">Gérer les plugins</a></section>
+{% elif not autorise %}<section class="card"><h2>Fonction réservée à Dashle Pro et Prime</h2><p>Débloque les analyses statistiques avancées et jusqu’à 25 analyses par jour.</p><a class="cta" href="{{ url_for('tarifs') }}">Voir les offres</a></section>
 {% else %}<p class="meta">Offre {{ niveau|capitalize }} · {{ restant }} analyse(s) restante(s) aujourd’hui (limite : 25).</p>
 <form class="card" method="post" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label for="fichier">Fichier CSV ou Excel</label><input id="fichier" name="fichier" type="file" accept=".csv,.xls,.xlsx,.xlsm" required><label for="question">Que veux-tu analyser ?</label><textarea id="question" name="question" maxlength="1000" required placeholder="Ex. : Compare les ventes selon la région, teste la différence entre les groupes, ou calcule la probabilité que ventes > 100."></textarea><button type="submit">Analyser</button></form>
 {% endif %}
@@ -4057,6 +4084,112 @@ def api_temps_reel():
     })
 
 
+@app.route("/planification", methods=["GET", "POST"])
+def planification():
+    user_id = session.get("user_id")
+    erreur = None
+    if request.method == "POST":
+        titre = request.form.get("title", "").strip()[:200]
+        valeur_date = request.form.get("due_at", "").strip()
+        try:
+            date_echeance = datetime.fromisoformat(valeur_date.replace("Z", "+00:00"))
+            if date_echeance.tzinfo:
+                date_echeance = date_echeance.astimezone(timezone.utc).replace(tzinfo=None)
+            if not titre:
+                raise ValueError
+            with session_base() as db:
+                db.add(Reminder(user_id=user_id, title=titre, due_at=date_echeance))
+            return redirect(url_for("planification"))
+        except ValueError:
+            erreur = "Indique un titre et une date valides."
+    with session_base() as db:
+        rappels = db.query(Reminder).filter_by(user_id=user_id).order_by(Reminder.completed, Reminder.due_at).all()
+        return render_template_string(ESPACE_PAGE, mode="rappels", titre="Planification", intro="Crée des rappels datés et suis les tâches depuis ton compte.", rappels=rappels, erreur=erreur, csrf_token=jeton_csrf())
+
+
+@app.route("/planification/<int:reminder_id>/basculer", methods=["POST"])
+def modifier_rappel(reminder_id):
+    with session_base() as db:
+        rappel = db.query(Reminder).filter_by(id=reminder_id, user_id=session.get("user_id")).one_or_none()
+        if rappel:
+            rappel.completed = not rappel.completed
+    return redirect(url_for("planification"))
+
+
+@app.route("/planification/<int:reminder_id>/supprimer", methods=["POST"])
+def supprimer_rappel(reminder_id):
+    with session_base() as db:
+        rappel = db.query(Reminder).filter_by(id=reminder_id, user_id=session.get("user_id")).one_or_none()
+        if rappel:
+            db.delete(rappel)
+    return redirect(url_for("planification"))
+
+
+@app.route("/projets")
+def projets():
+    user_id = session.get("user_id")
+    with session_base() as db:
+        liste_projets = db.query(Project).filter_by(user_id=user_id).order_by(Project.name).all()
+        conversations = db.query(Conversation).filter_by(user_id=user_id, archivee=False).order_by(Conversation.updated_at.desc()).all()
+        for projet in liste_projets:
+            projet.conversations = [conv for conv in conversations if conv.project_id == projet.id]
+        return render_template_string(ESPACE_PAGE, mode="projets", titre="Projets", intro="Classe tes conversations dans des dossiers nommés.", projets=liste_projets, conversations=conversations, erreur=None, csrf_token=jeton_csrf())
+
+
+@app.route("/projets/creer", methods=["POST"])
+def creer_projet():
+    nom = request.form.get("name", "").strip()[:100]
+    if nom:
+        with session_base() as db:
+            db.add(Project(user_id=session.get("user_id"), name=nom))
+    return redirect(url_for("projets"))
+
+
+@app.route("/projets/conversation/<int:conversation_id>", methods=["POST"])
+def affecter_conversation(conversation_id):
+    user_id = session.get("user_id")
+    selection = request.form.get("project_id", "").strip()
+    try:
+        projet_id = int(selection) if selection else None
+    except ValueError:
+        projet_id = -1
+    with session_base() as db:
+        conv = db.query(Conversation).filter_by(id=conversation_id, user_id=user_id).one_or_none()
+        if conv:
+            if not selection:
+                conv.project_id = None
+            else:
+                projet = db.query(Project).filter_by(id=projet_id, user_id=user_id).one_or_none()
+                if projet:
+                    conv.project_id = projet.id
+    return redirect(url_for("projets"))
+
+
+@app.route("/plugins", methods=["GET", "POST"])
+def plugins():
+    user_id = session.get("user_id")
+    definitions = {
+        "meteo": ("Météo", "Ajoute les données météo aux réponses quand tu les demandes."),
+        "actualites": ("Actualités", "Ajoute des titres RSS récents aux réponses quand tu les demandes."),
+        "statistiques": ("Mode statistique", "Autorise l’outil d’analyse de fichiers pour les offres Pro et Prime."),
+    }
+    if request.method == "POST":
+        with session_base() as db:
+            for cle in definitions:
+                plugin = db.query(UserPlugin).filter_by(user_id=user_id, plugin=cle).one_or_none()
+                actif = request.form.get("plugin_" + cle) == "1"
+                if plugin:
+                    plugin.enabled = actif
+                else:
+                    db.add(UserPlugin(user_id=user_id, plugin=cle, enabled=actif))
+        return redirect(url_for("plugins"))
+    with session_base() as db:
+        preferences = {p.plugin: p.enabled for p in db.query(UserPlugin).filter_by(user_id=user_id).all()}
+    etat = {cle: preferences.get(cle, True) for cle in definitions}
+    options = [(cle, *texte) for cle, texte in definitions.items()]
+    return render_template_string(ESPACE_PAGE, mode="plugins", titre="Plugins", intro="Active ou désactive les fonctions proposées par Dashle.", etat=etat, options=options, erreur=None, csrf_token=jeton_csrf())
+
+
 @app.route("/statistiques", methods=["GET", "POST"])
 def statistiques():
     user_id = session.get("user_id")
@@ -4075,14 +4208,19 @@ def statistiques():
             niveau = "free"
             user.subscription_level = "free"
         autorise = niveau in {"pro", "prime"}
+        plugin_active = db.query(UserPlugin).filter_by(
+            user_id=user_id, plugin="statistiques", enabled=False
+        ).one_or_none() is None
         utilise = db.query(StatisticalAnalysisUsage).filter(
             StatisticalAnalysisUsage.user_id == user_id,
             StatisticalAnalysisUsage.created_at >= jour_debut,
             StatisticalAnalysisUsage.created_at < jour_fin,
-        ).count() if autorise else 0
+        ).count() if autorise and plugin_active else 0
 
-    restant = max(0, 25 - utilise) if autorise else 0
-    if request.method == "POST" and not autorise:
+    restant = max(0, 25 - utilise) if autorise and plugin_active else 0
+    if request.method == "POST" and not plugin_active:
+        erreur = "Active le mode statistique dans la page Plugins pour lancer une analyse."
+    elif request.method == "POST" and not autorise:
         erreur = "Les analyses statistiques nécessitent Dashle Pro ou Dashle Prime."
     elif request.method == "POST":
         fichier = request.files.get("fichier")
@@ -4130,6 +4268,7 @@ def statistiques():
     return render_template_string(
         STATISTIQUES_PAGE,
         autorise=autorise,
+        plugin_active=plugin_active,
         niveau=niveau,
         restant=restant,
         erreur=erreur,
@@ -4137,7 +4276,7 @@ def statistiques():
         interpretation=interpretation,
         metriques=metriques,
         csrf_token=jeton_csrf(),
-    ), (403 if request.method == "POST" and not autorise else 200)
+    ), (403 if request.method == "POST" and (not autorise or not plugin_active) else 200)
 
 
 OFFRES_ABONNEMENT = {

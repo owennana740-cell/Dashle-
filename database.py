@@ -70,6 +70,36 @@ class StatisticalAnalysisUsage(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False, index=True)
 
 
+class Project(Base):
+    __tablename__ = "projects"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class Reminder(Base):
+    __tablename__ = "reminders"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    due_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    completed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class UserPlugin(Base):
+    __tablename__ = "user_plugins"
+    __table_args__ = (UniqueConstraint("user_id", "plugin", name="uq_user_plugin"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
+    plugin: Mapped[str] = mapped_column(String(30), nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+
 class Conversation(Base):
     __tablename__ = "conversations"
 
@@ -78,6 +108,7 @@ class Conversation(Base):
     title: Mapped[str] = mapped_column(String(120), default="Nouvelle conversation", nullable=False)
     resume: Mapped[str] = mapped_column(Text, default="", nullable=False)
     archivee: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    project_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     user: Mapped[User] = relationship(back_populates="conversations")
@@ -160,6 +191,7 @@ def initialiser_base():
     colonnes_conversations = {
         "resume": "TEXT NOT NULL DEFAULT ''",
         "archivee": "BOOLEAN NOT NULL DEFAULT FALSE",
+        "project_id": "INTEGER NULL",
     }
     colonnes_existantes = {colonne["name"] for colonne in inspect(engine).get_columns("conversations")}
     with engine.begin() as connexion:

@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 from core.utils import BASE_DIR, lire_json
 from memory import se_souvenir_tout
 from config import CLE_API, MODELE_GEMINI, MAX_MESSAGES_CONTEXTE
-from database import User, session_base
+from database import User, UserPlugin, session_base
 from datetime import datetime
 from temps_reel import contexte_temps_reel
 
@@ -53,6 +53,15 @@ def _reglages_reponse(user_id=None):
     if niveau not in {"free", "pro", "prime"}:
         niveau = "free"
     return consignes, longueur, niveau
+
+
+def _plugins_actifs(user_id=None):
+    actifs = {"meteo", "actualites", "statistiques"}
+    if not user_id:
+        return actifs
+    with session_base() as db:
+        desactives = db.query(UserPlugin.plugin).filter_by(user_id=user_id, enabled=False).all()
+    return actifs - {plugin for (plugin,) in desactives}
 
 
 # ---------------------------------------------------------------------------
@@ -211,12 +220,12 @@ def _message_erreur_http(code, detail: str = "", retry_after: int = 0) -> str:
 
 def demander_a_lia(message: str, historique=None, resume: str = "",
                    consignes: str = "", longueur: str = "standard",
-                   niveau: str = "free") -> str:
+                   niveau: str = "free", user_id=None) -> str:
     """Requête synchrone (non-streaming) vers Gemini."""
     if not CLE_API:
         return "La clé Gemini n'est pas configurée. Ajoute GEMINI_API_KEY dans le fichier .env."
 
-    contexte_live = contexte_temps_reel(message)
+    contexte_live = contexte_temps_reel(message, _plugins_actifs(user_id))
     corps = {
         "system_instruction": {"parts": [{"text": _instruction_systeme(resume, consignes, niveau, contexte_live)}]},
         "contents": _construire_contents(message, historique),
@@ -257,7 +266,7 @@ def streamer_a_lia(message: str, historique=None, resume: str = "", user_id=None
         return
 
     consignes, longueur, niveau = _reglages_reponse(user_id)
-    contexte_live = contexte_temps_reel(message)
+    contexte_live = contexte_temps_reel(message, _plugins_actifs(user_id))
     corps = {
         "system_instruction": {"parts": [{"text": _instruction_systeme(resume, consignes, niveau, contexte_live)}]},
         "contents": _construire_contents(message, historique),
@@ -339,7 +348,7 @@ def demander_a_lia_image(
     })
 
     consignes, _, niveau = _reglages_reponse(user_id)
-    contexte_live = contexte_temps_reel(texte_message)
+    contexte_live = contexte_temps_reel(texte_message, _plugins_actifs(user_id))
     corps = {
         "system_instruction": {"parts": [{"text": _instruction_systeme(resume, consignes, niveau, contexte_live)}]},
         "contents": contents,
@@ -440,4 +449,4 @@ def reflechir(message: str, historique=None, user_id=None, resume: str = "") -> 
             return reponse
 
     consignes, longueur, niveau = _reglages_reponse(user_id)
-    return demander_a_lia(message, historique, resume, consignes, longueur, niveau)
+    return demander_a_lia(message, historique, resume, consignes, longueur, niveau, user_id)

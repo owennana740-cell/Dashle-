@@ -127,7 +127,7 @@ def _ville_demandee(message):
     return ville.strip(" \t,.-")[:80]
 
 
-def contexte_temps_reel(message):
+def contexte_temps_reel(message, activites=None):
     texte = (message or "").casefold()
     mots_meteo = ("météo", "meteo", "temps qu'il fait", "weather", "température actuelle")
     mots_actualites = ("actualité", "actualités", "actualite", "actualites", "nouvelles récentes", "news", "latest news")
@@ -135,6 +135,9 @@ def contexte_temps_reel(message):
     demande_meteo = any(mot in texte for mot in mots_meteo)
     demande_actualites = any(mot in texte for mot in mots_actualites)
     demande_horloge = any(mot in texte for mot in mots_horloge)
+    activites = set(activites or {"meteo", "actualites"})
+    demande_meteo = demande_meteo and "meteo" in activites
+    demande_actualites = demande_actualites and "actualites" in activites
     if not (demande_meteo or demande_actualites or demande_horloge):
         return ""
 
