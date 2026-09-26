@@ -1817,12 +1817,11 @@ function bloquerEnvoi(secondes) {
   }, 1000);
 }
 
-function estDemandePdfTempsReel(texte) {
+function estDemandePdf(texte) {
   const normalise = String(texte || '').toLocaleLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
   const demandePdf = /\bpdf\b/.test(normalise)
-    && /\b(genere|generer|creer|cree|fabrique|telecharger|telecharge|produis|produire)\b/.test(normalise);
-  const sujetTempsReel = /\b(temps\s+reel|meteo|actualites?|nouvelles\s+recentes|date\s+et\s+heure|heure\s+locale)\b/.test(normalise);
-  return demandePdf && sujetTempsReel;
+    && /\b(genere|generer|creer|cree|fais|faire|fabrique|telecharger|telecharge|produis|produire)\b/.test(normalise);
+  return demandePdf;
 }
 
 async function genererPdfTempsReelDansChat(texte) {
@@ -2727,7 +2726,7 @@ form.addEventListener('submit', async function(e) {
 
   if (!texte) return;
 
-  if (!vocalActif && estDemandePdfTempsReel(texte)) {
+  if (!vocalActif && estDemandePdf(texte)) {
     await genererPdfTempsReelDansChat(texte);
     return;
   }
