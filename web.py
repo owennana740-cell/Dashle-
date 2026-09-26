@@ -1819,9 +1819,13 @@ function bloquerEnvoi(secondes) {
 
 function estDemandePdf(texte) {
   const normalise = String(texte || '').toLocaleLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-  const demandePdf = /\bpdf\b/.test(normalise)
+  return /\bpdf\b/.test(normalise)
     && /\b(genere|generer|creer|cree|fais|faire|fabrique|telecharger|telecharge|produis|produire)\b/.test(normalise);
-  return demandePdf;
+}
+
+function estPdfTempsReel(texte) {
+  const normalise = String(texte || '').toLocaleLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  return /\b(meteo|actualites?|nouvelles recentes|temps reel|date et heure|heure locale)\b/.test(normalise);
 }
 
 async function genererPdfTempsReelDansChat(texte) {
@@ -1834,6 +1838,8 @@ async function genererPdfTempsReelDansChat(texte) {
     fuseau: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
     ville: '',
   });
+  const pdfTempsReel = estPdfTempsReel(texte);
+  if (!pdfTempsReel) donnees.set('sujet', texte);
   const headers = { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' };
   if (estConnecte) headers['X-CSRF-Token'] = csrfToken;
 
@@ -1851,12 +1857,14 @@ async function genererPdfTempsReelDansChat(texte) {
       throw new Error('Le fichier reçu n’est pas un PDF valide. Réessaie.');
     }
     const url = URL.createObjectURL(fichier);
-    const enveloppe = ajouterReponse('Voici ton PDF avec les informations du Temps réel.', '');
+    const enveloppe = ajouterReponse(pdfTempsReel
+      ? 'Voici ton PDF avec les informations du Temps réel.'
+      : 'Voici le PDF demandé sur ton sujet.', '');
     const message = enveloppe.querySelector('.msg');
     const lien = document.createElement('a');
     lien.className = 'pdf-telechargement-chat';
     lien.href = url;
-    lien.download = 'dashle-temps-maintenant.pdf';
+    lien.download = pdfTempsReel ? 'dashle-temps-maintenant.pdf' : 'dashle-document.pdf';
     lien.textContent = 'Télécharger le PDF';
     message.appendChild(document.createElement('br'));
     message.appendChild(lien);
@@ -4302,6 +4310,33 @@ def telecharger_pdf_temps_reel():
     styles.add(ParagraphStyle(name="DashleHeading", parent=styles["Heading2"], fontName="DashleUnicode-Bold", fontSize=15, leading=20, textColor=colors.HexColor("#176b54"), spaceBefore=16, spaceAfter=7))
     styles.add(ParagraphStyle(name="DashleBody", parent=styles["BodyText"], fontName="DashleUnicode", fontSize=10.5, leading=16, spaceAfter=6))
     styles.add(ParagraphStyle(name="DashleLabel", parent=styles["BodyText"], fontName="DashleUnicode-Bold", fontSize=10.5, leading=16, spaceAfter=3))
+
+    sujet = request.form.get("sujet", "").strip()[:2000]
+    if sujet:
+        try:
+            reponse_sujet = traiter_message(sujet, user_id=session.get("user_id"))
+        except Exception:
+            app.logger.exception("Échec de génération du contenu PDF pour le sujet demandé")
+            return jsonify({"erreur": "Le contenu du PDF n’a pas pu être généré."}), 502
+        titre_sujet = sujet
+        paragraphs = [
+            Paragraph(html_escape(titre_sujet), styles["DashleTitle"]),
+            Paragraph("Document préparé par DASHLE", styles["DashleLabel"]),
+        ]
+        for bloc in str(reponse_sujet or "").splitlines():
+            bloc = bloc.strip()
+            if bloc:
+                paragraphs.append(Paragraph(html_escape(bloc), styles["DashleBody"]))
+        sortie_sujet = io.BytesIO()
+        SimpleDocTemplate(
+            sortie_sujet, pagesize=A4, rightMargin=52, leftMargin=52,
+            topMargin=48, bottomMargin=48, title=titre_sujet, author="DASHLE",
+        ).build(paragraphs)
+        sortie_sujet.seek(0)
+        return send_file(
+            sortie_sujet, mimetype="application/pdf", as_attachment=True,
+            download_name="dashle-document.pdf",
+        )
 
     sortie = io.BytesIO()
     document = SimpleDocTemplate(
