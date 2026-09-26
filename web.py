@@ -2128,6 +2128,7 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
   };
 
   reco.onstart = function() {
+    console.log('[DASHLE][SpeechRecognition] onstart', { mode: modeActuel, vocalActif: vocalActif });
     dernierIndexFinalVocal = 0;
     recoResultatsAutorises = !recoMutePendantTTS && !syntheseEnCours && !reponseEnCours;
     if (vocalActif && modeActuel === 'vocal') {
@@ -2139,6 +2140,14 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
   };
 
   reco.onresult = function(e) {
+    console.log('[DASHLE][SpeechRecognition] onresult', {
+      mode: modeActuel,
+      resultIndex: e.resultIndex,
+      results: Array.from(e.results || []).map(function(r) {
+        return { transcript: r[0] && r[0].transcript, isFinal: r.isFinal };
+      }),
+      resultatsAutorises: recoResultatsAutorises
+    });
     if (!recoResultatsAutorises || recoMutePendantTTS || syntheseEnCours
         || (vadDebutSynthese > 0 && performance.now() - vadDebutSynthese < VAD_DELAI_POST)) {
       return;
@@ -2188,6 +2197,9 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
   };
 
   reco.onend = function() {
+    console.log('[DASHLE][SpeechRecognition] onend', {
+      mode: modeActuel, vocalActif: vocalActif, transcription: transcriptionFinaleVocale
+    });
     btnMicro.classList.remove('actif');
     recoEnCours = false;  // reco s'est arrêté, le guard est libéré
     recoResultatsAutorises = false;
@@ -2205,6 +2217,7 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
   };
 
   reco.onerror = function(e) {
+    console.log('[DASHLE][SpeechRecognition] onerror', { error: e.error, message: e.message, mode: modeActuel });
     btnMicro.classList.remove('actif');
     recoResultatsAutorises = false;
     if (vocalActif && (e.error === 'not-allowed' || e.error === 'service-not-allowed')) {
