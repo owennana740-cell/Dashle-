@@ -37,7 +37,6 @@ try:
 except Exception:
     PIL_DISPONIBLE = False
 
-DEBUG_VOCAL = True
 
 app = Flask(__name__)
 app.config.update(
@@ -925,29 +924,6 @@ video#apercu-fichier-media { object-fit: contain; }
 }
 #statut-vocal.visible { display: block; }
 
-# Journal temporaire, affiché uniquement pendant une session vocale active.
-#debug-vocal {
-  display: none;
-  position: fixed;
-  z-index: 8;
-  left: 50%;
-  bottom: calc(66px + env(safe-area-inset-bottom));
-  transform: translateX(-50%);
-  width: min(92vw, 640px);
-  max-height: 108px;
-  overflow: hidden;
-  margin: 0;
-  padding: 7px 9px;
-  border: 1px solid rgba(255,255,255,.18);
-  border-radius: 8px;
-  background: rgba(0,0,0,.55);
-  color: #effff8;
-  font: 10px/1.4 Consolas, monospace;
-  white-space: pre-wrap;
-  pointer-events: none;
-}
-body.debug-vocal-actif #debug-vocal { display: block; }
-
 /* ---- Mode vocal plein écran ---- */
 #mode-vocal {
   display: none;
@@ -1407,8 +1383,6 @@ if ('serviceWorker' in navigator) {
     <div class="etat-vocal" id="etat-vocal">En attente</div>
   </div>
 </section>
-<pre id="debug-vocal" aria-label="Journal de debug vocal"></pre>
-
 <form class="bas" id="form-message" autocomplete="off" method="post" action="">
   <input type="file" id="image-input" accept="image/*,video/*" style="display:none;">
   <button type="button" id="btn-attach" class="btn-attach" title="Ajouter une image ou vidéo" aria-label="Ajouter une image ou vidéo" aria-haspopup="dialog" aria-controls="feuille-fichiers">+
@@ -1499,28 +1473,6 @@ const estConnecte      = __EST_CONNECTE__;
 const urlFlux          = __URL_FLUX__;
 const urlImage         = __URL_IMAGE__;
 const conversationId   = __CONV_ID__;
-const DEBUG_VOCAL = __DEBUG_VOCAL__;
-const debugVocalLines = [];
-let debugVocalRenderPending = false;
-let debugVocalDernierRms = -Infinity;
-const DEBUG_VOCAL_RMS_INTERVALLE = 2000;
-
-function journaliserDebugVocal(message) {
-  if (!DEBUG_VOCAL) return;
-  const maintenant = new Date();
-  const horodatage = [maintenant.getHours(), maintenant.getMinutes(), maintenant.getSeconds()]
-    .map(function(partie) { return String(partie).padStart(2, '0'); }).join(':');
-  debugVocalLines.push(horodatage + ' ' + message);
-  if (debugVocalLines.length > 5) debugVocalLines.shift();
-  if (debugVocalRenderPending) return;
-  debugVocalRenderPending = true;
-  window.setTimeout(function() {
-    debugVocalRenderPending = false;
-    const panneau = document.getElementById('debug-vocal');
-    if (panneau) panneau.textContent = debugVocalLines.join('\n');
-  }, 80);
-}
-
 let reco = null;
 let recoEnCours = false;
 let recoResultatsAutorises = false;
@@ -1531,9 +1483,6 @@ let modeActuel          = 'texte';   // 'texte' | 'dictee' | 'vocal'
 let requeteActiveController = null;
 let reponseEnCours      = false;
 let interruptionDemandee = false;
-let indexCaractereUtterance = 0;
-let reprisePhraseInterrompue = null;
-let minuteurReprisePhrase = null;
 
 // VAD (Voice Activity Detection) — interruption pendant que Dashle parle
 let vadStream       = null;
@@ -1565,9 +1514,12 @@ const VAD_DUREE_MIN   = 350;   // ms continus avant interruption (↑ anti-plosi
 const VAD_COOLDOWN    = 1200;  // ms minimum entre deux interruptions
 const VAD_DELAI_POST  = 350;   // ms de délai anti-écho après fin réelle de synthèse
 
-// Compteur de relances automatiques pour éviter les boucles infinies (P2).
+// Compteur de backoff pour les relances SpeechRecognition sans résultat.
 let nbRelancesVocal = 0;
-const MAX_RELANCES_VOCAL = 3;
+let minuteurRelanceReco = null;
+const DELAI_RELANCE_RECO_INITIAL = 300;
+const DELAI_RELANCE_RECO_MAX = 5000;
+const MAX_PALIERS_RELANCE_RECO = 6;
 
 // Identifiant du watchdog d'écoute (clearTimeout pour l'annuler).
 let watchdogEcoute = null;
@@ -1626,14 +1578,9 @@ function afficherEtatVocal(etat, libelle) {
   etatVocalEl.textContent  = libelle;
 }
 
-function actualiserDebugVocalActif() {
-  document.body.classList.toggle('debug-vocal-actif', DEBUG_VOCAL && vocalActif);
-}
-
 function ouvrirModeVocal() {
   modeVocalEl.classList.add('visible');
   modeVocalEl.setAttribute('aria-hidden', 'false');
-  actualiserDebugVocalActif();
 }
 
 function fermerModeVocal() {
@@ -1803,12 +1750,13 @@ function arreterGeneration() {
 async function demarrerVAD() {
   if (vadPret || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return vadPret;
   try {
-    vadStream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 }
-    });
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
     if (!AudioCtx) return false;
     vadAudioContext = new AudioCtx();
+    if (vadAudioContext.state === 'suspended') await vadAudioContext.resume();
+    vadStream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 }
+    });
     vadSource   = vadAudioContext.createMediaStreamSource(vadStream);
     vadAnalyser = vadAudioContext.createAnalyser();
     vadAnalyser.fftSize = 1024;
@@ -1855,12 +1803,6 @@ function surveillerParole() {
       somme += x * x;
     }
     const rms = Math.sqrt(somme / donnees.length);
-    const now = performance.now();
-    if (now - debugVocalDernierRms >= DEBUG_VOCAL_RMS_INTERVALLE) {
-      debugVocalDernierRms = now;
-      journaliserDebugVocal('VAD rms=' + rms.toFixed(3) + ' seuil=' + VAD_SEUIL);
-    }
-
     // Dashle est occupé si SSE en cours OU synthèse en cours.
     const dashleOccupe = reponseEnCours
       || syntheseEnCours
@@ -1894,18 +1836,10 @@ function surveillerParole() {
 function interrompreDashle() {
   if (!vocalActif) return;
   interruptionDemandee = true;
+  const reconnaissanceEnCoursAvantInterruption = recoEnCours;
   const ttsEtaitActif = ('speechSynthesis' in window)
     && (syntheseEnCours || window.speechSynthesis.speaking);
   const utteranceInterrompue = utteranceActuelle;
-  if (minuteurReprisePhrase) clearTimeout(minuteurReprisePhrase);
-  minuteurReprisePhrase = null;
-  reprisePhraseInterrompue = ttsEtaitActif && utteranceInterrompue
-    ? {
-        texte: utteranceInterrompue.text || '',
-        charIndex: indexCaractereUtterance,
-        bouton: lectureActuelle,
-      }
-    : null;
 
   // 1. Stopper immédiatement la synthèse vocale.
   // syntheseEnCours et vadDebutSynthese sont remis à 0 : la période
@@ -1936,29 +1870,16 @@ function interrompreDashle() {
   btnVocal.classList.remove('parle');
 
   // 5. Redémarrer reco pour capter la nouvelle phrase.
-  // reco.abort() déclenche reco.onend ; recoEnCours=true empêche onend
-  // de lancer un second start() concurrent.
   recoResultatsAutorises = false;
-  recoEnCours = true;
-  try { reco && reco.abort(); } catch(e) {}
+  if (reconnaissanceEnCoursAvantInterruption) {
+    recoEnCours = true;
+    try { reco && reco.abort(); } catch(e) {}
+  }
   function relancerRecoApresInterruption(tentative) {
     if (!vocalActif || !reco) { recoEnCours = false; return; }
     interruptionDemandee = false;
     recoEnCours = false;
     if (demarrerEcouteVocale()) {
-      if (reprisePhraseInterrompue) {
-        const repriseEnAttente = reprisePhraseInterrompue;
-        minuteurReprisePhrase = setTimeout(function() {
-          if (reprisePhraseInterrompue !== repriseEnAttente) return;
-          reprisePhraseInterrompue = null;
-          minuteurReprisePhrase = null;
-          if (!vocalActif) return;
-          const texteRestant = repriseEnAttente.texte.substring(repriseEnAttente.charIndex);
-          if (texteRestant.trim() && repriseEnAttente.bouton && repriseEnAttente.bouton.isConnected) {
-            lireReponse(repriseEnAttente.bouton, texteRestant);
-          }
-        }, 2500);
-      }
       return;
     }
     // abort() peut mettre plus de 120 ms à libérer SpeechRecognition.
@@ -1967,7 +1888,9 @@ function interrompreDashle() {
       setTimeout(function() { relancerRecoApresInterruption(tentative + 1); }, 150);
     }
   }
-  setTimeout(function() { relancerRecoApresInterruption(0); }, 120);
+  // Si reco était déjà arrêtée (cas normal pendant le TTS), ne pas ajouter
+  // de délai après un abort inutile : ouvrir immédiatement la fenêtre d'écoute.
+  setTimeout(function() { relancerRecoApresInterruption(0); }, reconnaissanceEnCoursAvantInterruption ? 120 : 0);
 }
 
 // =====================================================================
@@ -1983,9 +1906,13 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
 
   function demarrerEcouteVocale() {
     if (!vocalActif || recoMutePendantTTS || syntheseEnCours || reponseEnCours
-        || (('speechSynthesis' in window) && window.speechSynthesis.speaking)) return false;
+        || (('speechSynthesis' in window) && window.speechSynthesis.speaking)) {
+      return false;
+    }
     // Ne pas démarrer si un démarrage est déjà en vol (guard anti-doublon).
-    if (recoEnCours) return false;
+    if (recoEnCours) {
+      return false;
+    }
     modeActuel = 'vocal';
     ouvrirModeVocal();
     afficherEtatVocal('ecoute', 'Dashle écoute...');
@@ -1995,27 +1922,48 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
     recoEnCours = true;
     recoResultatsAutorises = false;
     try {
-      journaliserDebugVocal('reco.start()');
       reco.start();
       return true;
     } catch(e) {
       recoEnCours = false;
-      journaliserDebugVocal('reco.start() échec: ' + (e.name || e.message || e));
       console.warn('[DASHLE] Échec du démarrage de la reconnaissance vocale :', e);
       return false;
     }
+  }
+
+  function planifierRelanceReco() {
+    if (minuteurRelanceReco !== null) return;
+    const parleEncore = ('speechSynthesis' in window) && window.speechSynthesis.speaking;
+    if (!vocalActif || interruptionDemandee || recoMutePendantTTS || syntheseEnCours
+        || reponseEnCours || parleEncore) {
+      return;
+    }
+
+    const delai = Math.min(
+      DELAI_RELANCE_RECO_INITIAL * (2 ** nbRelancesVocal),
+      DELAI_RELANCE_RECO_MAX
+    );
+    nbRelancesVocal = Math.min(nbRelancesVocal + 1, MAX_PALIERS_RELANCE_RECO);
+    minuteurRelanceReco = setTimeout(function() {
+      minuteurRelanceReco = null;
+      const ttsActif = ('speechSynthesis' in window) && window.speechSynthesis.speaking;
+      if (!vocalActif || interruptionDemandee || recoEnCours || recoMutePendantTTS
+          || syntheseEnCours || reponseEnCours || ttsActif) {
+        return;
+      }
+      if (!demarrerEcouteVocale()) planifierRelanceReco();
+    }, delai);
   }
 
   btnMicro.onclick = function() {
     if (vocalActif) return;
     modeActuel = 'dictee';
     btnMicro.classList.add('actif');
-    try { journaliserDebugVocal('reco.start() dictée'); reco.start(); } catch(e) { journaliserDebugVocal('reco.start() échec: ' + (e.name || e.message || e)); }
+    try { reco.start(); } catch(e) {}
   };
 
   btnVocal.onclick = async function() {
     vocalActif = !vocalActif;
-    actualiserDebugVocalActif();
     if (vocalActif) {
       btnVocal.classList.add('vocal-on');
       ouvrirModeVocal();
@@ -2038,19 +1986,32 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
   };
 
   reco.onstart = function() {
-    journaliserDebugVocal('reco.onstart');
     recoResultatsAutorises = !recoMutePendantTTS && !syntheseEnCours && !reponseEnCours;
+    if (vocalActif && modeActuel === 'vocal') {
+      afficherEtatVocal('ecoute', 'Dashle écoute...');
+      afficherStatutVocal("🎧 Je t'écoute...");
+      btnVocal.classList.add('ecoute');
+      btnVocal.classList.remove('parle');
+    }
   };
 
   reco.onresult = function(e) {
-    journaliserDebugVocal('reco.onresult');
+    const resultat = e.results && e.results[e.resultIndex || 0];
+    const alternative = resultat && resultat[0];
     if (!recoResultatsAutorises || recoMutePendantTTS || syntheseEnCours
-        || (vadDebutSynthese > 0 && performance.now() - vadDebutSynthese < VAD_DELAI_POST)) return;
-    const transcript = (e.results[0][0].transcript || '').trim();
+        || (vadDebutSynthese > 0 && performance.now() - vadDebutSynthese < VAD_DELAI_POST)) {
+      return;
+    }
+    const transcriptBrut = alternative && alternative.transcript || '';
+    const transcript = transcriptBrut.trim();
     if (!transcript) return;
-    if (minuteurReprisePhrase) clearTimeout(minuteurReprisePhrase);
-    minuteurReprisePhrase = null;
-    reprisePhraseInterrompue = null;
+    if (modeActuel === 'vocal') {
+      nbRelancesVocal = 0;
+      if (minuteurRelanceReco !== null) {
+        clearTimeout(minuteurRelanceReco);
+        minuteurRelanceReco = null;
+      }
+    }
     champ.value = transcript;
     champ.style.height = 'auto';
     if (modeActuel === 'vocal') {
@@ -2069,35 +2030,31 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
     // Ne pas redémarrer si : TTS en cours a muté reco (relance gérée par
     // utteranceActuelle.onend), interruption en cours, SSE en cours,
     // ou synthèse encore active.
-    if (recoMutePendantTTS) return;  // TTS prend la main, onend le relancera
+    if (recoMutePendantTTS) {
+      return;  // TTS prend la main, onend le relancera
+    }
     const synthActive = ('speechSynthesis' in window) && window.speechSynthesis.speaking;
     if (!interruptionDemandee && !reponseEnCours && !syntheseEnCours && !synthActive) {
-      setTimeout(function() {
-        if (!vocalActif || interruptionDemandee || recoEnCours || recoMutePendantTTS
-            || reponseEnCours || syntheseEnCours) return;
-        const encoreSynth = ('speechSynthesis' in window) && window.speechSynthesis.speaking;
-        if (!reponseEnCours && !encoreSynth) {
-          recoEnCours = true;
-          try { journaliserDebugVocal('reco.start() retry reco.onend'); reco.start(); } catch(e) { recoEnCours = false; journaliserDebugVocal('reco.start() échec: ' + (e.name || e.message || e)); }
-        }
-      }, 200);
+      planifierRelanceReco();
     }
   };
 
   reco.onerror = function(e) {
-    journaliserDebugVocal('reco.onerror: ' + e.error);
     btnMicro.classList.remove('actif');
     recoResultatsAutorises = false;
+    if (vocalActif && (e.error === 'not-allowed' || e.error === 'service-not-allowed')) {
+      afficherEtatVocal('attente', 'Micro refusé');
+      afficherStatutVocal('Autorise le micro pour Dashle dans les réglages du navigateur, puis relance le mode vocal.');
+      return;
+    }
     if (vocalActif && e.error !== 'aborted') {
       if (!recoMutePendantTTS && !syntheseEnCours && !reponseEnCours) {
         afficherEtatVocal('attente', 'En attente du micro...');
-        afficherStatutVocal("🎧 Petit souci, je réessaie...");
+        afficherStatutVocal(e.error === 'network'
+          ? 'La reconnaissance vocale a perdu sa connexion. Je réessaie…'
+          : "🎧 Petit souci, je réessaie...");
       }
-      setTimeout(function() {
-        if (vocalActif && !recoMutePendantTTS && !syntheseEnCours && !reponseEnCours) {
-          demarrerEcouteVocale();
-        }
-      }, 700);
+      planifierRelanceReco();
     }
   };
 
@@ -2115,7 +2072,10 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
   };
 } else {
   btnMicro.style.display = 'none';
-  btnVocal.style.display = 'none';
+  btnVocal.title = 'Reconnaissance vocale non prise en charge par ce navigateur';
+  btnVocal.addEventListener('click', function() {
+    afficherStatutVocal('La reconnaissance vocale DASHLE n’est pas prise en charge dans ce navigateur. Essaie Chrome sur Android ou Chrome/Edge sur ordinateur.');
+  });
 }
 
 // =====================================================================
@@ -2205,12 +2165,11 @@ function lireReponse(bouton, texteForce) {
   }
   arreterLecture();
   const etat = bouton.closest('.actions-reponse').querySelector('.lecture-etat');
-  utteranceActuelle = new SpeechSynthesisUtterance(nettoyerPourLecture(texte));
+  const texteVocal = nettoyerPourLecture(texte);
+  utteranceActuelle = new SpeechSynthesisUtterance(texteVocal);
   if (utteranceActuelle.text.toLowerCase().includes('copyright')) {
     console.warn('[DASHLE TTS] Texte transmis contenant Copyright :', utteranceActuelle.text);
   }
-  const utteranceLancee = utteranceActuelle;
-  indexCaractereUtterance = 0;
   utteranceActuelle.lang   = 'fr-FR';
   utteranceActuelle.voice  = choisirVoixFrancaise();
   utteranceActuelle.rate   = Number(preferencesVocales.voix_vitesse) || 1;
@@ -2220,11 +2179,6 @@ function lireReponse(bouton, texteForce) {
   bouton.classList.add('actif');
   bouton.textContent = '⏸';
   etat.textContent = 'Lecture';
-
-  utteranceActuelle.onboundary = function(e) {
-    if (utteranceActuelle !== utteranceLancee || !Number.isFinite(e.charIndex)) return;
-    indexCaractereUtterance = Math.max(0, e.charIndex);
-  };
 
   utteranceActuelle.onstart = function() {
     // L'audio démarre réellement : on arme le verrou d'état.
@@ -2278,10 +2232,12 @@ function lireReponse(bouton, texteForce) {
   if (vocalActif && reco) {
     recoMutePendantTTS = true;
     recoResultatsAutorises = false;
-    recoEnCours = true;   // bloque reco.onend
-    try { reco.abort(); } catch(e) {}
-    // recoEnCours est remis à false par reco.onend, mais recoMutePendantTTS
-    // empêche onend de relancer reco — la relance est dans utteranceActuelle.onend.
+    if (recoEnCours) {
+      // Ne laisser recoEnCours vrai que si une session active doit encore
+      // produire onend pour libérer ce verrou.
+      try { reco.abort(); } catch(e) {}
+    }
+    // recoMutePendantTTS empêche reco.onend de relancer l'écoute pendant le TTS.
   }
 
   // On n'arme PAS syntheseEnCours ici : speak() met l'utterance en file
@@ -2367,7 +2323,6 @@ document.getElementById('reduire-vocal').addEventListener('click', function() {
 
 document.getElementById('fermer-vocal').addEventListener('click', function() {
   vocalActif = false;
-  actualiserDebugVocalActif();
   btnVocal.classList.remove('vocal-on', 'ecoute', 'parle');
   try { reco && reco.stop(); } catch(e) {}
   afficherStatutVocal('');
@@ -2614,7 +2569,6 @@ form.addEventListener('submit', async function(e) {
 
   let reponseElement = null;
   let messageElement = null;
-
   const headers = {
     'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
     'Accept': 'text/event-stream',
@@ -2661,7 +2615,9 @@ form.addEventListener('submit', async function(e) {
         if (!reponseEnCours && !requeteActiveController) retirerReflexion();
         return;
       }
-      if (done) break;
+      if (done) {
+        break;
+      }
       tampon += decodeur.decode(value, { stream: true });
       const lignes = tampon.split('\n');
       tampon = lignes.pop();
@@ -2670,7 +2626,9 @@ form.addEventListener('submit', async function(e) {
         if (!ligne.startsWith('data:')) continue;
         let ev;
         try { ev = JSON.parse(ligne.slice(5).trim()); } catch(ex) { continue; }
-        if (ev.erreur) throw new Error(ev.erreur);
+        if (ev.erreur) {
+          throw new Error(ev.erreur);
+        }
         if (ev.morceau) {
           reponseTexte += ev.morceau;
           messageElement.textContent = reponseTexte;
@@ -3298,7 +3256,6 @@ def _rendre_page(messages, utilisateur=None, conversations=None, conversation_id
     html = html.replace("__URL_FLUX__",      json.dumps(url_flux))
     html = html.replace("__URL_IMAGE__",     json.dumps(url_image))
     html = html.replace("__CONV_ID__",       str(conversation_id or 0))
-    html = html.replace("__DEBUG_VOCAL__",   "true" if DEBUG_VOCAL else "false")
     return html
 
 
@@ -3890,7 +3847,6 @@ def repondre_flux():
             "Cache-Control": "no-cache, no-store, must-revalidate",
             "Pragma":        "no-cache",
             "X-Accel-Buffering": "no",
-            "Connection":    "keep-alive",
         },
     )
 
