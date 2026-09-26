@@ -21,9 +21,12 @@ import hmac
 import requests
 from datetime import datetime, timedelta, timezone
 import calendar
+from html import escape as html_escape
+from urllib.parse import urlparse
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from flask import (
     Flask, Response, request, render_template_string,
-    redirect, stream_with_context, url_for, session, jsonify,
+    redirect, stream_with_context, url_for, session, jsonify, send_file,
 )
 from werkzeug.security import check_password_hash, generate_password_hash
 from sqlalchemy.exc import IntegrityError
@@ -166,7 +169,8 @@ _ROUTES_PUBLIQUES = {
     "accueil", "actualites", "repondre_flux", "repondre", "repondre_image",
     "confirmer_message", "nouvelle_conv", "conditions_utilisation",
     "health", "robots_txt", "sitemap_xml", "tarifs", "paiement_retour",
-    "cinetpay_notification", "stripe_webhook", "temps_reel", "api_temps_reel", "admin",
+    "cinetpay_notification", "stripe_webhook", "temps_reel", "api_temps_reel",
+    "telecharger_pdf_temps_reel", "admin",
 }
 
 
@@ -1129,6 +1133,8 @@ video#apercu-fichier-media { object-fit: contain; }
 .bloc-code pre { margin:0; }
 .msg.bot ul,.msg.bot ol { padding-left:1.5em; }
 .msg.bot a { color:var(--vert-fonce); }
+.msg.bot .pdf-telechargement-chat { display:inline-flex;align-items:center;margin-top:10px;padding:9px 14px;border-radius:10px;background:var(--accent-gradient);color:#fff;text-decoration:none;font-weight:650;box-shadow:0 3px 10px rgba(34,160,125,.18); }
+.msg.bot .pdf-telechargement-chat:hover { filter:brightness(.96); }
 .message-wrap { max-width:min(95%,var(--largeur-conversation)); }
 .image-message-lien { display:block; margin-top:4px; }
 .image-message { display:block; max-width:min(280px,70vw); max-height:320px; object-fit:contain; border-radius:12px; cursor:zoom-in; }
@@ -1319,6 +1325,7 @@ if ('serviceWorker' in navigator) {
   <a href="{{ url_for('actualites') }}">&#128240; Nouveaut&eacute;s DASHLE</a>
   <a href="{{ url_for('tarifs') }}">&#9733; Tarifs</a>
   <a href="{{ url_for('temps_reel') }}">&#127780; Temps r&eacute;el</a>
+  {% if est_admin %}<a href="{{ url_for('admin') }}">Administration</a>{% endif %}
   {% if utilisateur %}
     <a href="{{ url_for('parametres') }}">&#9881; Param&egrave;tres</a>
     <a href="{{ url_for('statistiques') }}">&#128202; Statistiques</a>
@@ -1810,6 +1817,57 @@ function bloquerEnvoi(secondes) {
   }, 1000);
 }
 
+function estDemandePdfTempsReel(texte) {
+  const normalise = String(texte || '').toLocaleLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const demandePdf = /\bpdf\b/.test(normalise)
+    && /\b(genere|generer|creer|cree|fabrique|telecharger|telecharge|produis|produire)\b/.test(normalise);
+  const sujetTempsReel = /\b(temps\s+reel|meteo|actualites?|nouvelles\s+recentes|date\s+et\s+heure|heure\s+locale)\b/.test(normalise);
+  return demandePdf && sujetTempsReel;
+}
+
+async function genererPdfTempsReelDansChat(texte) {
+  ajouterMessage(texte, 'user');
+  champ.value = '';
+  champ.style.height = 'auto';
+  afficherReflexion();
+
+  const donnees = new URLSearchParams({
+    fuseau: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+    ville: '',
+  });
+  const headers = { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' };
+  if (estConnecte) headers['X-CSRF-Token'] = csrfToken;
+
+  try {
+    const reponse = await fetch('/telecharger-pdf-temps-reel', {
+      method: 'POST', headers, body: donnees.toString(), cache: 'no-store',
+    });
+    const type = (reponse.headers.get('Content-Type') || '').toLowerCase();
+    if (!reponse.ok || !type.includes('application/pdf')) {
+      throw new Error('Le PDF n’a pas pu être généré. Réessaie.');
+    }
+    const fichier = await reponse.blob();
+    const signature = new Uint8Array(await fichier.slice(0, 5).arrayBuffer());
+    if (signature.length !== 5 || String.fromCharCode.apply(null, signature) !== '%PDF-') {
+      throw new Error('Le fichier reçu n’est pas un PDF valide. Réessaie.');
+    }
+    const url = URL.createObjectURL(fichier);
+    const enveloppe = ajouterReponse('Voici ton PDF avec les informations du Temps réel.', '');
+    const message = enveloppe.querySelector('.msg');
+    const lien = document.createElement('a');
+    lien.className = 'pdf-telechargement-chat';
+    lien.href = url;
+    lien.download = 'dashle-temps-maintenant.pdf';
+    lien.textContent = 'Télécharger le PDF';
+    message.appendChild(document.createElement('br'));
+    message.appendChild(lien);
+  } catch (erreur) {
+    ajouterMessage(erreur.message || 'Le PDF n’a pas pu être généré. Réessaie.', 'bot');
+  } finally {
+    retirerReflexion();
+  }
+}
+
 // =====================================================================
 // Gestion des générations SSE
 // =====================================================================
@@ -2013,7 +2071,7 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
   }
 
   function planifierRelanceReco() {
-    if (minuteurRelanceReco !== null) return;
+    if (minuteurRelanceReco !== null || minuteurFinPhraseVocale !== null) return;
     const parleEncore = ('speechSynthesis' in window) && window.speechSynthesis.speaking;
     if (!vocalActif || interruptionDemandee || recoMutePendantTTS || syntheseEnCours
         || reponseEnCours || parleEncore) {
@@ -2669,6 +2727,11 @@ form.addEventListener('submit', async function(e) {
 
   if (!texte) return;
 
+  if (!vocalActif && estDemandePdfTempsReel(texte)) {
+    await genererPdfTempsReelDansChat(texte);
+    return;
+  }
+
   if (vocalActif && modeActuel === 'vocal') {
     reinitialiserTranscriptionVocale();
     recoResultatsAutorises = false;
@@ -3280,11 +3343,12 @@ TEMPS_REEL_PAGE = """
 <div class="grid"><section class="card"><h2>Date et heure locales</h2><div id="clock">—</div><p class="subtle">Affichées selon le fuseau horaire de ton appareil.</p></section>
 <section class="card"><h2>Météo du jour</h2><label for="ville">Ville</label><div class="field"><input id="ville" maxlength="80" value="{{ ville_defaut }}" placeholder="Ex. Dakar"><button id="charger-meteo" type="button">Afficher</button></div><p id="weather" class="weather">Saisis une ville pour consulter la météo.</p><p class="source">Données météo : <a href="https://openweathermap.org/" target="_blank" rel="noopener">OpenWeather</a>.</p></section></div>
 <section class="card"><h2>Actualités récentes</h2><ul id="news" class="news"><li>Chargement des titres…</li></ul><p class="source">Titres fournis par le flux RSS officiel de <a href="https://www.lemonde.fr/" target="_blank" rel="noopener">Le Monde</a>. Ouvre les liens pour lire les articles à la source.</p></section>
+<section class="card"><h2>T\u00e9l\u00e9charger un PDF</h2><p class="subtle">G\u00e9n\u00e8re un document dat\u00e9 avec les informations m\u00e9t\u00e9o et les actualit\u00e9s disponibles au moment du t\u00e9l\u00e9chargement.</p><form method="post" action="{{ url_for('telecharger_pdf_temps_reel') }}" id="pdf-form"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="fuseau" id="pdf-fuseau"><input type="hidden" name="ville" id="pdf-ville"><button type="submit">T\u00e9l\u00e9charger le PDF</button></form></section>
 </main><script>
 const horloge=document.getElementById('clock');function mettreAJourHorloge(){horloge.textContent=new Intl.DateTimeFormat('fr-FR',{dateStyle:'full',timeStyle:'medium'}).format(new Date());}mettreAJourHorloge();setInterval(mettreAJourHorloge,1000);
 function ajouterNouvelles(items){const liste=document.getElementById('news');liste.replaceChildren();if(!items.length){const li=document.createElement('li');li.textContent='Le flux d’actualités est momentanément indisponible.';liste.appendChild(li);return;}items.forEach(function(item){const li=document.createElement('li'),lien=document.createElement('a');lien.href=item.url;lien.target='_blank';lien.rel='noopener';lien.textContent=item.titre;li.appendChild(lien);if(item.date){const date=document.createElement('span');date.className='subtle';date.textContent=' · '+item.date;li.appendChild(date);}liste.appendChild(li);});}
-function chargerTemps(ville){const args=ville?'?ville='+encodeURIComponent(ville):'';fetch('/api/temps-reel'+args,{cache:'no-store'}).then(function(r){return r.json();}).then(function(data){ajouterNouvelles(data.actualites||[]);const zone=document.getElementById('weather');if(data.meteo&&data.meteo.erreur){zone.textContent=data.meteo.erreur;return;}const m=data.meteo;if(!m){zone.textContent='Saisis une ville pour consulter la météo.';return;}zone.textContent=m.ville+(m.pays?', '+m.pays:'')+' · '+m.description+' · '+m.temperature+' °C (ressenti '+m.ressenti+' °C), minimum '+m.minimum+' °C, maximum '+m.maximum+' °C'+(m.probabilite_pluie===null?'':' · pluie '+m.probabilite_pluie+' %')+'.';}).catch(function(){document.getElementById('news').textContent='Les données temps réel sont momentanément indisponibles.';});}
-document.getElementById('charger-meteo').addEventListener('click',function(){chargerTemps(document.getElementById('ville').value.trim());});document.getElementById('ville').addEventListener('keydown',function(e){if(e.key==='Enter')chargerTemps(this.value.trim());});chargerTemps(document.getElementById('ville').value.trim());
+function chargerTemps(ville){const args=ville?'?ville='+encodeURIComponent(ville):'';fetch('/api/temps-reel'+args,{cache:'no-store'}).then(function(r){if(!r.ok)throw new Error('Temps r\u00e9el indisponible');return r.json();}).then(function(data){ajouterNouvelles(data.actualites||[]);const zone=document.getElementById('weather');if(data.meteo&&data.meteo.erreur){zone.textContent=data.meteo.erreur;return;}const m=data.meteo;if(!m){zone.textContent='Saisis une ville pour consulter la météo.';return;}var plages=(m.minimum===null||m.minimum===undefined||m.maximum===null||m.maximum===undefined)?' \u00b7 extr\u00eames du jour indisponibles':' \u00b7 minimum '+m.minimum+' \u00b0C, maximum '+m.maximum+' \u00b0C';var pluie=m.probabilite_pluie===null||m.probabilite_pluie===undefined?'':' \u00b7 pluie '+m.probabilite_pluie+' %';zone.textContent=m.ville+(m.pays?', '+m.pays:'')+' \u00b7 '+m.description+' \u00b7 '+m.temperature+' \u00b0C (ressenti '+m.ressenti+' \u00b0C)'+plages+pluie+'.';}).catch(function(){document.getElementById('weather').textContent='Le service m\u00e9t\u00e9o est momentan\u00e9ment indisponible.';document.getElementById('news').textContent='Le flux d\u2019actualit\u00e9s est momentan\u00e9ment indisponible.';});}
+document.getElementById('pdf-form').addEventListener('submit',function(){document.getElementById('pdf-fuseau').value=Intl.DateTimeFormat().resolvedOptions().timeZone||'UTC';document.getElementById('pdf-ville').value=document.getElementById('ville').value.trim();});document.getElementById('charger-meteo').addEventListener('click',function(){chargerTemps(document.getElementById('ville').value.trim());});document.getElementById('ville').addEventListener('keydown',function(e){if(e.key==='Enter')chargerTemps(this.value.trim());});chargerTemps(document.getElementById('ville').value.trim());
 </script></body></html>
 """
 
@@ -3442,6 +3506,7 @@ def _rendre_page(messages, utilisateur=None, conversations=None, conversation_id
         conversation_id=conversation_id or 0,
         preferences=prefs,
         csrf_token=jeton_csrf(),
+        est_admin=bool(utilisateur and utilisateur.strip().lower() in emails_owner()),
     )
 
     # Injection des constantes JS
@@ -4175,6 +4240,7 @@ def temps_reel():
     return render_template_string(
         TEMPS_REEL_PAGE,
         ville_defaut=os.environ.get("DASHLE_METEO_VILLE", ""),
+        csrf_token=jeton_csrf(),
     )
 
 
@@ -4188,6 +4254,92 @@ def api_temps_reel():
         "meteo": meteo,
         "actualites": actualites_recentes(8),
     })
+
+
+@app.route("/telecharger-pdf-temps-reel", methods=["POST"])
+def telecharger_pdf_temps_reel():
+    """Generate an on-demand PDF from available weather and news data."""
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_LEFT
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    from reportlab.platypus import Paragraph, SimpleDocTemplate
+
+    fuseau_demande = request.form.get("fuseau", "UTC").strip()[:80] or "UTC"
+    try:
+        zone = ZoneInfo(fuseau_demande)
+    except (ZoneInfoNotFoundError, ValueError):
+        fuseau_demande = "UTC"
+        zone = timezone.utc
+    maintenant = datetime.now(timezone.utc).astimezone(zone)
+    jours = ("lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche")
+    mois = ("janvier", "f\u00e9vrier", "mars", "avril", "mai", "juin", "juillet", "ao\u00fbt", "septembre", "octobre", "novembre", "d\u00e9cembre")
+    date_locale = f"{jours[maintenant.weekday()]} {maintenant.day} {mois[maintenant.month - 1]} {maintenant.year} \u00e0 {maintenant:%H:%M:%S}"
+
+    ville = request.form.get("ville", "").strip()[:80] or os.environ.get("DASHLE_METEO_VILLE", "").strip()[:80]
+    meteo = meteo_du_jour(ville) if ville else None
+    actualites = actualites_recentes(8) or []
+
+    repertoire_polices = os.path.join(app.root_path, "static", "fonts")
+    pdfmetrics.registerFont(TTFont("DashleUnicode", os.path.join(repertoire_polices, "DejaVuSans.ttf")))
+    pdfmetrics.registerFont(TTFont("DashleUnicode-Bold", os.path.join(repertoire_polices, "DejaVuSans-Bold.ttf")))
+    styles = getSampleStyleSheet()
+    styles.add(ParagraphStyle(name="DashleTitle", parent=styles["Title"], fontName="DashleUnicode-Bold", fontSize=22, leading=28, textColor=colors.HexColor("#176b54"), alignment=TA_LEFT, spaceAfter=12))
+    styles.add(ParagraphStyle(name="DashleHeading", parent=styles["Heading2"], fontName="DashleUnicode-Bold", fontSize=15, leading=20, textColor=colors.HexColor("#176b54"), spaceBefore=16, spaceAfter=7))
+    styles.add(ParagraphStyle(name="DashleBody", parent=styles["BodyText"], fontName="DashleUnicode", fontSize=10.5, leading=16, spaceAfter=6))
+    styles.add(ParagraphStyle(name="DashleLabel", parent=styles["BodyText"], fontName="DashleUnicode-Bold", fontSize=10.5, leading=16, spaceAfter=3))
+
+    sortie = io.BytesIO()
+    document = SimpleDocTemplate(
+        sortie, pagesize=A4, rightMargin=52, leftMargin=52,
+        topMargin=48, bottomMargin=48, title="Le temps, maintenant",
+        author="DASHLE",
+    )
+    contenu = [
+        Paragraph("Le temps, maintenant", styles["DashleTitle"]),
+        Paragraph("Date et heure locales", styles["DashleLabel"]),
+        Paragraph(html_escape(date_locale) + f" <font color='#6b7e76'>({html_escape(fuseau_demande)})</font>", styles["DashleBody"]),
+        Paragraph("M\u00e9t\u00e9o du jour", styles["DashleHeading"]),
+    ]
+    if not meteo or meteo.get("erreur"):
+        contenu.extend([
+            Paragraph("Ville", styles["DashleLabel"]),
+            Paragraph(html_escape(ville or "Non renseign\u00e9e"), styles["DashleBody"]),
+            Paragraph("La m\u00e9t\u00e9o n\u2019est pas configur\u00e9e sur le serveur.", styles["DashleBody"]),
+        ])
+    else:
+        nom_ville = ", ".join(part for part in (meteo.get("ville"), meteo.get("pays")) if part)
+        contenu.extend([
+            Paragraph("Ville", styles["DashleLabel"]),
+            Paragraph(html_escape(nom_ville or ville or "Non renseign\u00e9e"), styles["DashleBody"]),
+            Paragraph("Conditions", styles["DashleLabel"]),
+            Paragraph(html_escape(str(meteo.get("description") or "Conditions indisponibles")), styles["DashleBody"]),
+            Paragraph("Temp\u00e9rature : " + html_escape(str(meteo.get("temperature", "indisponible"))) + " \u00b0C", styles["DashleBody"]),
+        ])
+    contenu.append(Paragraph("Source : OpenWeather.", styles["DashleBody"]))
+    contenu.append(Paragraph("Actualit\u00e9s r\u00e9centes", styles["DashleHeading"]))
+    if not actualites:
+        contenu.append(Paragraph("Le flux d\u2019actualit\u00e9s est momentan\u00e9ment indisponible.", styles["DashleBody"]))
+    else:
+        for article in actualites:
+            titre = html_escape(str(article.get("titre") or "Titre indisponible"))
+            url = str(article.get("url") or "")
+            parsed = urlparse(url)
+            if parsed.scheme == "https" and parsed.netloc:
+                titre = f'<link href="{html_escape(url, quote=True)}" color="#16765b">{titre}</link>'
+            contenu.append(Paragraph("&#8226; " + titre, styles["DashleBody"]))
+    contenu.append(Paragraph("Source : Le Monde (flux RSS).", styles["DashleBody"]))
+
+    document.build(contenu)
+    sortie.seek(0)
+    return send_file(
+        sortie,
+        mimetype="application/pdf",
+        as_attachment=True,
+        download_name="dashle-temps-maintenant.pdf",
+    )
 
 
 @app.route("/planification", methods=["GET", "POST"])

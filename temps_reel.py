@@ -64,8 +64,8 @@ def meteo_du_jour(ville):
             "description": details.get("description", "Conditions indisponibles"),
             "temperature": actuel.get("main", {}).get("temp"),
             "ressenti": actuel.get("main", {}).get("feels_like"),
-            "minimum": min(temperatures) if temperatures else actuel.get("main", {}).get("temp_min"),
-            "maximum": max(temperatures) if temperatures else actuel.get("main", {}).get("temp_max"),
+            "minimum": min(temperatures) if temperatures else None,
+            "maximum": max(temperatures) if temperatures else None,
             "humidite": actuel.get("main", {}).get("humidity"),
             "probabilite_pluie": round(max(chances_pluie) * 100) if chances_pluie else None,
             "source": "OpenWeather",
@@ -128,39 +128,80 @@ def _ville_demandee(message):
 
 
 def contexte_temps_reel(message, activites=None):
-    texte = (message or "").casefold()
-    mots_meteo = ("météo", "meteo", "temps qu'il fait", "weather", "température actuelle")
-    mots_actualites = ("actualité", "actualités", "actualite", "actualites", "nouvelles récentes", "news", "latest news")
-    mots_horloge = ("quelle heure", "heure actuelle", "quelle date", "date actuelle", "date du jour", "what time", "current date", "current time")
+    texte = (message or "").casefold().replace("\u2019", "'")
+    mots_meteo = (
+        "m\u00e9t\u00e9o", "meteo", "weather", "temps qu'il fait",
+        "quel temps fait", "temp\u00e9rature actuelle",
+    )
+    mots_actualites = (
+        "actualit\u00e9", "actualite", "nouvelles r\u00e9centes", "news",
+        "latest news", "quoi de neuf", "que se passe-t-il",
+        "qu'est-ce qui se passe", "what is happening", "what's happening",
+        "what happened",
+    )
+    mots_horloge = (
+        "quelle heure", "heure actuelle", "quelle date", "date actuelle",
+        "date du jour", "what time", "current date", "current time",
+    )
     demande_meteo = any(mot in texte for mot in mots_meteo)
     demande_actualites = any(mot in texte for mot in mots_actualites)
     demande_horloge = any(mot in texte for mot in mots_horloge)
-    activites = set(activites or {"meteo", "actualites"})
+    marqueur_temps_relatif = re.search(
+        r"(?<!\w)(?:maintenant|en ce moment|actuellement|aujourd'hui|"
+        r"r\u00e9cemment|recently|today|now|currently|right now|lately|"
+        r"ces derniers jours|\u00e0 l'instant)(?!\w)",
+        texte,
+    )
+    if marqueur_temps_relatif and not demande_meteo and not demande_horloge:
+        demande_actualites = True
+
+    activites = {"meteo", "actualites"} if activites is None else set(activites)
     demande_meteo = demande_meteo and "meteo" in activites
     demande_actualites = demande_actualites and "actualites" in activites
     if not (demande_meteo or demande_actualites or demande_horloge):
         return ""
 
     maintenant = datetime.now(timezone.utc)
-    blocs = ["Contexte temporel vérifié au moment de cette requête : " + maintenant.strftime("%Y-%m-%d %H:%M UTC") + "."]
+    blocs = ["Contexte temporel v\u00e9rifi\u00e9 au moment de cette requ\u00eate : " + maintenant.strftime("%Y-%m-%d %H:%M UTC") + "."]
     if demande_meteo:
         ville = _ville_demandee(message)
         meteo = meteo_du_jour(ville)
         if meteo.get("erreur"):
-            blocs.append(meteo["erreur"] if ville else "Pour la météo, demande une ville précise.")
+            blocs.append(meteo["erreur"] if ville else "Pour la m\u00e9t\u00e9o, demande une ville pr\u00e9cise.")
         else:
-            blocs.append(
-                "Météo du jour — {ville} ({date_locale}, heure locale {heure_locale}) : {description}; "
-                "température {temperature} °C, ressenti {ressenti} °C, minimum prévu {minimum} °C, "
-                "maximum prévu {maximum} °C, humidité {humidite} %, probabilité de pluie {probabilite_pluie} %. "
-                "Source : OpenWeather.".format(**meteo)
-            )
+            detail_meteo = (
+                "M\u00e9t\u00e9o actuelle \u2014 {ville} ({date_locale}, heure locale {heure_locale}) : "
+                "{description}; temp\u00e9rature {temperature} \u00b0C, ressenti {ressenti} \u00b0C."
+            ).format(**meteo)
+            previsions = []
+            if meteo.get("minimum") is not None:
+                previsions.append("minimum pr\u00e9vu " + str(meteo["minimum"]) + " \u00b0C")
+            if meteo.get("maximum") is not None:
+                previsions.append("maximum pr\u00e9vu " + str(meteo["maximum"]) + " \u00b0C")
+            if meteo.get("humidite") is not None:
+                previsions.append("humidit\u00e9 actuelle " + str(meteo["humidite"]) + " %")
+            if meteo.get("probabilite_pluie") is not None:
+                previsions.append("probabilit\u00e9 de pluie pr\u00e9vue " + str(meteo["probabilite_pluie"]) + " %")
+            if previsions:
+                detail_meteo += " Pr\u00e9visions/d\u00e9tails disponibles : " + ", ".join(previsions) + "."
+            blocs.append(detail_meteo + " Source : OpenWeather.")
     if demande_actualites:
         actualites = actualites_recentes(5)
         if actualites:
-            blocs.append("Titres récents du flux RSS de " + ATTRIBUTION_ACTUALITES + " (titres et liens, pas un résumé intégral) : " + " | ".join(
-                item["titre"] + " — " + item["url"] for item in actualites
-            ))
+            titres = []
+            for item in actualites:
+                details = [item["titre"]]
+                if item.get("date"):
+                    details.append("publi\u00e9 le " + item["date"])
+                details.append("source : " + (item.get("source") or ATTRIBUTION_ACTUALITES))
+                if item.get("url"):
+                    details.append(item["url"])
+                titres.append(" \u2014 ".join(details))
+            blocs.append(
+                "Titres r\u00e9cents du flux RSS de " + ATTRIBUTION_ACTUALITES
+                + " (titres et liens originaux, pas un r\u00e9sum\u00e9 int\u00e9gral) : "
+                + " | ".join(titres)
+            )
         else:
-            blocs.append("Le flux d’actualités est momentanément indisponible.")
+            blocs.append("Le flux d\u2019actualit\u00e9s est momentan\u00e9ment indisponible.")
     return "\n".join(blocs)
