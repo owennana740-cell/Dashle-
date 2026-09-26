@@ -19,7 +19,7 @@ import secrets
 import hashlib
 import hmac
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import calendar
 from flask import (
     Flask, Response, request, render_template_string,
@@ -35,6 +35,7 @@ from database import (
     UserMemory, UserPreference, StatisticalAnalysisUsage, initialiser_base, session_base,
 )
 from statistiques import analyser_fichier
+from temps_reel import actualites_recentes, meteo_du_jour
 
 try:
     from PIL import Image
@@ -164,7 +165,7 @@ _ROUTES_PUBLIQUES = {
     "accueil", "actualites", "repondre_flux", "repondre", "repondre_image",
     "confirmer_message", "nouvelle_conv", "conditions_utilisation",
     "health", "robots_txt", "sitemap_xml", "tarifs", "paiement_retour",
-    "cinetpay_notification", "stripe_webhook",
+    "cinetpay_notification", "stripe_webhook", "temps_reel", "api_temps_reel",
 }
 
 
@@ -1313,6 +1314,7 @@ if ('serviceWorker' in navigator) {
   <div class="menu-section">Navigation</div>
   <a href="{{ url_for('actualites') }}">&#128240; Nouveaut&eacute;s DASHLE</a>
   <a href="{{ url_for('tarifs') }}">&#9733; Tarifs</a>
+  <a href="{{ url_for('temps_reel') }}">&#127780; Temps r&eacute;el</a>
   {% if utilisateur %}
     <a href="{{ url_for('parametres') }}">&#9881; Param&egrave;tres</a>
     <a href="{{ url_for('statistiques') }}">&#128202; Statistiques</a>
@@ -3159,6 +3161,22 @@ button{border:0;border-radius:9px;background:linear-gradient(110deg,#22C55E,#3B8
 </main></body></html>
 """
 
+TEMPS_REEL_PAGE = """
+<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Temps réel — DASHLE</title>
+<style>:root{font-family:Inter,Segoe UI,sans-serif;color:#18352c;background:#f3f8f6}*{box-sizing:border-box}body{margin:0;padding:26px 16px}.wrap{max-width:900px;margin:auto}a{color:#16765b;text-decoration:none;font-weight:600}h1{font-size:clamp(28px,5vw,40px);margin:28px 0 8px}.intro{color:#627970}.card{background:#fff;border:1px solid #dce9e4;border-radius:16px;padding:20px;margin:16px 0;box-shadow:0 10px 28px #173a2b0c}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:14px}.field{display:flex;gap:8px;margin-top:14px}input{flex:1;min-width:0;padding:10px;border:1px solid #d5e3dd;border-radius:9px;font:inherit}button{padding:10px 14px;border:0;border-radius:9px;background:linear-gradient(110deg,#25bd80,#3b82f6);color:white;font:600 14px Inter,Segoe UI,sans-serif;cursor:pointer}#clock{font-size:24px;font-weight:700;color:#19765d}.subtle{font-size:13px;color:#6b7e76}.weather{line-height:1.65}.news{padding-left:20px;line-height:1.6}.news li{margin:9px 0}.error{color:#9b3828}.source{font-size:12px;color:#6b7e76}</style></head>
+<body><main class="wrap"><a href="{{ url_for('accueil') }}">← Retour à DASHLE</a><h1>Le temps, maintenant</h1><p class="intro">Date et heure locales, météo du jour et titres récents de sources identifiées.</p>
+<div class="grid"><section class="card"><h2>Date et heure locales</h2><div id="clock">—</div><p class="subtle">Affichées selon le fuseau horaire de ton appareil.</p></section>
+<section class="card"><h2>Météo du jour</h2><label for="ville">Ville</label><div class="field"><input id="ville" maxlength="80" value="{{ ville_defaut }}" placeholder="Ex. Dakar"><button id="charger-meteo" type="button">Afficher</button></div><p id="weather" class="weather">Saisis une ville pour consulter la météo.</p><p class="source">Données météo : <a href="https://openweathermap.org/" target="_blank" rel="noopener">OpenWeather</a>.</p></section></div>
+<section class="card"><h2>Actualités récentes</h2><ul id="news" class="news"><li>Chargement des titres…</li></ul><p class="source">Titres fournis par le flux RSS officiel de <a href="https://www.lemonde.fr/" target="_blank" rel="noopener">Le Monde</a>. Ouvre les liens pour lire les articles à la source.</p></section>
+</main><script>
+const horloge=document.getElementById('clock');function mettreAJourHorloge(){horloge.textContent=new Intl.DateTimeFormat('fr-FR',{dateStyle:'full',timeStyle:'medium'}).format(new Date());}mettreAJourHorloge();setInterval(mettreAJourHorloge,1000);
+function ajouterNouvelles(items){const liste=document.getElementById('news');liste.replaceChildren();if(!items.length){const li=document.createElement('li');li.textContent='Le flux d’actualités est momentanément indisponible.';liste.appendChild(li);return;}items.forEach(function(item){const li=document.createElement('li'),lien=document.createElement('a');lien.href=item.url;lien.target='_blank';lien.rel='noopener';lien.textContent=item.titre;li.appendChild(lien);if(item.date){const date=document.createElement('span');date.className='subtle';date.textContent=' · '+item.date;li.appendChild(date);}liste.appendChild(li);});}
+function chargerTemps(ville){const args=ville?'?ville='+encodeURIComponent(ville):'';fetch('/api/temps-reel'+args,{cache:'no-store'}).then(function(r){return r.json();}).then(function(data){ajouterNouvelles(data.actualites||[]);const zone=document.getElementById('weather');if(data.meteo&&data.meteo.erreur){zone.textContent=data.meteo.erreur;return;}const m=data.meteo;if(!m){zone.textContent='Saisis une ville pour consulter la météo.';return;}zone.textContent=m.ville+(m.pays?', '+m.pays:'')+' · '+m.description+' · '+m.temperature+' °C (ressenti '+m.ressenti+' °C), minimum '+m.minimum+' °C, maximum '+m.maximum+' °C'+(m.probabilite_pluie===null?'':' · pluie '+m.probabilite_pluie+' %')+'.';}).catch(function(){document.getElementById('news').textContent='Les données temps réel sont momentanément indisponibles.';});}
+document.getElementById('charger-meteo').addEventListener('click',function(){chargerTemps(document.getElementById('ville').value.trim());});document.getElementById('ville').addEventListener('keydown',function(e){if(e.key==='Enter')chargerTemps(this.value.trim());});chargerTemps(document.getElementById('ville').value.trim());
+</script></body></html>
+"""
+
+
 STATISTIQUES_PAGE = """
 <!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Analyses statistiques — DASHLE</title><style>
@@ -4018,6 +4036,26 @@ def fichier_trop_volumineux(_erreur):
 # ---------------------------------------------------------------------------
 # Routes — comptes utilisateurs
 # ---------------------------------------------------------------------------
+
+@app.route("/temps-reel")
+def temps_reel():
+    return render_template_string(
+        TEMPS_REEL_PAGE,
+        ville_defaut=os.environ.get("DASHLE_METEO_VILLE", ""),
+    )
+
+
+@app.route("/api/temps-reel")
+def api_temps_reel():
+    ville = request.args.get("ville", "").strip()[:80]
+    meteo = meteo_du_jour(ville) if ville else None
+    return jsonify({
+        "date_utc": datetime.now(timezone.utc).isoformat(),
+        "ville": ville,
+        "meteo": meteo,
+        "actualites": actualites_recentes(8),
+    })
+
 
 @app.route("/statistiques", methods=["GET", "POST"])
 def statistiques():

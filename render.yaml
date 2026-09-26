@@ -27,6 +27,8 @@ services:
         sync: false
       - key: STRIPE_CURRENCY
         value: XOF
+      - key: OPENWEATHER_API_KEY
+        sync: false
 databases:
   - name: dashle-db
     databaseName: dashle

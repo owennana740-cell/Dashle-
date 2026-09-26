@@ -21,6 +21,7 @@ from memory import se_souvenir_tout
 from config import CLE_API, MODELE_GEMINI, MAX_MESSAGES_CONTEXTE
 from database import User, session_base
 from datetime import datetime
+from temps_reel import contexte_temps_reel
 
 # ---------------------------------------------------------------------------
 # Cache RAM pour charger_connaissances()
@@ -116,7 +117,7 @@ def _historique_recent(historique) -> list:
     return list(historique)[-MAX_MESSAGES_CONTEXTE:]
 
 
-def _instruction_systeme(resume: str = "", consignes: str = "", niveau: str = "free") -> str:
+def _instruction_systeme(resume: str = "", consignes: str = "", niveau: str = "free", contexte_live: str = "") -> str:
     instruction = (
         "Tu es Dashle, une IA personnelle créée par Owen. "
         "Ne dis jamais que tu es Gemini ou que tu as été créé par Google. "
@@ -135,6 +136,12 @@ def _instruction_systeme(resume: str = "", consignes: str = "", niveau: str = "f
         instruction += (
             " Tu fournis en plus un accompagnement professionnel avancé et des analyses "
             "statistiques complètes pour les entreprises."
+        )
+    if contexte_live:
+        instruction += (
+            " Utilise les informations datées ci-dessous pour répondre aux demandes "
+            "sur l’heure, la météo ou l’actualité; indique leur source et n’invente "
+            "pas de données absentes.\n" + contexte_live[:5000]
         )
     if resume:
         instruction += "\nRésumé fiable des échanges précédents :\n" + resume
@@ -209,8 +216,9 @@ def demander_a_lia(message: str, historique=None, resume: str = "",
     if not CLE_API:
         return "La clé Gemini n'est pas configurée. Ajoute GEMINI_API_KEY dans le fichier .env."
 
+    contexte_live = contexte_temps_reel(message)
     corps = {
-        "system_instruction": {"parts": [{"text": _instruction_systeme(resume, consignes, niveau)}]},
+        "system_instruction": {"parts": [{"text": _instruction_systeme(resume, consignes, niveau, contexte_live)}]},
         "contents": _construire_contents(message, historique),
         "generationConfig": _gen_config(longueur),
     }
@@ -249,8 +257,9 @@ def streamer_a_lia(message: str, historique=None, resume: str = "", user_id=None
         return
 
     consignes, longueur, niveau = _reglages_reponse(user_id)
+    contexte_live = contexte_temps_reel(message)
     corps = {
-        "system_instruction": {"parts": [{"text": _instruction_systeme(resume, consignes, niveau)}]},
+        "system_instruction": {"parts": [{"text": _instruction_systeme(resume, consignes, niveau, contexte_live)}]},
         "contents": _construire_contents(message, historique),
         "generationConfig": _gen_config(longueur),
     }
@@ -330,8 +339,9 @@ def demander_a_lia_image(
     })
 
     consignes, _, niveau = _reglages_reponse(user_id)
+    contexte_live = contexte_temps_reel(texte_message)
     corps = {
-        "system_instruction": {"parts": [{"text": _instruction_systeme(resume, consignes, niveau)}]},
+        "system_instruction": {"parts": [{"text": _instruction_systeme(resume, consignes, niveau, contexte_live)}]},
         "contents": contents,
         "generationConfig": _gen_config(),
     }
