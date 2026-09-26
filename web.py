@@ -4390,13 +4390,6 @@ def telecharger_pdf_temps_reel():
             ("BOTTOMPADDING", (0, 0), (-1, -1), 9),
         ]))
         contenu.extend([carte_meteo, details_meteo])
-        contenu.extend([
-            Paragraph("Ville", styles["DashleLabel"]),
-            Paragraph(html_escape(nom_ville or ville or "Non renseign\u00e9e"), styles["DashleBody"]),
-            Paragraph("Conditions", styles["DashleLabel"]),
-            Paragraph(html_escape(str(meteo.get("description") or "Conditions indisponibles")), styles["DashleBody"]),
-            Paragraph("Temp\u00e9rature : " + html_escape(str(meteo.get("temperature", "indisponible"))) + " \u00b0C", styles["DashleBody"]),
-        ])
     contenu.append(Paragraph("Source : OpenWeather.", styles["DashleBody"]))
     contenu.append(Paragraph("Actualit\u00e9s r\u00e9centes", styles["DashleHeading"]))
     if not actualites:
