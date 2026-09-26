@@ -34,6 +34,9 @@ class User(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     email: Mapped[str] = mapped_column(String(254), unique=True, index=True, nullable=False)
+    nom: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    palier: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    acces_manuel: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     subscription_level: Mapped[str] = mapped_column(String(20), default="free", nullable=False)
@@ -177,6 +180,9 @@ class UserMemory(Base):
 def initialiser_base():
     Base.metadata.create_all(engine)
     colonnes_utilisateurs = {
+        "nom": "VARCHAR(160) NULL",
+        "palier": "VARCHAR(20) NULL",
+        "acces_manuel": "BOOLEAN NOT NULL DEFAULT FALSE",
         "subscription_level": "VARCHAR(20) NOT NULL DEFAULT 'free'",
         "subscription_expires_at": "TIMESTAMP NULL",
         "subscription_provider": "VARCHAR(20) NULL",

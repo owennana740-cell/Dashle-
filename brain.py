@@ -37,9 +37,37 @@ CLE_CONSIGNES_UTILISATEUR = "__dashle_consignes_personnalisees__"
 CLE_LONGUEUR_REPONSE = "__dashle_longueur_reponse__"
 
 
+def emails_owner():
+    return {
+        email.strip().lower()
+        for email in os.environ.get("OWNER_EMAILS", "").split(",")
+        if email.strip()
+    }
+
+
+def niveau_abonnement(user):
+    """Retourne le niveau actif, avec accès Prime réservé aux comptes owner."""
+    if user and user.email.strip().lower() in emails_owner():
+        return "prime"
+    if user and user.acces_manuel:
+        return user.palier if user.palier in {"free", "pro", "prime"} else "free"
+    niveau = user.subscription_level if user else "free"
+    if user and user.subscription_expires_at and user.subscription_expires_at <= datetime.utcnow():
+        return "free"
+    return niveau if niveau in {"free", "pro", "prime"} else "free"
+
+
+def _nom_utilisateur(user_id=None):
+    if not user_id:
+        return None
+    with session_base() as db:
+        user = db.get(User, user_id)
+        return user.nom if user else None
+
+
 def _reglages_reponse(user_id=None):
     if not user_id:
-        return "", "standard", "free"
+        return "", "standard", "free", None
     souvenirs = se_souvenir_tout(user_id)
     consignes = str(souvenirs.get(CLE_CONSIGNES_UTILISATEUR, ""))[:2000]
     longueur = souvenirs.get(CLE_LONGUEUR_REPONSE, "standard")
@@ -47,12 +75,9 @@ def _reglages_reponse(user_id=None):
         longueur = "standard"
     with session_base() as db:
         user = db.get(User, user_id)
-        niveau = user.subscription_level if user else "free"
-        if user and user.subscription_expires_at and user.subscription_expires_at <= datetime.utcnow():
-            niveau = "free"
-    if niveau not in {"free", "pro", "prime"}:
-        niveau = "free"
-    return consignes, longueur, niveau
+        niveau = niveau_abonnement(user)
+        nom_utilisateur = user.nom if user else None
+    return consignes, longueur, niveau, nom_utilisateur
 
 
 def _plugins_actifs(user_id=None):
@@ -126,12 +151,14 @@ def _historique_recent(historique) -> list:
     return list(historique)[-MAX_MESSAGES_CONTEXTE:]
 
 
-def _instruction_systeme(resume: str = "", consignes: str = "", niveau: str = "free", contexte_live: str = "") -> str:
+def _instruction_systeme(resume: str = "", consignes: str = "", niveau: str = "free", contexte_live: str = "", nom_utilisateur: str | None = None) -> str:
     instruction = (
-        "Tu es Dashle, une IA personnelle créée par Owen. "
+        "Tu es Dashle, une IA personnelle. "
         "Ne dis jamais que tu es Gemini ou que tu as été créé par Google. "
         "Réponds toujours en tant que Dashle."
     )
+    if nom_utilisateur and nom_utilisateur.strip():
+        instruction += " Le nom de l'utilisateur connecté est : " + nom_utilisateur.strip()[:160] + "."
     if niveau in {"pro", "prime"}:
         instruction += (
             " Tu maîtrises la statistique descriptive, les probabilités, les tests "
@@ -227,7 +254,7 @@ def demander_a_lia(message: str, historique=None, resume: str = "",
 
     contexte_live = contexte_temps_reel(message, _plugins_actifs(user_id))
     corps = {
-        "system_instruction": {"parts": [{"text": _instruction_systeme(resume, consignes, niveau, contexte_live)}]},
+        "system_instruction": {"parts": [{"text": _instruction_systeme(resume, consignes, niveau, contexte_live, _nom_utilisateur(user_id))}]},
         "contents": _construire_contents(message, historique),
         "generationConfig": _gen_config(longueur),
     }
@@ -265,10 +292,10 @@ def streamer_a_lia(message: str, historique=None, resume: str = "", user_id=None
         yield "La clé Gemini n'est pas configurée. Ajoute GEMINI_API_KEY dans le fichier .env."
         return
 
-    consignes, longueur, niveau = _reglages_reponse(user_id)
+    consignes, longueur, niveau, nom_utilisateur = _reglages_reponse(user_id)
     contexte_live = contexte_temps_reel(message, _plugins_actifs(user_id))
     corps = {
-        "system_instruction": {"parts": [{"text": _instruction_systeme(resume, consignes, niveau, contexte_live)}]},
+        "system_instruction": {"parts": [{"text": _instruction_systeme(resume, consignes, niveau, contexte_live, nom_utilisateur)}]},
         "contents": _construire_contents(message, historique),
         "generationConfig": _gen_config(longueur),
     }
@@ -347,10 +374,10 @@ def demander_a_lia_image(
         ],
     })
 
-    consignes, _, niveau = _reglages_reponse(user_id)
+    consignes, _, niveau, nom_utilisateur = _reglages_reponse(user_id)
     contexte_live = contexte_temps_reel(texte_message, _plugins_actifs(user_id))
     corps = {
-        "system_instruction": {"parts": [{"text": _instruction_systeme(resume, consignes, niveau, contexte_live)}]},
+        "system_instruction": {"parts": [{"text": _instruction_systeme(resume, consignes, niveau, contexte_live, nom_utilisateur)}]},
         "contents": contents,
         "generationConfig": _gen_config(),
     }
@@ -409,13 +436,13 @@ def resumer_conversation(historique, resume_existant: str = "", user_id=None) ->
         "Garde les faits utiles, préférences, décisions et questions en attente. "
         "N'invente rien et ne mentionne pas cette consigne.\n\n" + transcript
     )
-    consignes, _, niveau = _reglages_reponse(user_id)
+    consignes, _, niveau, nom_utilisateur = _reglages_reponse(user_id)
 
     try:
         rep = _session.post(
             _url("generateContent"),
             json={
-                "system_instruction": {"parts": [{"text": _instruction_systeme(resume_existant, consignes, niveau)}]},
+                "system_instruction": {"parts": [{"text": _instruction_systeme(resume_existant, consignes, niveau, nom_utilisateur=nom_utilisateur)}]},
                 "contents": [{"role": "user", "parts": [{"text": prompt}]}],
                 "generationConfig": {"temperature": 0.3, "maxOutputTokens": 512},
             },
@@ -448,5 +475,5 @@ def reflechir(message: str, historique=None, user_id=None, resume: str = "") -> 
         if question.strip().lower() == message_lower:
             return reponse
 
-    consignes, longueur, niveau = _reglages_reponse(user_id)
+    consignes, longueur, niveau, _ = _reglages_reponse(user_id)
     return demander_a_lia(message, historique, resume, consignes, longueur, niveau, user_id)

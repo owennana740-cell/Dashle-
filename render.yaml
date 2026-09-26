@@ -11,6 +11,8 @@ services:
           property: connectionString
       - key: GEMINI_API_KEY
         sync: false
+      - key: OWNER_EMAILS
+        value: owennana39@gmail.com,owennana740@gmail.com
       - key: FLASK_SECRET_KEY
         generateValue: true
       - key: SESSION_COOKIE_SECURE

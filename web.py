@@ -28,7 +28,7 @@ from flask import (
 from werkzeug.security import check_password_hash, generate_password_hash
 from sqlalchemy.exc import IntegrityError
 from app import streamer_message, traiter_message, traiter_message_image
-from brain import resumer_conversation
+from brain import emails_owner, niveau_abonnement, resumer_conversation
 from config import MODELE_GEMINI
 from database import (
     Conversation, Message, MessageFeedback, ShareLink, SubscriptionPayment, User,
@@ -166,7 +166,7 @@ _ROUTES_PUBLIQUES = {
     "accueil", "actualites", "repondre_flux", "repondre", "repondre_image",
     "confirmer_message", "nouvelle_conv", "conditions_utilisation",
     "health", "robots_txt", "sitemap_xml", "tarifs", "paiement_retour",
-    "cinetpay_notification", "stripe_webhook", "temps_reel", "api_temps_reel",
+    "cinetpay_notification", "stripe_webhook", "temps_reel", "api_temps_reel", "admin",
 }
 
 
@@ -3384,6 +3384,7 @@ p a{color:#22C55E;font-weight:600;text-decoration:none}
 <form method="post">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <label>E-mail<input name="email" type="email" required maxlength="254" autocomplete="email"></label>
+  {% if afficher_nom %}<label>Nom<input name="nom" type="text" required maxlength="160" autocomplete="name"></label>{% endif %}
   <label>Mot de passe<input name="password" type="password" required minlength="8" autocomplete="{{ autocomplete }}"></label>
   <button type="submit">{{ action }}</button>
 </form>
@@ -4308,9 +4309,8 @@ def statistiques():
         user = db.get(User, user_id)
         if not user:
             return redirect(url_for("connexion"))
-        niveau = user.subscription_level or "free"
-        if user.subscription_expires_at and user.subscription_expires_at <= maintenant:
-            niveau = "free"
+        niveau = niveau_abonnement(user)
+        if niveau == "free" and user.subscription_expires_at and user.subscription_expires_at <= maintenant:
             user.subscription_level = "free"
         autorise = niveau in {"pro", "prime"}
         plugin_active = db.query(UserPlugin).filter_by(
@@ -4411,9 +4411,7 @@ def _rendre_tarifs(erreur=None):
         with session_base() as db:
             user = db.get(User, user_id)
             if user:
-                niveau = user.subscription_level or "free"
-                if user.subscription_expires_at and user.subscription_expires_at <= datetime.utcnow():
-                    niveau = "free"
+                niveau = niveau_abonnement(user)
     offres = [
         (code, offre["nom"], offre["mensuel"], offre["annuel"], offre["avantages"])
         for code, offre in OFFRES_ABONNEMENT.items()
@@ -4436,6 +4434,69 @@ def tarifs():
 @app.route("/abonnement/retour")
 def paiement_retour():
     return _rendre_tarifs()
+
+
+ADMIN_PAGE = """
+<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Administration Dashle</title><style>
+*{box-sizing:border-box}body{margin:0;padding:32px 16px;background:#f3f7f5;color:#18312b;font:15px Segoe UI,sans-serif}
+main{max-width:900px;margin:auto}.card{background:white;border:1px solid #e2ebe7;border-radius:16px;padding:22px;margin:18px 0;box-shadow:0 8px 28px #1746370b}
+h1{margin:0;color:#168c65}form.search{display:flex;gap:10px}input,select,button{font:inherit;padding:11px 12px;border:1px solid #ccd9d3;border-radius:9px}input{flex:1;min-width:0}button{background:linear-gradient(110deg,#22c55e,#3b82f6);color:white;border:0;font-weight:600;cursor:pointer}
+.user{display:grid;grid-template-columns:minmax(170px,1fr) auto auto;align-items:center;gap:12px}.email{font-weight:600;overflow-wrap:anywhere}.badge{padding:5px 10px;border-radius:99px;background:#e8f7ee;text-transform:capitalize}.actions{display:flex;align-items:center;gap:8px}.manual{color:#087b5b;font-size:13px}.empty{color:#687b73}@media(max-width:640px){.user{grid-template-columns:1fr}.actions{flex-wrap:wrap}}
+</style></head><body><main><h1>Administration DASHLE</h1><p>Gestion manuelle des accès aux paliers.</p>
+<section class="card"><form class="search" method="get"><input name="q" type="search" value="{{ recherche }}" placeholder="Rechercher par e-mail" aria-label="Rechercher par e-mail"><button>Rechercher</button></form></section>
+{% if utilisateurs %}{% for utilisateur, niveau in utilisateurs %}<section class="card user"><div><div class="email">{{ utilisateur.email }}</div><span class="badge">{{ niveau }}</span>{% if utilisateur.acces_manuel %}<div class="manual">Accès manuel actif</div>{% endif %}</div>
+<form class="actions" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="user_id" value="{{ utilisateur.id }}"><input type="hidden" name="q" value="{{ recherche }}"><select name="palier" aria-label="Nouveau palier"><option value="free" {{ 'selected' if niveau == 'free' }}>Free</option><option value="pro" {{ 'selected' if niveau == 'pro' }}>Pro</option><option value="prime" {{ 'selected' if niveau == 'prime' }}>Prime</option></select><button name="action" value="appliquer">Appliquer</button></form>
+{% if utilisateur.acces_manuel %}<form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="user_id" value="{{ utilisateur.id }}"><input type="hidden" name="q" value="{{ recherche }}"><button name="action" value="retirer">Retirer l'accès manuel</button></form>{% endif %}</section>{% endfor %}
+{% elif recherche %}<section class="card empty">Aucun compte trouvé pour cette adresse.</section>{% endif %}
+</main></body></html>
+"""
+
+
+@app.route("/admin", methods=["GET", "POST"])
+def admin():
+    user_id = session.get("user_id")
+    recherche = request.values.get("q", "").strip()[:254]
+    with session_base() as db:
+        administrateur = db.get(User, user_id) if user_id else None
+        if not administrateur or administrateur.email.strip().lower() not in emails_owner():
+            return "Not Found", 404
+
+    if request.method == "POST":
+        try:
+            cible_id = int(request.form.get("user_id", ""))
+        except (TypeError, ValueError):
+            return "Not Found", 404
+        action = request.form.get("action")
+        with session_base() as db:
+            cible = db.get(User, cible_id)
+            if not cible:
+                return "Not Found", 404
+            if action == "appliquer":
+                palier = request.form.get("palier", "")
+                if palier not in {"free", "pro", "prime"}:
+                    return "Choix de palier invalide", 400
+                cible.palier = palier
+                cible.acces_manuel = True
+            elif action == "retirer":
+                cible.palier = None
+                cible.acces_manuel = False
+            else:
+                return "Action invalide", 400
+        return redirect(url_for("admin", q=recherche))
+
+    with session_base() as db:
+        requete = db.query(User)
+        if recherche:
+            requete = requete.filter(User.email.ilike(f"%{recherche}%"))
+        comptes = requete.order_by(User.email).limit(50).all()
+        utilisateurs = [(compte, niveau_abonnement(compte)) for compte in comptes]
+    return render_template_string(
+        ADMIN_PAGE,
+        utilisateurs=utilisateurs,
+        recherche=recherche,
+        csrf_token=jeton_csrf(),
+    )
 
 
 @app.route("/paiement/initier", methods=["POST"])
@@ -4682,8 +4743,11 @@ def inscription():
     erreur = None
     if request.method == "POST":
         email    = request.form.get("email", "").strip().lower()
+        nom      = request.form.get("nom", "").strip()
         password = request.form.get("password", "")
-        if "@" not in email or len(email) > 254:
+        if not nom or len(nom) > 160:
+            erreur = "Indique ton nom (160 caractères maximum)."
+        elif "@" not in email or len(email) > 254:
             erreur = "Indique une adresse e-mail valide."
         elif len(password) < 8:
             erreur = "Le mot de passe doit contenir au moins 8 caractères."
@@ -4692,6 +4756,7 @@ def inscription():
                 with session_base() as db:
                     user = User(
                         email=email,
+                        nom=nom,
                         password_hash=generate_password_hash(password),
                     )
                     db.add(user)
@@ -4717,6 +4782,7 @@ def inscription():
         texte_lien="Déjà un compte ?",
         libelle_lien="Se connecter",
         autocomplete="new-password",
+        afficher_nom=True,
         csrf_token=jeton_csrf(),
     )
 
@@ -4749,6 +4815,7 @@ def connexion():
         texte_lien="Pas encore de compte ?",
         libelle_lien="S'inscrire",
         autocomplete="current-password",
+        afficher_nom=False,
         csrf_token=jeton_csrf(),
     )
 
