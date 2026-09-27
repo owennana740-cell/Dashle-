@@ -54,7 +54,8 @@ app.config.update(
     MAX_CONTENT_LENGTH=8 * 1024 * 1024,
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
-    SESSION_COOKIE_SECURE=os.environ.get("SESSION_COOKIE_SECURE", "1") != "0",
+    # Render définit explicitement 1; le défaut 0 permet les sessions en localhost HTTP.
+    SESSION_COOKIE_SECURE=os.environ.get("SESSION_COOKIE_SECURE", "0") != "0",
     PERMANENT_SESSION_LIFETIME=timedelta(days=3650),
 )
 initialiser_base()
@@ -4755,6 +4756,8 @@ def admin():
     with session_base() as db:
         administrateur = db.get(User, user_id) if user_id else None
         if not administrateur or administrateur.email.strip().lower() not in emails_owner():
+            motif = "session absente" if not user_id else "compte de session introuvable" if not administrateur else "compte non présent dans OWNER_EMAILS"
+            app.logger.warning("Accès /admin refusé (404) : %s", motif)
             return "Not Found", 404
 
     if request.method == "POST":
@@ -5207,7 +5210,14 @@ def health():
 # Point d'entrée
 # ---------------------------------------------------------------------------
 
-app.logger.info("DASHLE routes chargées : /admin=%s", any(rule.rule == "/admin" for rule in app.url_map.iter_rules()))
+_routes_demarrage = sorted(str(rule) for rule in app.url_map.iter_rules())
+_route_admin_demarrage = next((route for route in _routes_demarrage if "'/admin'" in route), None)
+app.logger.info(
+    "DASHLE URL map au démarrage (%d routes):\n%s\nDASHLE /admin: %s",
+    len(_routes_demarrage),
+    "\n".join(_routes_demarrage),
+    _route_admin_demarrage or "ABSENTE",
+)
 
 
 if __name__ == "__main__":
