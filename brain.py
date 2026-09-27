@@ -486,7 +486,8 @@ def resumer_conversation(historique, resume_existant: str = "", user_id=None) ->
         rep.raise_for_status()
         texte = rep.json()["candidates"][0]["content"]["parts"][0]["text"]
         return nettoyer_reponse(texte) or resume_existant
-    except Exception:
+    except Exception as exc:
+        print("ERREUR Gemini pendant le résumé de conversation :", type(exc).__name__)
         return resume_existant
 
 
