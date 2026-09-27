@@ -504,7 +504,9 @@ def reflechir(message: str, historique=None, user_id=None, resume: str = "") -> 
         if question.strip().lower() == message_lower:
             return reponse
 
-    appris = se_souvenir_tout(user_id)
+    # A visitor has no private memory namespace. Never fall back to the shared
+    # legacy JSON memory when no permanent account id is available.
+    appris = se_souvenir_tout(user_id) if user_id is not None else {}
     for question, reponse in appris.items():
         if question.startswith("__dashle_"):
             continue

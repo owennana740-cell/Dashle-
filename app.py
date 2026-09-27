@@ -9,6 +9,8 @@ def traiter_message(message, historique=None, user_id=None, resume=""):
     message_lower = message.lower()
 
     if message_lower.startswith("retiens que"):
+        if user_id is None:
+            return "La mémoire personnelle est disponible après connexion. Connecte-toi ou crée un compte pour enregistrer ce souvenir."
         texte = message[len("retiens que"):].strip()
         if "mon nom est" in texte.lower():
             valeur = texte.lower().replace("mon nom est", "").strip()
@@ -19,6 +21,8 @@ def traiter_message(message, historique=None, user_id=None, resume=""):
             return "D'accord, j'ai enregistre cette information."
 
     elif message_lower.startswith("apprends que"):
+        if user_id is None:
+            return "Les visiteurs ne peuvent pas ajouter de connaissances partagées. Connecte-toi pour enregistrer une information dans ta mémoire personnelle."
         contenu = message[len("apprends que"):].strip()
         if "=" in contenu:
             mot_cle, reponse = contenu.split("=", 1)
@@ -31,9 +35,13 @@ def traiter_message(message, historique=None, user_id=None, resume=""):
             return "Utilise le format : apprends que question = reponse"
 
     elif "quel est mon nom" in message_lower or "mon nom" in message_lower:
+        if user_id is None:
+            return "Je n’ai pas de mémoire personnelle pour les visiteurs. Connecte-toi pour retrouver les souvenirs liés à ton compte."
         return se_souvenir("nom", user_id)
 
     elif "que retiens" in message_lower:
+        if user_id is None:
+            return "Je n’ai pas de mémoire personnelle pour les visiteurs. Connecte-toi pour retrouver les souvenirs liés à ton compte."
         return se_souvenir("information", user_id)
 
     else:
