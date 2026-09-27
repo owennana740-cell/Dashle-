@@ -17,7 +17,7 @@ import re
 import requests
 from urllib.parse import urlparse
 from core.utils import BASE_DIR, lire_json
-from memory import se_souvenir_tout
+from memory import memoire_active, se_souvenir_tout
 from config import CLE_API, MODELE_GEMINI, MAX_MESSAGES_CONTEXTE
 from database import User, UserPlugin, session_base
 from datetime import datetime
@@ -506,7 +506,7 @@ def reflechir(message: str, historique=None, user_id=None, resume: str = "") -> 
 
     # A visitor has no private memory namespace. Never fall back to the shared
     # legacy JSON memory when no permanent account id is available.
-    appris = se_souvenir_tout(user_id) if user_id is not None else {}
+    appris = se_souvenir_tout(user_id) if memoire_active(user_id) else {}
     for question, reponse in appris.items():
         if question.startswith("__dashle_"):
             continue

@@ -335,6 +335,7 @@ def _preferences(user_id):
             "voix_active": prefs.voix_active,
             "lecture_automatique": prefs.lecture_automatique,
             "conserver_historique": prefs.conserver_historique,
+            "memoire_active": prefs.memoire_active,
             "voix_nom": prefs.voix_nom,
             "voix_vitesse": prefs.voix_vitesse,
             "voix_tonalite": prefs.voix_tonalite,
@@ -347,6 +348,7 @@ _PREFS_VISITEUR = {
     "voix_active": True,
     "lecture_automatique": False,
     "conserver_historique": False,
+    "memoire_active": False,
     "voix_nom": "",
     "voix_vitesse": 1.0,
     "voix_tonalite": 1.0,
@@ -3315,6 +3317,8 @@ body.theme-sombre label{border-color:#294238}
     <label>Longueur des r&eacute;ponses<select name="longueur_reponse"><option value="courte" {% if longueur_reponse == 'courte' %}selected{% endif %}>Courte</option><option value="standard" {% if longueur_reponse == 'standard' %}selected{% endif %}>Normale</option><option value="detaillee" {% if longueur_reponse == 'detaillee' %}selected{% endif %}>D&eacute;taill&eacute;e</option></select></label>
     <label for="consignes-personnalisees">Consignes personnalis&eacute;es</label>
     <textarea id="consignes-personnalisees" name="consignes_personnalisees" maxlength="2000" rows="4" style="width:100%;resize:vertical">{{ consignes_personnalisees }}</textarea>
+    <label>Activer ma mémoire personnelle<input type="checkbox" name="memoire_active" {% if preferences.memoire_active %}checked{% endif %}></label>
+    <p class="note">Désactive cette option pour que Dashle ne lise ni n’enregistre tes souvenirs personnels. Les consignes et réglages du compte restent disponibles.</p>
     <label>Conserver l'historique<input type="checkbox" name="conserver_historique" {% if preferences.conserver_historique %}checked{% endif %}></label>
     <p class="note">Les conversations partagées utilisent un lien révocable et ne montrent pas les informations du compte.</p>
   </section>
@@ -4035,6 +4039,7 @@ def parametres():
             prefs.voix_active = request.form.get("voix_active") == "on"
             prefs.lecture_automatique = request.form.get("lecture_automatique") == "on"
             prefs.conserver_historique = request.form.get("conserver_historique") == "on"
+            prefs.memoire_active = request.form.get("memoire_active") == "on"
             prefs.voix_nom     = request.form.get("voix_nom", "")[:160]
             prefs.voix_vitesse = num("voix_vitesse", 0.6, 1.4, 1.0)
             prefs.voix_tonalite = num("voix_tonalite", 0.7, 1.3, 1.0)

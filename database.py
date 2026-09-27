@@ -152,6 +152,7 @@ class UserPreference(Base):
     voix_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     lecture_automatique: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     conserver_historique: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    memoire_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("TRUE"), nullable=False)
     voix_nom: Mapped[str] = mapped_column(String(160), default="", nullable=False)
     voix_vitesse: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
     voix_tonalite: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
@@ -223,6 +224,7 @@ def initialiser_base():
                 connexion.execute(text(f"ALTER TABLE conversations ADD COLUMN {nom} {definition}"))
 
     colonnes_preferences = {
+        "memoire_active": "BOOLEAN NOT NULL DEFAULT TRUE",
         "voix_nom": "VARCHAR(160) NOT NULL DEFAULT ''",
         "voix_vitesse": "FLOAT NOT NULL DEFAULT 1.0",
         "voix_tonalite": "FLOAT NOT NULL DEFAULT 1.0",

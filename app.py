@@ -1,7 +1,7 @@
 from dotenv import load_dotenv
 load_dotenv()
 from brain import reflechir, demander_a_lia_image, streamer_a_lia
-from memory import retenir, se_souvenir
+from memory import memoire_active, retenir, se_souvenir
 from learn import apprendre
 
 
@@ -11,6 +11,8 @@ def traiter_message(message, historique=None, user_id=None, resume=""):
     if message_lower.startswith("retiens que"):
         if user_id is None:
             return "La mémoire personnelle est disponible après connexion. Connecte-toi ou crée un compte pour enregistrer ce souvenir."
+        if not memoire_active(user_id):
+            return "La mémoire est désactivée dans tes paramètres. Réactive-la pour enregistrer ce souvenir."
         texte = message[len("retiens que"):].strip()
         if "mon nom est" in texte.lower():
             valeur = texte.lower().replace("mon nom est", "").strip()
@@ -23,6 +25,8 @@ def traiter_message(message, historique=None, user_id=None, resume=""):
     elif message_lower.startswith("apprends que"):
         if user_id is None:
             return "Les visiteurs ne peuvent pas ajouter de connaissances partagées. Connecte-toi pour enregistrer une information dans ta mémoire personnelle."
+        if not memoire_active(user_id):
+            return "La mémoire est désactivée dans tes paramètres. Réactive-la pour enregistrer cette information."
         contenu = message[len("apprends que"):].strip()
         if "=" in contenu:
             mot_cle, reponse = contenu.split("=", 1)
