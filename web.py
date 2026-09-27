@@ -219,6 +219,46 @@ def _ajouter_message_visiteur(texte: str, auteur: str):
     session.modified = True
 
 
+def _historique_recu_temporaire(valeur, limite=MAX_HISTORIQUE_VISITEUR):
+    """Valide un contexte fourni par le navigateur sans le conserver côté serveur."""
+    if isinstance(valeur, str):
+        try:
+            valeur = json.loads(valeur)
+        except (TypeError, ValueError):
+            return []
+    if not isinstance(valeur, list):
+        return []
+    historique = []
+    for item in valeur[-limite:]:
+        if not isinstance(item, dict) or item.get("auteur") not in {"user", "bot"}:
+            continue
+        texte = item.get("texte")
+        if isinstance(texte, str) and texte.strip():
+            historique.append({"auteur": item["auteur"], "texte": texte[:16_000]})
+    return historique
+
+
+def _conversation_selectionnee(user_id):
+    """Retourne la conversation sélectionnée si elle appartient au compte."""
+    conversation_id = session.get("conversation_id")
+    if not conversation_id:
+        return None
+    with session_base() as db:
+        conversation = db.query(Conversation).filter_by(
+            id=conversation_id, user_id=user_id
+        ).one_or_none()
+        return conversation.id if conversation else None
+
+
+def _contexte_chat_temporaire(user_id, conversation_id, valeur, message):
+    historique = _historique_recu_temporaire(valeur)
+    if not historique and conversation_id:
+        historique = _messages_conversation(user_id, conversation_id)
+    if not historique or historique[-1].get("auteur") != "user" or historique[-1].get("texte") != message:
+        historique.append({"auteur": "user", "texte": message})
+    return historique
+
+
 def _resume_visiteur() -> str:
     return session.get("resume_visiteur", "")
 
@@ -246,6 +286,10 @@ def _conv_courante(user_id):
             conversation_id = conversation.id
     session["conversation_id"] = conversation_id
     return conversation_id
+
+
+def _conserver_historique(user_id):
+    return _preferences(user_id)["conserver_historique"] if user_id else False
 
 
 def _liste_conversations(user_id):
@@ -580,6 +624,7 @@ header button.icon-btn:hover { background: rgba(255,255,255,0.18); }
 }
 
 #banniere-visiteur.visible { display: flex; }
+#banniere-historique-temporaire { display:flex; align-items:center; gap:10px; padding:9px 18px; background:#eef7f3; color:#245f4a; font-size:13px; }
 
 #banniere-visiteur a {
   color: var(--vert-fonce);
@@ -1234,7 +1279,7 @@ button.envoyer,button.arreter { width:42px; height:42px; }
 @media (min-width: 851px) {
   #sidebar { display:flex !important; }
   #voile, header > .icon-btn:first-child { display:none !important; }
-  header, #banniere-visiteur { margin-left:272px; }
+  header, #banniere-visiteur, #banniere-historique-temporaire { margin-left:272px; }
   #chat { width:min(900px,calc(100% - 304px)); margin-left:calc(272px + max(16px,(100vw - 272px - 900px)/2)); margin-right:16px; }
   form.bas, #apercu-fichier, #statut-vocal, .btn-rouvrir-vocal { width:min(900px,calc(100% - 304px)); margin-left:calc(272px + max(16px,(100vw - 272px - 900px)/2)); margin-right:16px; }
   #sidebar .user-menu-wrap { display:none; }
@@ -1364,6 +1409,10 @@ if ('serviceWorker' in navigator) {
   <span style="margin:0 4px;">·</span>
   <a href="{{ url_for('inscription') }}">Créer un compte</a>
 </div>
+{% elif not preferences.conserver_historique %}
+<div id="banniere-historique-temporaire" class="visible" role="status">
+  La conservation est d&eacute;sactiv&eacute;e : les nouveaux &eacute;changes restent dans cette page jusqu'au rechargement. Les conversations d&eacute;j&agrave; enregistr&eacute;es restent intactes.
+</div>
 {% endif %}
 
 <div id="voile" onclick="document.getElementById('sidebar').style.display='none';this.style.display='none';"></div>
@@ -1460,7 +1509,7 @@ if ('serviceWorker' in navigator) {
       {% if m.auteur == 'bot' %}
       <div class="actions-reponse">
         <button type="button" class="action-copier" title="Copier" aria-label="Copier"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h3"/></svg></button>
-        {% if utilisateur %}
+        {% if utilisateur and preferences.conserver_historique %}
           <button type="button" class="action-feedback" data-valeur="positif" title="J'aime" aria-label="J'aime"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10v11H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3Zm0 0 5-7a3 3 0 0 1 2 3v4h5a2 2 0 0 1 2 2l-2 7a2 2 0 0 1-2 2H7"/></svg></button>
           <button type="button" class="action-feedback" data-valeur="negatif" title="Je n'aime pas" aria-label="Je n'aime pas"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 14V3H4a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3Zm0 0 5 7a3 3 0 0 0 2-3v-4h5a2 2 0 0 0 2-2l-2-7a2 2 0 0 0-2-2H7"/></svg></button>
           <button type="button" class="action-partager" title="Partager" aria-label="Partager"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m-5 5 5-5 5 5M5 12v7h14v-7"/></svg></button>
@@ -1822,6 +1871,22 @@ function ajouterMessageImage(texte, fichier) {
   return message;
 }
 
+function historiqueChatTemporaire(exclureDernierUtilisateur) {
+  const elements = Array.from(chat.querySelectorAll('.message-wrap .msg'));
+  if (exclureDernierUtilisateur) {
+    for (let i = elements.length - 1; i >= 0; i--) {
+      if (elements[i].classList.contains('user')) { elements.splice(i, 1); break; }
+    }
+  }
+  const messages = elements.map(function(element) {
+    return {
+      auteur: element.classList.contains('bot') ? 'bot' : 'user',
+      texte: element.dataset.markdownSource || element.textContent || ''
+    };
+  }).filter(function(message) { return message.texte.trim().length > 0; });
+  return messages.slice(-30);
+}
+
 function iconeAction(nom) {
   const chemins = {
     copier: '<rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h3"/>',
@@ -1848,7 +1913,7 @@ function ajouterReponse(texte, messageId) {
 
   let actionsHtml = '<div class="actions-reponse">'
     + '<button type="button" class="action-copier" title="Copier" aria-label="Copier">' + iconeAction('copier') + '</button>';
-  if (estConnecte) {
+  if (estConnecte && preferencesVocales.conserver_historique) {
     actionsHtml += '<button type="button" class="action-feedback" data-valeur="positif" title="J\'aime" aria-label="J\'aime">' + iconeAction('positif') + '</button>'
       + '<button type="button" class="action-feedback" data-valeur="negatif" title="Je n\'aime pas" aria-label="Je n\'aime pas">' + iconeAction('negatif') + '</button>'
       + '<button type="button" class="action-partager" title="Partager" aria-label="Partager">' + iconeAction('partager') + '</button>'
@@ -2878,6 +2943,9 @@ form.addEventListener('submit', async function(e) {
       const fd = new FormData();
       fd.append('message', texte);
       fd.append('image', imageEnvoyee, imageEnvoyee.name);
+      if (estConnecte && !preferencesVocales.conserver_historique) {
+        fd.append('historique', JSON.stringify(historiqueChatTemporaire(true)));
+      }
       const headers = {};
       if (estConnecte) headers['X-CSRF-Token'] = csrfToken;
       const res  = await fetch(urlImage, { method: 'POST', headers, body: fd });
@@ -2932,10 +3000,15 @@ form.addEventListener('submit', async function(e) {
   if (estConnecte) headers['X-CSRF-Token'] = csrfToken;
 
   try {
+    const corps = new URLSearchParams();
+    corps.set('message', texte);
+    if (estConnecte && !preferencesVocales.conserver_historique) {
+      corps.set('historique', JSON.stringify(historiqueChatTemporaire(false)));
+    }
     const res = await fetch(urlFlux, {
       method:  'POST',
       headers,
-      body:    'message=' + encodeURIComponent(texte),
+      body:    corps.toString(),
       signal:  controller.signal,
       cache:   'no-store',
     });
@@ -3320,6 +3393,7 @@ body.theme-sombre label{border-color:#294238}
     <label>Activer ma mémoire personnelle<input type="checkbox" name="memoire_active" {% if preferences.memoire_active %}checked{% endif %}></label>
     <p class="note">Désactive cette option pour que Dashle ne lise ni n’enregistre tes souvenirs personnels. Les consignes et réglages du compte restent disponibles.</p>
     <label>Conserver l'historique<input type="checkbox" name="conserver_historique" {% if preferences.conserver_historique %}checked{% endif %}></label>
+    <p class="note">D&eacute;sactiv&eacute;e, cette option garde les nouveaux &eacute;changes dans la page courante jusqu'au rechargement. Les conversations d&eacute;j&agrave; enregistr&eacute;es restent intactes; aucun nouveau message n'est ajout&eacute; &agrave; l'historique.</p>
     <p class="note">Les conversations partagées utilisent un lien révocable et ne montrent pas les informations du compte.</p>
   </section>
   <section class="carte"><h2>Sécurité</h2>
@@ -3713,6 +3787,7 @@ def _rendre_page(messages, utilisateur=None, conversations=None, conversation_id
         "voix_volume":   float(prefs["voix_volume"] or 1.0),
         "voix_active":   bool(prefs["voix_active"]),
         "lecture_automatique": bool(prefs["lecture_automatique"]),
+        "conserver_historique": bool(prefs["conserver_historique"]),
         "theme": prefs["theme"],
     }))
     html = html.replace("__EST_CONNECTE__",  "true" if est_connecte else "false")
@@ -3731,6 +3806,17 @@ def accueil():
     user_id = session.get("user_id")
 
     if user_id:
+        preferences = _preferences(user_id)
+        if not preferences["conserver_historique"]:
+            conversation_id = _conversation_selectionnee(user_id)
+            return _rendre_page(
+                messages=_messages_conversation(user_id, conversation_id) if conversation_id else [],
+                utilisateur=session["user_email"],
+                prenom=_prenom_accueil(user_id),
+                conversations=_liste_conversations(user_id),
+                conversation_id=conversation_id,
+                preferences=preferences,
+            )
         # Utilisateur connecté — comportement existant
         conversation_id = _conv_courante(user_id)
         return _rendre_page(
@@ -3739,7 +3825,7 @@ def accueil():
             prenom=_prenom_accueil(user_id),
             conversations=_liste_conversations(user_id),
             conversation_id=conversation_id,
-            preferences=_preferences(user_id),
+            preferences=preferences,
         )
     else:
         # Visiteur anonyme — historique temporaire en session
@@ -3762,6 +3848,9 @@ def nouvelle_conv():
         # Visiteur : effacer la conversation temporaire
         session.pop("historique_visiteur", None)
         session.pop("resume_visiteur", None)
+        return redirect(url_for("accueil"))
+    if not _conserver_historique(user_id):
+        session.pop("conversation_id", None)
         return redirect(url_for("accueil"))
     with session_base() as db:
         conv = Conversation(user_id=user_id)
@@ -3879,6 +3968,7 @@ def regenerer(message_id):
     user_id = session.get("user_id")
     if not user_id:
         return jsonify({"erreur": "Non connecté."}), 401
+    conserver = _conserver_historique(user_id)
     with session_base() as db:
         msg = db.query(Message).join(Conversation).filter(
             Message.id == message_id, Message.auteur == "bot",
@@ -3900,7 +3990,7 @@ def regenerer(message_id):
         return jsonify({"erreur": "Aucun message utilisateur à régénérer."}), 400
     resume = _resume_conversation(user_id, conv_id)
     reponse = traiter_message(dernier_user, historique, user_id, resume)
-    mid = ajouter_message(user_id, conv_id, reponse, "bot")
+    mid = ajouter_message(user_id, conv_id, reponse, "bot") if conserver else None
     return jsonify({"reponse": reponse, "message_id": mid})
 
 
@@ -4210,6 +4300,14 @@ def repondre():
         return jsonify({"reponse": ""})
 
     if user_id:
+        if not _conserver_historique(user_id):
+            conversation_id = _conversation_selectionnee(user_id)
+            historique = _contexte_chat_temporaire(
+                user_id, conversation_id, request.form.get("historique"), message
+            )
+            resume = _resume_conversation(user_id, conversation_id) if conversation_id else ""
+            reponse = traiter_message(message, historique, user_id, resume)
+            return jsonify({"reponse": reponse, "message_id": None})
         conversation_id = _conv_courante(user_id)
         historique = _messages_conversation(user_id, conversation_id)
         resume = _resume_conversation(user_id, conversation_id)
@@ -4244,24 +4342,37 @@ def repondre_flux():
     - Pour les utilisateurs connectés : sauvegarde BDD inchangée dans le générateur.
     """
     user_id = session.get("user_id")
+    historique_recu = None
 
     if request.is_json:
         donnees = request.get_json(silent=True) or {}
         message = str(donnees.get("message", "")).strip()
+        historique_recu = donnees.get("historique")
     else:
         message = request.form.get("message", "").strip()
+        historique_recu = request.form.get("historique")
 
     if not message:
         return jsonify({"erreur": "Aucun message reçu."}), 400
 
     # --- Collecte du contexte selon le mode ---
     if user_id:
-        conversation_id = _conv_courante(user_id)
-        historique = _messages_conversation(user_id, conversation_id)
-        resume = _resume_conversation(user_id, conversation_id)
-        ajouter_message(user_id, conversation_id, message, "user")
-        contexte_historique = historique + [{"auteur": "user", "texte": message}]
+        conserver = _conserver_historique(user_id)
+        if conserver:
+            conversation_id = _conv_courante(user_id)
+            historique = _messages_conversation(user_id, conversation_id)
+            resume = _resume_conversation(user_id, conversation_id)
+            ajouter_message(user_id, conversation_id, message, "user")
+            contexte_historique = historique + [{"auteur": "user", "texte": message}]
+        else:
+            conversation_id = _conversation_selectionnee(user_id)
+            historique = _contexte_chat_temporaire(
+                user_id, conversation_id, historique_recu, message
+            )
+            resume = _resume_conversation(user_id, conversation_id) if conversation_id else ""
+            contexte_historique = historique
     else:
+        conserver = False
         historique = list(_historique_visiteur())
         resume = _resume_visiteur()
         _ajouter_message_visiteur(message, "user")
@@ -4285,7 +4396,7 @@ def repondre_flux():
 
             reponse_complete = "".join(morceaux).strip()
 
-            if user_id:
+            if user_id and conserver:
                 # Utilisateur connecté : sauvegarde BDD directement dans le générateur.
                 if reponse_complete:
                     mid = ajouter_message(user_id, conversation_id, reponse_complete, "bot")
@@ -4294,6 +4405,10 @@ def repondre_flux():
                     mid = None
                 yield "data: " + json.dumps(
                     {"termine": True, "message_id": mid}, ensure_ascii=False
+                ) + "\n\n"
+            elif user_id:
+                yield "data: " + json.dumps(
+                    {"termine": True, "message_id": None}, ensure_ascii=False
                 ) + "\n\n"
             else:
                 # Visiteur : on NE MODIFIE PAS la session ici (headers déjà envoyés).
@@ -4384,10 +4499,19 @@ def repondre_image():
     user_id = session.get("user_id")
 
     if user_id:
-        conversation_id = _conv_courante(user_id)
-        historique = _messages_conversation(user_id, conversation_id)
-        resume = _resume_conversation(user_id, conversation_id)
+        conserver = _conserver_historique(user_id)
+        if conserver:
+            conversation_id = _conv_courante(user_id)
+            historique = _messages_conversation(user_id, conversation_id)
+            resume = _resume_conversation(user_id, conversation_id)
+        else:
+            conversation_id = _conversation_selectionnee(user_id)
+            historique = _historique_recu_temporaire(request.form.get("historique"))
+            if not historique and conversation_id:
+                historique = _messages_conversation(user_id, conversation_id)
+            resume = _resume_conversation(user_id, conversation_id) if conversation_id else ""
     else:
+        conserver = False
         historique = list(_historique_visiteur())
         resume = _resume_visiteur()
         conversation_id = None
@@ -4416,14 +4540,14 @@ def repondre_image():
     type_media = "Vidéo" if mime_type.startswith("video/") else "Image"
     texte_msg = message or f"[{type_media} envoyée]"
 
-    if user_id:
+    if user_id and conserver:
         ajouter_message(user_id, conversation_id, texte_msg, "user")
-    else:
+    elif not user_id:
         _ajouter_message_visiteur(texte_msg, "user")
 
     reponse = traiter_message_image(message, image_b64, mime_type, historique, resume, user_id=user_id)
 
-    if user_id:
+    if user_id and conserver:
         mid = ajouter_message(user_id, conversation_id, reponse, "bot")
         if texte_msg == "[Image envoyée]":
             titre_image = _titre_automatique(reponse.splitlines()[0].split(". ", 1)[0])
@@ -4433,6 +4557,8 @@ def repondre_image():
                     if conversation and conversation.title == "Nouvelle conversation":
                         conversation.title = titre_image
         _actualiser_resume(user_id, conversation_id)
+    elif user_id:
+        mid = None
     else:
         _ajouter_message_visiteur(reponse, "bot")
         mid = None
@@ -5422,6 +5548,8 @@ def transferer_conversation():
     user_id = session.get("user_id")
     if not user_id:
         return jsonify({"erreur": "Non connecté."}), 401
+    if not _conserver_historique(user_id):
+        return jsonify({"ok": True, "transfere": 0, "note": "La conservation de l'historique est désactivée."})
 
     hist = session.pop("transfert_en_attente", None)
     if not hist:
