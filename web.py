@@ -1176,6 +1176,14 @@ video#apercu-fichier-media { object-fit: contain; }
 .msg.bot .pdf-telechargement-chat { display:inline-flex;align-items:center;margin-top:10px;padding:9px 14px;border-radius:10px;background:var(--accent-gradient);color:#fff;text-decoration:none;font-weight:650;box-shadow:0 3px 10px rgba(34,160,125,.18); }
 .msg.bot .pdf-telechargement-chat:hover { filter:brightness(.96); }
 .message-wrap { max-width:min(95%,var(--largeur-conversation)); }
+.message-wrap { margin-bottom:22px; }
+.msg { padding:14px 17px; border:1px solid var(--bordure); box-shadow:0 3px 12px rgba(17,51,39,.045); }
+.msg.user { border-color:rgba(34,197,94,.18); }
+.msg.bot { background:var(--fond-secondaire); }
+.actions-reponse { gap:4px; padding:6px 4px; }
+.actions-reponse button { width:36px; height:36px; display:inline-grid; place-items:center; border:1px solid transparent; }
+.actions-reponse button:focus-visible { outline:2px solid #3b82f6; outline-offset:1px; }
+.actions-reponse button:hover { border-color:var(--bordure); }
 .image-message-lien { display:block; margin-top:4px; }
 .image-message { display:block; max-width:min(280px,70vw); max-height:320px; object-fit:contain; border-radius:12px; cursor:zoom-in; }
 .bas { gap:10px !important; padding:12px 14px max(12px,env(safe-area-inset-bottom)) !important; border:1px solid var(--bordure) !important; border-radius:24px; margin-top:8px; margin-bottom:14px; box-shadow:0 8px 28px rgba(16,55,41,.08); }
