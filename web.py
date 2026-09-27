@@ -1109,8 +1109,18 @@ video#apercu-fichier-media { object-fit: contain; }
 .sidebar-account-links a:hover { background:var(--vert-clair); }
 .ligne-conversation { min-height:44px; padding:0 8px 0 12px; }
 .ligne-conversation > a { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; border:0 !important; background:transparent !important; }
-.ligne-conversation .epingle-conversation { padding:6px; border:0; background:transparent; color:#81928b; cursor:pointer; }
+.conversation-icon-button { display:inline-flex; align-items:center; justify-content:center; flex:0 0 40px; width:40px; height:40px; padding:0; border:0; border-radius:10px; background:transparent; color:#7d8d86; cursor:pointer; transition:color var(--transition),background var(--transition),transform var(--transition); }
+.conversation-icon-button svg { width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
+.conversation-icon-button:hover,.conversation-icon-button:focus-visible { color:#168c65; background:var(--vert-clair); }
+.conversation-icon-button:focus-visible { outline:2px solid #3b82f6; outline-offset:1px; }
+.ligne-conversation .epingle-conversation { margin-right:2px; }
 .ligne-conversation .epingle-conversation[aria-pressed="true"] { color:#fff; background:var(--accent-gradient); }
+.ligne-conversation .epingle-conversation[aria-pressed="true"] svg { fill:rgba(255,255,255,.18); }
+.conversation-action-list { display:flex; align-items:center; gap:2px; }
+.conversation-action-list[hidden] { display:none; }
+.conversation-action-label { display:none; }
+.conversation-menu-toggle { display:none; }
+.conversation-action-form { margin:0; }
 .ligne-conversation > a.actif { border-radius:8px; background:var(--accent-gradient) !important; color:#fff !important; }
 #sidebar button.nouvelle { border-color:transparent !important; background:var(--accent-gradient); color:#fff; }
 #sidebar button.nouvelle:hover { filter:brightness(.94); }
@@ -1170,6 +1180,14 @@ video#apercu-fichier-media { object-fit: contain; }
   #sidebar[style*="display: block"] { display:flex !important; }
   .sidebar-brand { padding-top:20px; }
   .sidebar-account { margin-top:16px; }
+  .ligne-conversation { position:relative; }
+  .ligne-conversation .epingle-conversation { flex-basis:44px; width:44px; height:44px; }
+  .conversation-menu-toggle { display:inline-flex; flex:0 0 44px; width:44px; height:44px; }
+  .conversation-action-list { position:absolute; z-index:20; top:calc(100% - 4px); right:8px; display:flex; flex-direction:column; align-items:stretch; gap:3px; width:190px; padding:6px; border:1px solid var(--bordure); border-radius:13px; background:var(--fond); box-shadow:0 12px 32px rgba(15,35,28,.2); }
+  .conversation-action-list[hidden] { display:none; }
+  .conversation-action-list .conversation-icon-button { justify-content:flex-start; gap:10px; flex:0 0 44px; width:100%; height:44px; padding:0 12px; border-radius:9px; color:var(--texte); text-align:left; }
+  .conversation-action-list .conversation-icon-button:hover,.conversation-action-list .conversation-icon-button:focus-visible { color:#168c65; background:var(--vert-clair); }
+  .conversation-action-label { display:inline; font:500 14px/1.2 'Segoe UI',system-ui,sans-serif; }
 }
 @media (max-width: 600px) {
   .suggestions { grid-template-columns:1fr; }
@@ -1304,14 +1322,14 @@ if ('serviceWorker' in navigator) {
       <div id="conversations-recentes">
         {% for conv in conversations %}
           <div class="ligne-conversation" data-conv-id="{{ conv.id }}" data-titre="{{ conv.titre|lower }}" style="display:flex;align-items:center;">
-            <button type="button" class="epingle-conversation" aria-pressed="false" title="&Eacute;pingler" aria-label="&Eacute;pingler cette conversation">&#9734;</button>
+            <button type="button" class="conversation-icon-button epingle-conversation" aria-pressed="false" title="&Eacute;pingler" aria-label="&Eacute;pingler cette conversation"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9L12 3z"/></svg></button>
             <a href="{{ url_for('charger_conv', i=conv.id) }}" class="{{ 'actif' if conv.id == conversation_id else '' }}" style="flex:1;">{{ conv.titre }}</a>
-            <button type="button" title="Partager" aria-label="Partager" onclick="partagerConversation({{ conv.id }})" style="border:0;background:none;cursor:pointer;padding:8px;">&#128279;</button>
-            <form action="{{ url_for('archiver_conv', i=conv.id) }}" method="post" style="margin:0;"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit" title="Archiver" aria-label="Archiver" style="border:0;background:none;cursor:pointer;padding:8px;">&#128451;</button></form>
-            <form action="{{ url_for('supprimer_conv', i=conv.id) }}" method="post" style="margin:0;">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-              <button type="submit" onclick="return confirm('Supprimer cette conversation ?');" aria-label="Supprimer" style="color:#c00;padding:8px 12px;border:0;background:none;cursor:pointer;font-size:20px;">&times;</button>
-            </form>
+            <button type="button" class="conversation-icon-button conversation-menu-toggle" aria-label="Actions de la conversation" aria-expanded="false" aria-controls="actions-conv-{{ conv.id }}" title="Actions"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg></button>
+            <div class="conversation-action-list" id="actions-conv-{{ conv.id }}" aria-label="Actions de la conversation" hidden>
+              <button type="button" class="conversation-icon-button" title="Partager" aria-label="Partager" onclick="partagerConversation({{ conv.id }})"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.1 0l3-3A5 5 0 0 0 13 2.9l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.1 0l-3 3A5 5 0 0 0 11 21.1l1.7-1.7"/></svg><span class="conversation-action-label">Partager</span></button>
+              <form class="conversation-action-form" action="{{ url_for('archiver_conv', i=conv.id) }}" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit" class="conversation-icon-button" title="Archiver — masquer des récentes" aria-label="Archiver cette conversation (la masquer des récentes)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h18v4H3z"/><path d="M5 8v12h14V8M10 12h4"/></svg><span class="conversation-action-label">Archiver des récentes</span></button></form>
+              <form class="conversation-action-form" action="{{ url_for('supprimer_conv', i=conv.id) }}" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit" class="conversation-icon-button" onclick="return confirm('Supprimer cette conversation ?');" title="Supprimer" aria-label="Supprimer cette conversation"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2m3 0-1 14H6L5 6m4 4v6m6-6v6"/></svg><span class="conversation-action-label">Supprimer</span></button></form>
+            </div>
           </div>
         {% else %}
           <div class="sidebar-vide">Tes conversations appara&icirc;tront ici.</div>
@@ -2557,6 +2575,20 @@ const rechercheEl = document.getElementById('recherche-conversations');
 const sidebarEl = document.getElementById('sidebar');
 const epingleesEl = document.getElementById('conversations-epinglees');
 const recentesEl = document.getElementById('conversations-recentes');
+const breakpointMenuConversations = window.matchMedia('(max-width: 850px)');
+function adapterMenusConversations(mobile) {
+  document.querySelectorAll('.conversation-action-list').forEach(function(menu) {
+    menu.hidden = mobile;
+    const bouton = menu.parentElement.querySelector('.conversation-menu-toggle');
+    if (bouton) bouton.setAttribute('aria-expanded', 'false');
+  });
+}
+adapterMenusConversations(breakpointMenuConversations.matches);
+if (breakpointMenuConversations.addEventListener) {
+  breakpointMenuConversations.addEventListener('change', function(e) { adapterMenusConversations(e.matches); });
+} else if (breakpointMenuConversations.addListener) {
+  breakpointMenuConversations.addListener(function(e) { adapterMenusConversations(e.matches); });
+}
 const cleEpinglees = 'dashle:conversations:epinglees:' + (sidebarEl.dataset.compte || 'visiteur');
 let conversationsEpinglees = [];
 if (epingleesEl && recentesEl) {
@@ -2570,11 +2602,32 @@ if (epingleesEl && recentesEl) {
     const estEpinglee = conversationsEpinglees.includes(ligne.dataset.convId);
     const bouton = ligne.querySelector('.epingle-conversation');
     bouton.setAttribute('aria-pressed', estEpinglee ? 'true' : 'false');
-    bouton.textContent = estEpinglee ? '★' : '☆';
     bouton.title = estEpinglee ? 'Désépingler' : 'Épingler';
     (estEpinglee ? epingleesEl : recentesEl).appendChild(ligne);
   });
   sidebarEl.addEventListener('click', function(e) {
+    const menuToggle = e.target.closest('.conversation-menu-toggle');
+    if (menuToggle) {
+      const menu = document.getElementById(menuToggle.getAttribute('aria-controls'));
+      document.querySelectorAll('.conversation-menu-toggle').forEach(function(otherToggle) {
+        if (otherToggle !== menuToggle) {
+          otherToggle.setAttribute('aria-expanded', 'false');
+          const otherMenu = document.getElementById(otherToggle.getAttribute('aria-controls'));
+          if (otherMenu) otherMenu.hidden = true;
+        }
+      });
+      const ouvert = menuToggle.getAttribute('aria-expanded') !== 'true';
+      menuToggle.setAttribute('aria-expanded', ouvert ? 'true' : 'false');
+      if (menu) menu.hidden = !ouvert;
+      return;
+    }
+    if (e.target.closest('.conversation-action-list')) {
+      const toggle = e.target.closest('.ligne-conversation').querySelector('.conversation-menu-toggle');
+      if (toggle && e.target.closest('button')) {
+        toggle.setAttribute('aria-expanded', 'false');
+        e.target.closest('.ligne-conversation').querySelector('.conversation-action-list').hidden = true;
+      }
+    }
     const bouton = e.target.closest('.epingle-conversation');
     if (!bouton) return;
     const ligne = bouton.closest('.ligne-conversation');
@@ -2589,9 +2642,16 @@ if (epingleesEl && recentesEl) {
       console.warn('Enregistrement des conversations épinglées impossible :', err);
     }
     bouton.setAttribute('aria-pressed', epinglee ? 'false' : 'true');
-    bouton.textContent = epinglee ? '☆' : '★';
     bouton.title = epinglee ? 'Épingler' : 'Désépingler';
     (epinglee ? recentesEl : epingleesEl).appendChild(ligne);
+  });
+  document.addEventListener('click', function(e) {
+    if (e.target.closest('.ligne-conversation')) return;
+    document.querySelectorAll('.conversation-menu-toggle').forEach(function(toggle) {
+      toggle.setAttribute('aria-expanded', 'false');
+      const menu = document.getElementById(toggle.getAttribute('aria-controls'));
+      if (menu) menu.hidden = true;
+    });
   });
 }
 if (rechercheEl) {
