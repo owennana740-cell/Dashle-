@@ -705,6 +705,12 @@ body[data-animations="reduites"] .suggestion { transition-duration: 0.01ms; }
 body[data-animations="desactivees"] .suggestion { transition: none; transform: none; }
 
 body.theme-sombre .msg.bot { color: var(--texte); }
+body, #sidebar, #chat, form.bas, .msg { transition:background-color .2s ease,color .2s ease,border-color .2s ease; }
+body.theme-sombre .user-dropdown { background:var(--fond-secondaire); border-color:var(--bordure); }
+body.theme-sombre .user-dropdown a,body.theme-sombre .user-dropdown button { color:var(--texte); }
+body.theme-sombre .user-dropdown .email-info { color:#a8bdb4; }
+body.theme-sombre .suggestion { background:var(--fond-secondaire); color:var(--texte); }
+body.theme-sombre .msg.bot pre { border:1px solid #31483e; }
 
 /* ---- Actions réponse ---- */
 .actions-reponse {
@@ -3134,6 +3140,15 @@ function appliquerTheme(theme) {
   document.body.classList.toggle('theme-sombre', sombre);
   document.body.classList.toggle('theme-clair', !sombre);
   try { localStorage.setItem('dashle_theme', theme); } catch(e) {}
+}
+
+if (window.matchMedia) {
+  var preferenceSysteme = window.matchMedia('(prefers-color-scheme: dark)');
+  var suivreThemeSysteme = function() {
+    try { if (localStorage.getItem('dashle_theme') === 'systeme') appliquerTheme('systeme'); } catch(e) {}
+  };
+  if (preferenceSysteme.addEventListener) preferenceSysteme.addEventListener('change', suivreThemeSysteme);
+  else if (preferenceSysteme.addListener) preferenceSysteme.addListener(suivreThemeSysteme);
 }
 
 function appliquerAccent(accent) {
