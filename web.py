@@ -1209,6 +1209,11 @@ button.envoyer,button.arreter { width:42px; height:42px; }
 #mode-vocal[data-etat="ecoute"] .orbe-dashle,
 #mode-vocal[data-etat="parle"] .orbe-dashle { box-shadow:0 0 30px rgba(16,163,127,.7),0 0 100px rgba(8,115,85,.45),inset -16px -18px 28px rgba(0,40,28,.35); }
 #mode-vocal[data-etat="reflexion"] .orbe-dashle { filter:hue-rotate(26deg) brightness(1.16) saturate(1.12); box-shadow:0 0 36px rgba(34,211,238,.78),0 0 100px rgba(16,163,127,.62),inset -16px -18px 28px rgba(0,40,28,.35); }
+#mode-vocal[data-etat="attente"] .orbe-dashle { filter:saturate(.78) brightness(.92); }
+#mode-vocal[data-etat="ecoute"] .orbe-dashle { animation-duration:1.8s; }
+#mode-vocal[data-etat="parle"] .orbe-dashle { animation-duration:1.25s; }
+#mode-vocal[data-etat="erreur"] .orbe-dashle { filter:hue-rotate(105deg) saturate(.9); box-shadow:0 0 28px rgba(248,113,113,.58),0 0 76px rgba(239,68,68,.28),inset -16px -18px 28px rgba(0,40,28,.35); }
+#mode-vocal[data-etat="erreur"] .etat-vocal { color:#fecaca; }
 
 @media (min-width: 851px) {
   #sidebar { display:flex !important; }
@@ -2292,7 +2297,7 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
     btnMicro.classList.remove('actif');
     recoResultatsAutorises = false;
     if (vocalActif && (e.error === 'not-allowed' || e.error === 'service-not-allowed')) {
-      afficherEtatVocal('attente', 'Micro refusé');
+      afficherEtatVocal('erreur', 'Micro refusé');
       afficherStatutVocal('Autorise le micro pour Dashle dans les réglages du navigateur, puis relance le mode vocal.');
       return;
     }
