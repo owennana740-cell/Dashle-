@@ -49,12 +49,18 @@ def niveau_abonnement(user):
     """Retourne le niveau actif, avec accès Prime réservé aux comptes owner."""
     if user and user.email.strip().lower() in emails_owner():
         return "prime"
-    if user and user.acces_manuel:
-        return user.palier if user.palier in {"free", "pro", "prime"} else "free"
-    niveau = user.subscription_level if user else "free"
-    if user and user.subscription_expires_at and user.subscription_expires_at <= datetime.utcnow():
+    if not user:
         return "free"
-    return niveau if niveau in {"free", "pro", "prime"} else "free"
+
+    niveau_abonne = user.subscription_level if user.subscription_level in {"free", "pro", "prime"} else "free"
+    if user.subscription_expires_at and user.subscription_expires_at <= datetime.utcnow():
+        niveau_abonne = "free"
+
+    # Les anciens droits manuels sont conservés, mais ne doivent pas écraser
+    # un abonnement payé plus élevé avec un palier historique par défaut.
+    niveau_manuel = user.palier if user.acces_manuel and user.palier in {"free", "pro", "prime"} else "free"
+    ordre = {"free": 0, "pro": 1, "prime": 2}
+    return max((niveau_abonne, niveau_manuel), key=ordre.__getitem__)
 
 
 def _nom_utilisateur(user_id=None):
@@ -145,10 +151,28 @@ def nettoyer_reponse(texte: str) -> str:
 
 
 def _historique_recent(historique) -> list:
-    """Retourne les N derniers messages du contexte."""
+    """Retourne les derniers échanges dans une limite de taille prudente.
+
+    Gemini ne reçoit pas un nombre fixe de tokens ici : plafonner aussi le
+    texte évite qu'une poignée de très longs messages consomme tout le contexte.
+    """
     if not historique:
         return []
-    return list(historique)[-MAX_MESSAGES_CONTEXTE:]
+    budget_caracteres = 24000
+    selection = []
+    total = 0
+    for msg in reversed(list(historique)[-MAX_MESSAGES_CONTEXTE:]):
+        texte = str(msg.get("texte", ""))
+        cout = len(texte)
+        if selection and total + cout > budget_caracteres:
+            break
+        if not selection and cout > budget_caracteres:
+            texte = texte[-budget_caracteres:]
+            msg = {**msg, "texte": texte}
+            cout = len(texte)
+        selection.append(msg)
+        total += cout
+    return list(reversed(selection))
 
 
 def _instruction_systeme(resume: str = "", consignes: str = "", niveau: str = "free", contexte_live: str = "", nom_utilisateur: str | None = None) -> str:

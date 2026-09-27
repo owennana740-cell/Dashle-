@@ -3520,7 +3520,7 @@ STATISTIQUES_PAGE = """
 {% else %}<p class="meta">Offre {{ niveau|capitalize }} · {{ restant }} analyse(s) restante(s) aujourd’hui (limite : 25).</p>
 <form class="card" method="post" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label for="fichier">Fichier CSV ou Excel</label><input id="fichier" name="fichier" type="file" accept=".csv,.xls,.xlsx,.xlsm" required><label for="question">Que veux-tu analyser ?</label><textarea id="question" name="question" maxlength="1000" required placeholder="Ex. : Compare les ventes selon la région, teste la différence entre les groupes, ou calcule la probabilité que ventes > 100."></textarea><button type="submit">Analyser</button></form>
 {% endif %}
-{% if metriques %}<section class="card"><h2>Calculs Python</h2><p class="meta">{{ metriques.lignes }} lignes · {{ metriques.colonnes }} colonnes · {{ restant }} analyse(s) restante(s) aujourd’hui</p><pre class="result">{{ calculs }}</pre><h2>Interprétation DASHLE</h2><pre class="result">{{ interpretation }}</pre></section>{% endif %}
+{% if metriques %}<section class="card"><h2>Calculs Python</h2><p class="meta">{{ metriques.lignes }} lignes · {{ metriques.colonnes }} colonnes · {{ restant }} analyse(s) restante(s) aujourd’hui</p>{% if metriques.graphique %}<figure class="graphique"><img src="{{ metriques.graphique }}" alt="Histogramme de distribution de la première colonne numérique"><figcaption>Distribution de la première colonne numérique · survole les barres pour voir les effectifs.</figcaption></figure>{% endif %}<pre class="result">{{ calculs }}</pre><h2>Interprétation DASHLE</h2><pre class="result">{{ interpretation }}</pre></section>{% endif %}
 </main></body></html>
 """
 

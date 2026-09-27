@@ -3,6 +3,8 @@
 from io import BytesIO
 from pathlib import Path
 import re
+import base64
+from html import escape
 
 import numpy as np
 import pandas as pd
@@ -11,6 +13,42 @@ from scipy import stats
 
 TAILLE_MAX_LIGNES = 100_000
 TAILLE_MAX_COLONNES = 100
+
+
+def _graphique_distribution(cadre, colonnes_numeriques):
+    """Construit un histogramme SVG autonome pour le rendu sans dépendance graphique."""
+    if not colonnes_numeriques:
+        return None
+    colonne = colonnes_numeriques[0]
+    valeurs = pd.to_numeric(cadre[colonne], errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
+    if len(valeurs) < 2:
+        return None
+    comptes, bornes = np.histogram(valeurs.to_numpy(), bins=min(12, max(4, int(np.sqrt(len(valeurs))))))
+    maximum = max(int(comptes.max()), 1)
+    gauche, haut, largeur, hauteur = 54, 50, 650, 250
+    pas = largeur / len(comptes)
+    barres = []
+    for index, compte in enumerate(comptes):
+        barre_hauteur = hauteur * int(compte) / maximum
+        x = gauche + index * pas + 2
+        y = haut + hauteur - barre_hauteur
+        label = f"{bornes[index]:.4g}"
+        barres.append(
+            f'<rect x="{x:.1f}" y="{y:.1f}" width="{max(1, pas-4):.1f}" '
+            f'height="{barre_hauteur:.1f}" rx="4" fill="#22a879"><title>{int(compte)} ligne(s), dès {escape(label)}</title></rect>'
+        )
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 350" role="img">'
+        '<defs><linearGradient id="bg" x2="1" y2="1"><stop stop-color="#e7f8ef"/><stop offset="1" stop-color="#eaf1ff"/></linearGradient></defs>'
+        '<rect width="760" height="350" rx="20" fill="url(#bg)"/>'
+        f'<text x="28" y="30" font-family="sans-serif" font-size="16" font-weight="700" fill="#18352c">Distribution · {escape(colonne)}</text>'
+        f'<path d="M{gauche} {haut+hauteur}H{gauche+largeur}" stroke="#6f8a7f"/>'
+        + ''.join(barres)
+        + f'<text x="{gauche}" y="330" font-family="sans-serif" font-size="12" fill="#526a61">{bornes[0]:.4g}</text>'
+        + f'<text x="{gauche+largeur-40}" y="330" font-family="sans-serif" font-size="12" fill="#526a61">{bornes[-1]:.4g}</text>'
+        + '</svg>'
+    )
+    return "data:image/svg+xml;base64," + base64.b64encode(svg.encode("utf-8")).decode("ascii")
 
 
 def _nom_colonne(nom):
@@ -137,4 +175,8 @@ def analyser_fichier(contenu: bytes, nom_fichier: str, question: str) -> tuple[s
 
     blocs.append("Les tests sont exploratoires : contrôler la qualité des données, les hypothèses et le plan d’échantillonnage avant toute conclusion causale.")
     contexte = "\n\n".join(blocs)
-    return contexte[:14000], {"lignes": len(cadre), "colonnes": len(cadre.columns)}
+    return contexte[:14000], {
+        "lignes": len(cadre),
+        "colonnes": len(cadre.columns),
+        "graphique": _graphique_distribution(cadre, numeriques),
+    }
