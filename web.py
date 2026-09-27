@@ -248,6 +248,21 @@ def _liste_conversations(user_id):
             .order_by(Conversation.updated_at.desc())
             .all()
         )
+        for conv in convs:
+            if conv.title not in {"Nouvelle conversation", "[Image envoyée]", "[Vidéo envoyée]"}:
+                continue
+            for index, message in enumerate(conv.messages):
+                if message.auteur != "user":
+                    continue
+                titre = _titre_automatique(message.texte)
+                if not titre and message.texte in {"[Image envoyée]", "[Vidéo envoyée]"}:
+                    for reponse in conv.messages[index + 1:]:
+                        if reponse.auteur == "bot" and reponse.texte.strip():
+                            titre = _titre_automatique(reponse.texte.splitlines()[0].split(". ", 1)[0])
+                            break
+                if titre:
+                    conv.title = titre
+                    break
         return [{"id": c.id, "titre": c.title} for c in convs]
 
 
