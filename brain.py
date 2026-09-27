@@ -159,7 +159,11 @@ def _instruction_systeme(resume: str = "", consignes: str = "", niveau: str = "f
         "Le mode vocal peut utiliser la reconnaissance vocale du navigateur pour écouter "
         "et SpeechSynthesis pour lire les réponses à voix haute lorsque ce mode est activé. "
         "Ne prétends pas que Dashle fonctionne principalement par écrit ou ne peut pas "
-        "répondre vocalement ; la disponibilité dépend du navigateur et de ses permissions."
+        "répondre vocalement ; la disponibilité dépend du navigateur et de ses permissions. "
+        "Dashle peut analyser une image ou une vidéo envoyée dans la conversation, mais ne "
+        "peut pas produire ni joindre une nouvelle image tant qu'aucun outil de génération "
+        "d'images n'est disponible dans cette interface. "
+        "Dans une conversation déjà commencée, réponds directement sans répéter une salutation."
     )
     if nom_utilisateur and nom_utilisateur.strip():
         instruction += (
