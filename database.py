@@ -39,6 +39,7 @@ class User(Base):
     acces_manuel: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("TRUE"), nullable=False)
     subscription_level: Mapped[str] = mapped_column(String(20), default="free", nullable=False)
     subscription_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     subscription_provider: Mapped[str | None] = mapped_column(String(20), nullable=True)
@@ -202,6 +203,7 @@ def initialiser_base():
         "subscription_expires_at": "TIMESTAMP NULL",
         "subscription_provider": "VARCHAR(20) NULL",
         "provider_subscription_id": "VARCHAR(255) NULL",
+        "is_active": "BOOLEAN NOT NULL DEFAULT TRUE",
     }
     colonnes_existantes = {colonne["name"] for colonne in inspect(engine).get_columns("users")}
     with engine.begin() as connexion:

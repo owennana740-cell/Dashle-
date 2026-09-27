@@ -183,7 +183,14 @@ def exiger_connexion():
     Redirige vers /connexion uniquement pour les routes qui nécessitent
     vraiment un compte (paramètres, sécurité, gestion de conversations, etc.).
     """
-    if request.endpoint in _ROUTES_PUBLIQUES or "user_id" in session:
+    user_id = session.get("user_id")
+    if user_id:
+        with session_base() as db:
+            utilisateur = db.get(User, user_id)
+            if utilisateur and utilisateur.is_active:
+                return None
+        session.clear()
+    if request.endpoint in _ROUTES_PUBLIQUES:
         return None
     return redirect(url_for("connexion"))
 
@@ -4920,14 +4927,26 @@ def admin():
                     return "Choix de palier invalide", 400
                 cible.palier = palier
                 cible.acces_manuel = True
+                action_journal = "modification_forfait"
                 detail_action = f"palier manuel défini: {palier}"
             elif action == "retirer":
                 cible.palier = None
                 cible.acces_manuel = False
+                action_journal = "retrait_acces_manuel"
                 detail_action = "accès manuel retiré"
+            elif action == "suspendre":
+                if cible.id == user_id or cible.email.strip().lower() in emails_owner():
+                    return "Un compte propriétaire ne peut pas être suspendu ici.", 400
+                cible.is_active = False
+                action_journal = "suspension_compte"
+                detail_action = "compte suspendu"
+            elif action == "reactiver":
+                cible.is_active = True
+                action_journal = "reactivation_compte"
+                detail_action = "compte réactivé"
             else:
                 return "Action invalide", 400
-            _journaliser_action_admin(db, user_id, "modification_forfait", "users", cible.id, detail_action)
+            _journaliser_action_admin(db, user_id, action_journal, "users", cible.id, detail_action)
         return redirect(url_for("admin", section="users", q=recherche, page=request.form.get("page", 1)))
 
     with session_base() as db:
@@ -4958,6 +4977,8 @@ def admin():
                 "activite": derniere.strftime("%d/%m/%Y") if derniere else "Aucune",
                 "niveau": niveau_abonnement(compte),
                 "manuel": compte.acces_manuel,
+                "active": compte.is_active,
+                "owner": compte.email.strip().lower() in emails_owner(),
             })
 
         nb_conversations = db.query(Conversation).count()
@@ -5358,7 +5379,7 @@ def connexion():
         email = request.form.get("email", "").strip().lower()
         with session_base() as db:
             user = db.query(User).filter_by(email=email).one_or_none()
-            if user and check_password_hash(user.password_hash, request.form.get("password", "")):
+            if user and user.is_active and check_password_hash(user.password_hash, request.form.get("password", "")):
                 if user.email.strip().lower() in emails_owner():
                     _journaliser_action_admin(db, user.id, "connexion_admin")
                 hist_visiteur = list(_historique_visiteur())
