@@ -3244,23 +3244,27 @@ SETTINGS_PAGE = """
 <!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Dashle - Paramètres</title>
 <style>
-:root{font-family:Segoe UI,sans-serif;color:#17251f;background:#f4f8f6}
+:root{font-family:Segoe UI,sans-serif;color:#17251f;background:#f4f8f6;--param-texte:#17251f;--param-fond:#f4f8f6;--param-carte:#fff;--param-bordure:#dceae4;--param-muted:#71837b}
 *{box-sizing:border-box}body{margin:0}
-.page{max-width:760px;margin:auto;padding:24px 18px 50px}
+.page{max-width:820px;margin:auto;padding:30px 20px 56px}
 .bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:22px}
 .bar a{color:#22C55E;text-decoration:none;font-weight:600;margin-left:12px}
-.carte{background:#fff;border:1px solid #dceae4;border-radius:14px;padding:18px;margin:12px 0}
-.carte h2{font-size:15px;margin:0 0 14px;color:#22C55E}
-label{display:flex;justify-content:space-between;gap:14px;align-items:center;padding:10px 0;border-top:1px solid #edf2f0}
+.carte{background:var(--param-carte);border:1px solid var(--param-bordure);border-radius:18px;padding:20px;margin:14px 0;box-shadow:0 8px 24px rgba(20,55,42,.045)}
+.carte h2{font-size:15px;margin:0 0 14px;color:#168c65;letter-spacing:.02em}
+label{display:flex;justify-content:space-between;gap:14px;align-items:center;padding:12px 0;border-top:1px solid #edf2f0}
 label:first-of-type{border-top:0}
 select,input[type=checkbox],input[type=range]{accent-color:#22C55E}
-select{max-width:100%;padding:7px;border:1px solid #dceae4;border-radius:7px}
+select,textarea{max-width:100%;padding:9px 11px;border:1px solid var(--param-bordure);border-radius:9px;background:var(--param-carte);color:var(--param-texte);font:inherit}
+select:focus,textarea:focus{outline:2px solid rgba(59,130,246,.28);border-color:#3b82f6}
 input[type=range]{width:160px}
 button{border:0;border-radius:9px;background:linear-gradient(110deg,#22C55E,#3B82F6);color:#fff;padding:10px 14px;cursor:pointer}
 .secondaire{background:#eef6ff;color:#2563eb}
-.note{color:#71837b;font-size:13px}
+.note{color:var(--param-muted);font-size:13px}
+body.theme-sombre{color:var(--param-texte);background:var(--param-fond);--param-texte:#e8f5ef;--param-fond:#101816;--param-carte:#17231f;--param-bordure:#294238;--param-muted:#a8bdb4}
+body.theme-sombre label{border-color:#294238}
+@media(max-width:600px){.page{padding:20px 13px 40px}.bar{align-items:flex-start;gap:12px}.bar>div:last-child{display:grid;gap:8px}.bar a{margin:0}.carte{padding:16px;border-radius:15px}label{align-items:flex-start;flex-direction:column;gap:7px}label select,label input[type=range],label textarea{width:100%;max-width:100%}}
 </style></head>
-<body><main class="page">
+<body class="theme-{{ preferences.theme }}"><main class="page">
 <div class="bar">
   <div><strong>Dashle</strong><h1>Paramètres</h1></div>
   <div>
@@ -3375,7 +3379,17 @@ if (themeSelect) {
   } catch(e) {}
   themeSelect.addEventListener('change', function() {
     try { localStorage.setItem('dashle_theme', this.value); } catch(e) {}
+    document.body.classList.toggle('theme-sombre', this.value === 'sombre' || (this.value === 'systeme' && window.matchMedia('(prefers-color-scheme: dark)').matches));
+    document.body.classList.toggle('theme-clair', !document.body.classList.contains('theme-sombre'));
   });
+  if (themeSelect.value === 'systeme' && window.matchMedia) {
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function(e) {
+      if (themeSelect.value === 'systeme') {
+        document.body.classList.toggle('theme-sombre', e.matches);
+        document.body.classList.toggle('theme-clair', !e.matches);
+      }
+    });
+  }
 }
 
 // Taille de texte en temps réel.
