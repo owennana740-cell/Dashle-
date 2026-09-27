@@ -3813,6 +3813,15 @@ Disallow: /repondre_flux
 Disallow: /repondre_image
 Disallow: /confirmer_message
 Disallow: /health
+Disallow: /admin
+Disallow: /api/
+Disallow: /telecharger-pdf-temps-reel
+Disallow: /paiement/
+Disallow: /abonnement/
+Disallow: /planification
+Disallow: /projets
+Disallow: /plugins
+Disallow: /statistiques
 Sitemap: https://dashle.onrender.com/sitemap.xml
 """
     return Response(contenu, mimetype="text/plain")
@@ -3825,6 +3834,8 @@ def sitemap_xml():
   <url><loc>https://dashle.onrender.com/</loc></url>
   <url><loc>https://dashle.onrender.com/actualites</loc></url>
   <url><loc>https://dashle.onrender.com/conditions</loc></url>
+  <url><loc>https://dashle.onrender.com/temps-reel</loc></url>
+  <url><loc>https://dashle.onrender.com/tarifs</loc></url>
 </urlset>
 """
     return Response(contenu, mimetype="application/xml")
