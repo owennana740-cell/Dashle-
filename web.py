@@ -1178,6 +1178,11 @@ video#apercu-fichier-media { object-fit: contain; }
 .message-wrap { max-width:min(95%,var(--largeur-conversation)); }
 .image-message-lien { display:block; margin-top:4px; }
 .image-message { display:block; max-width:min(280px,70vw); max-height:320px; object-fit:contain; border-radius:12px; cursor:zoom-in; }
+.bas { gap:10px !important; padding:12px 14px max(12px,env(safe-area-inset-bottom)) !important; border:1px solid var(--bordure) !important; border-radius:24px; margin-top:8px; margin-bottom:14px; box-shadow:0 8px 28px rgba(16,55,41,.08); }
+.bas textarea { min-height:46px !important; padding:12px 15px !important; border-radius:16px !important; }
+.btn-attach { border:1px solid var(--bordure); background:var(--fond-secondaire); }
+.groupe-actions { gap:6px; }
+button.envoyer,button.arreter { width:42px; height:42px; }
 .btn-attach { display:grid; place-items:center; flex-shrink:0; width:40px; height:40px; padding:0; border:0; border-radius:50%; background:transparent; color:var(--texte); font-size:30px; font-weight:300; line-height:1; cursor:pointer; }
 .btn-attach:hover { background:var(--fond-secondaire); }
 .feuille-fichiers-voile { position:fixed; inset:0; z-index:1200; display:flex; align-items:flex-end; justify-content:center; padding:16px; background:rgba(15,23,42,.42); }
