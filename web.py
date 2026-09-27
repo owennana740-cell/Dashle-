@@ -26,10 +26,11 @@ from html import escape as html_escape
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from flask import (
-    Flask, Response, request, render_template_string,
+    Flask, Response, request, render_template, render_template_string,
     redirect, stream_with_context, url_for, session, jsonify, send_file,
 )
 from werkzeug.security import check_password_hash, generate_password_hash
+from sqlalchemy import func, text
 from sqlalchemy.exc import IntegrityError
 from app import streamer_message, traiter_message, traiter_message_image
 from brain import emails_owner, niveau_abonnement, resumer_conversation
@@ -4857,11 +4858,33 @@ h1{margin:0;color:#168c65}form.search{display:flex;gap:10px}input,select,button{
 </main></body></html>
 """
 
+ADMIN_NAVIGATION = (
+    ("dashboard", "Dashboard", "M3 3h7v7H3zM14 3h7v5h-7zM14 12h7v9h-7zM3 14h7v7H3z"),
+    ("users", "Utilisateurs", "M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M20 8v6M23 11h-6"),
+    ("conversations", "Conversations", "M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9h.5a8.5 8.5 0 0 1 8 8z"),
+    ("memory", "Mémoire", "M12 2a7 7 0 0 0-4 12.7V18h8v-3.3A7 7 0 0 0 12 2zM9 22h6M9 18h6"),
+    ("activity", "Activité", "M3 12h4l3-9 4 18 3-9h4"),
+    ("statistics", "Statistiques", "M4 19V5M4 19h17M8 15l3-4 3 2 5-7"),
+    ("system", "Système", "M12 8v4l3 2M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z"),
+    ("security", "Sécurité", "M12 22s8-4 8-11V5l-8-3-8 3v6c0 7 8 11 8 11zM9 12l2 2 4-4"),
+    ("backups", "Sauvegardes", "M4 4v6h6M5.6 15a7 7 0 1 0 .4-7M12 7v5l3 2"),
+    ("settings", "Paramètres", "M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM19 13a7 7 0 0 0-.2-1.5l1.3-1-1.5-2.6-1.6.6a7 7 0 0 0-2.6-1.5L14 5h-3l-.4 2a7 7 0 0 0-2.6 1.5l-1.6-.6-1.5 2.6 1.3 1A7 7 0 0 0 6 13l-1.3 1 1.5 2.6 1.6-.6a7 7 0 0 0 2.6 1.5l.4 2h3l.4-2a7 7 0 0 0 2.6-1.5l1.6.6 1.5-2.6z"),
+)
+ADMIN_TITLES = {code: label for code, label, _ in ADMIN_NAVIGATION}
+
 
 @app.route("/admin", methods=["GET", "POST"])
 def admin():
     user_id = session.get("user_id")
     recherche = request.values.get("q", "").strip()[:254]
+    section = request.args.get("section", "dashboard")
+    if section not in ADMIN_TITLES:
+        section = "dashboard"
+    try:
+        page = max(1, int(request.values.get("page", "1")))
+    except (TypeError, ValueError):
+        page = 1
+    page_size = 25
     with session_base() as db:
         administrateur = db.get(User, user_id) if user_id else None
         if not administrateur or administrateur.email.strip().lower() not in emails_owner():
@@ -4890,18 +4913,121 @@ def admin():
                 cible.acces_manuel = False
             else:
                 return "Action invalide", 400
-        return redirect(url_for("admin", q=recherche))
+        return redirect(url_for("admin", section="users", q=recherche, page=request.form.get("page", 1)))
 
     with session_base() as db:
+        maintenant = datetime.utcnow()
         requete = db.query(User)
         if recherche:
             requete = requete.filter(User.email.ilike(f"%{recherche}%"))
-        comptes = requete.order_by(User.email).limit(50).all()
-        utilisateurs = [(compte, niveau_abonnement(compte)) for compte in comptes]
-    return render_template_string(
-        ADMIN_PAGE,
+        total_utilisateurs = requete.count()
+        pages = max(1, (total_utilisateurs + page_size - 1) // page_size)
+        page = min(page, pages)
+        comptes = requete.order_by(User.email).offset((page - 1) * page_size).limit(page_size).all()
+        activite_comptes = {
+            uid: (nombre, derniere)
+            for uid, nombre, derniere in db.query(
+                Conversation.user_id,
+                func.count(Conversation.id),
+                func.max(Conversation.updated_at),
+            ).group_by(Conversation.user_id).all()
+        }
+        utilisateurs = []
+        for compte in comptes:
+            nb_conv, derniere = activite_comptes.get(compte.id, (0, None))
+            utilisateurs.append({
+                "id": compte.id,
+                "email": compte.email,
+                "created": compte.created_at.strftime("%d/%m/%Y") if compte.created_at else "—",
+                "conversations": nb_conv,
+                "activite": derniere.strftime("%d/%m/%Y") if derniere else "Aucune",
+                "niveau": niveau_abonnement(compte),
+                "manuel": compte.acces_manuel,
+            })
+
+        nb_conversations = db.query(Conversation).count()
+        nb_messages = db.query(Message).count()
+        nb_memoires = db.query(UserMemory).count()
+        nb_utilisateurs_memoire = db.query(UserMemory.user_id).distinct().count()
+        nouveaux_7j = db.query(User).filter(User.created_at >= maintenant - timedelta(days=7)).count()
+        actifs_30j = db.query(Conversation.user_id).filter(
+            Conversation.updated_at >= maintenant - timedelta(days=30)
+        ).distinct().count()
+        comptages_messages = dict(
+            db.query(Message.conversation_id, func.count(Message.id))
+            .group_by(Message.conversation_id).all()
+        )
+        lignes_conversations = db.query(Conversation, User.email).join(
+            User, Conversation.user_id == User.id
+        ).order_by(Conversation.updated_at.desc()).limit(100).all()
+        conversations = [{
+            "email": email,
+            "titre": conv.title,
+            "creee": conv.created_at.strftime("%d/%m/%Y %H:%M") if conv.created_at else "—",
+            "activite": conv.updated_at.strftime("%d/%m/%Y %H:%M") if conv.updated_at else "—",
+            "messages": comptages_messages.get(conv.id, 0),
+            "archivee": conv.archivee,
+        } for conv, email in lignes_conversations]
+        backend = db.bind.dialect.name
+        try:
+            db.execute(text("SELECT 1"))
+            base_ok = True
+        except Exception:
+            db.rollback()
+            base_ok = False
+
+    regles = {rule.endpoint for rule in app.url_map.iter_rules()}
+    etats = [
+        ("Base de données", "Opérationnel" if base_ok else "Erreur", "ok" if base_ok else "warn", f"Connexion SQL testée · {backend}"),
+        ("API IA", "Configurée" if os.environ.get("GEMINI_API_KEY") else "Absente", "ok" if os.environ.get("GEMINI_API_KEY") else "warn", "Présence de configuration seulement; aucun appel facturé"),
+        ("SSE", "Route présente" if "repondre_flux" in regles else "Absente", "ok" if "repondre_flux" in regles else "warn", "Le navigateur et le réseau ne sont pas testés ici"),
+        ("Vocal", "Navigateur", "unknown", "Dépend des permissions et capacités du navigateur client"),
+        ("Authentification", "Routes présentes" if {"connexion", "inscription", "deconnexion"}.issubset(regles) else "À vérifier", "ok" if {"connexion", "inscription", "deconnexion"}.issubset(regles) else "warn", "Présence des routes; aucun scénario utilisateur simulé"),
+        ("Sessions", "Protégées" if app.config.get("SESSION_COOKIE_HTTPONLY") and app.config.get("SESSION_COOKIE_SAMESITE") else "À vérifier", "ok" if app.config.get("SESSION_COOKIE_HTTPONLY") and app.config.get("SESSION_COOKIE_SAMESITE") else "warn", "HttpOnly et SameSite vérifiés dans la configuration Flask"),
+        ("Mémoire", "Table accessible" if base_ok else "Indisponible", "ok" if base_ok else "warn", "Valeurs privées non consultées"),
+        ("Sitemap / robots", "Routes présentes" if {"sitemap_xml", "robots_txt"}.issubset(regles) else "À vérifier", "ok" if {"sitemap_xml", "robots_txt"}.issubset(regles) else "warn", "Enregistrement Flask vérifié"),
+    ]
+    securite = [
+        ("Contrôle propriétaire côté serveur", "Actif", "ok", "Vérification OWNER_EMAILS avant rendu"),
+        ("Protection CSRF", "Configurée", "ok", "Contrôle global des POST authentifiés"),
+        ("Cookie HttpOnly", "Actif" if app.config.get("SESSION_COOKIE_HTTPONLY") else "Inactif", "ok" if app.config.get("SESSION_COOKIE_HTTPONLY") else "warn", "Valeur de configuration Flask"),
+        ("Cookie Secure", "Actif" if app.config.get("SESSION_COOKIE_SECURE") else "Inactif", "ok" if app.config.get("SESSION_COOKIE_SECURE") else "warn", "Doit être actif en HTTPS de production"),
+    ]
+    configuration = []
+    for nom in ("DATABASE_URL", "GEMINI_API_KEY", "OWNER_EMAILS", "FLASK_SECRET_KEY", "CINETPAY_API_KEY", "STRIPE_SECRET_KEY", "OPENWEATHER_API_KEY"):
+        present = bool(os.environ.get(nom))
+        configuration.append((nom, "Configurée" if present else "Absente", "ok" if present else "warn", "Valeur masquée"))
+    cartes = [
+        ("Utilisateurs inscrits", total_utilisateurs, "Comptes dans la base"),
+        ("Comptes récents", nouveaux_7j, "Créés sur les 7 derniers jours"),
+        ("Actifs estimés", actifs_30j, "Avec conversation mise à jour en 30 jours"),
+        ("Conversations", nb_conversations, "Lignes enregistrées"),
+        ("Messages", nb_messages, "Lignes enregistrées"),
+        ("Souvenirs", nb_memoires, "Valeurs privées non exposées"),
+    ]
+    memoire_cartes = [
+        ("Souvenirs enregistrés", nb_memoires, "Comptage SQL réel"),
+        ("Comptes concernés", nb_utilisateurs_memoire, "Identifiants distincts"),
+        ("Synchronisation", "En ligne" if base_ok else "Indisponible", "État de la connexion SQL"),
+    ]
+    return render_template(
+        "admin.html",
+        section=section,
+        titres=ADMIN_TITLES,
+        navigation=ADMIN_NAVIGATION,
+        admin_email=administrateur.email,
         utilisateurs=utilisateurs,
+        total_utilisateurs=total_utilisateurs,
+        pages=pages,
+        page=page,
+        page_size=page_size,
         recherche=recherche,
+        cartes=cartes,
+        memoire_cartes=memoire_cartes,
+        conversations=conversations,
+        etats=etats,
+        securite=securite,
+        configuration=configuration,
         csrf_token=jeton_csrf(),
     )
 

@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{{ titres.get(section, 'Administration') }} — DASHLE</title>
+  <style>
+    :root{font-family:Inter,'Segoe UI',system-ui,sans-serif;color:#18352c;background:#f3f7f5;--ink:#18352c;--muted:#70847c;--line:#dce9e4;--card:#fff;--green:#168c65;--blue:#3b82f6}
+    *{box-sizing:border-box}body{margin:0;min-height:100vh;background:#f3f7f5;color:var(--ink)}a{color:inherit;text-decoration:none}
+    .layout{min-height:100vh;display:grid;grid-template-columns:248px minmax(0,1fr)}
+    aside{position:sticky;top:0;height:100vh;padding:22px 14px;background:#102a22;color:#e9fff5;display:flex;flex-direction:column}
+    .brand{display:flex;align-items:center;gap:11px;padding:2px 9px 23px;border-bottom:1px solid #ffffff20;font-weight:750;letter-spacing:.02em}
+    .brand img{width:36px;height:36px;object-fit:contain}.brand small{display:block;color:#a8c9ba;font-size:11px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;margin-top:3px}
+    .nav-label{padding:22px 11px 8px;color:#91b4a5;font-size:10px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+    nav{display:grid;gap:4px}nav a{min-height:42px;padding:10px 12px;border-radius:10px;color:#c4ded2;font-size:13px;display:flex;align-items:center;gap:11px}
+    nav a:hover,nav a.active{color:white;background:linear-gradient(110deg,#178960,#2779c8)}nav svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;flex:none}
+    .aside-foot{margin-top:auto;padding:13px 11px 3px;border-top:1px solid #ffffff20;color:#b5d0c4;font-size:12px;overflow-wrap:anywhere}.aside-foot a{color:#fff;text-decoration:underline;text-underline-offset:3px}
+    main{min-width:0;padding:30px clamp(16px,3vw,42px) 50px}.top{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:25px}.eyebrow{margin:0 0 5px;color:var(--muted);font-size:12px}.top h1{margin:0;font-size:clamp(23px,3vw,30px);letter-spacing:-.03em}.top-right{font-size:12px;color:var(--muted);text-align:right}
+    .grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.card{min-width:0;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px;box-shadow:0 8px 24px #173a2b08;margin-bottom:14px}
+    .metric-label{font-size:12px;color:var(--muted)}.metric{font-size:29px;line-height:1.1;font-weight:750;letter-spacing:-.04em;margin-top:12px}.metric-note{font-size:11px;color:var(--muted);margin-top:7px}
+    h2{font-size:15px;margin:0 0 14px}.subtle{font-size:12px;color:var(--muted);line-height:1.55}.toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:13px}
+    form.search{display:flex;gap:8px;width:min(100%,470px)}input,select,button{font:inherit}input[type=search],select{min-width:0;padding:10px 12px;border:1px solid var(--line);border-radius:9px;background:#fff;color:var(--ink)}input[type=search]{flex:1}button{padding:10px 14px;border:0;border-radius:9px;background:linear-gradient(110deg,#22b879,#3b82f6);color:#fff;font-weight:650;cursor:pointer}button.secondary{background:#e9f4ef;color:#17664e;border:1px solid var(--line)}button:hover{filter:brightness(.97)}
+    .table-wrap{width:100%;overflow-x:auto}table{width:100%;border-collapse:collapse;font-size:12px;min-width:650px}th,td{text-align:left;padding:12px 10px;border-bottom:1px solid #edf2ef;vertical-align:middle}th{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:700}td{overflow-wrap:anywhere}.email{font-weight:650}.badge{display:inline-flex;padding:4px 8px;border-radius:99px;background:#e8f7ef;color:#167653;font-size:10px;font-weight:700;text-transform:capitalize}.manual{display:block;margin-top:4px;color:var(--green);font-size:10px}.actions{display:flex;align-items:center;gap:6px;white-space:nowrap}.actions select{padding:8px}
+    .status-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.status{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px;border:1px solid var(--line);border-radius:11px;font-size:12px}.pill{font-size:10px;font-weight:700;padding:4px 8px;border-radius:99px;white-space:nowrap}.ok{background:#e5f7ed;color:#117347}.warn{background:#fff3d8;color:#885d00}.unknown{background:#eef1f0;color:#596862}.notice{padding:12px 14px;border-radius:11px;background:#edf5ff;color:#28527b;font-size:12px;line-height:1.55}
+    .pagination{display:flex;justify-content:space-between;align-items:center;margin-top:15px;font-size:12px;color:var(--muted)}.pagination a{padding:8px 11px;border:1px solid var(--line);border-radius:8px;background:#fff}
+    @media(max-width:900px){.layout{grid-template-columns:205px minmax(0,1fr)}aside{padding-inline:10px}.grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+    @media(max-width:650px){.layout{display:block}aside{position:relative;height:auto;padding:12px;display:block}.brand{padding-bottom:12px}.brand img{width:30px;height:30px}.nav-label{display:none}nav{display:flex;overflow-x:auto;padding-top:10px;scrollbar-width:thin}nav a{white-space:nowrap;min-height:40px;padding:9px 10px}.nav-text{display:inline}.aside-foot{display:none}main{padding:22px 13px 36px}.top{align-items:flex-start}.grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.card{padding:14px}.metric{font-size:24px}.status-list{grid-template-columns:1fr}.toolbar{align-items:stretch;flex-direction:column}form.search{width:100%}}
+  </style>
+</head>
+<body>
+<div class="layout">
+  <aside>
+    <a class="brand" href="{{ url_for('admin', section='dashboard') }}">
+      <img src="{{ url_for('static', filename='icons/dashle-logo-header.png') }}" alt="">
+      <span>DASHLE<small>Centre de contrôle</small></span>
+    </a>
+    <div class="nav-label">Plateforme</div>
+    <nav aria-label="Navigation administration">
+      {% for code, label, icon in navigation %}
+      <a href="{{ url_for('admin', section=code) }}" class="{{ 'active' if section == code else '' }}">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="{{ icon }}"/></svg><span class="nav-text">{{ label }}</span>
+      </a>
+      {% endfor %}
+    </nav>
+    <div class="aside-foot">Connecté comme<br><strong>{{ admin_email }}</strong><br><a href="{{ url_for('accueil') }}">Retour à DASHLE</a></div>
+  </aside>
+  <main>
+    <header class="top"><div><p class="eyebrow">Administration / {{ titres.get(section, 'Dashboard') }}</p><h1>{{ titres.get(section, 'Dashboard') }}</h1></div><div class="top-right">Données agrégées en direct depuis la base<br>Les conversations privées ne sont pas affichées</div></header>
+
+    {% if section == 'dashboard' %}
+    <div class="grid">
+      {% for label, valeur, note in cartes %}<article class="card"><div class="metric-label">{{ label }}</div><div class="metric">{{ valeur }}</div><div class="metric-note">{{ note }}</div></article>{% endfor %}
+    </div>
+    <section class="card"><h2>État de la plateforme</h2><div class="status-list">{% for nom, statut, classe, detail in etats %}<div class="status"><span><strong>{{ nom }}</strong><br><span class="subtle">{{ detail }}</span></span><span class="pill {{ classe }}">{{ statut }}</span></div>{% endfor %}</div></section>
+    <section class="card"><h2>Limites de mesure</h2><p class="subtle">Les comptes actifs sont estimés à partir des conversations mises à jour dans les 30 derniers jours. Le mode visiteur n’est pas comptabilisé car il ne dispose pas d’un journal serveur durable. Les erreurs, l’activité administrative et les sauvegardes ne sont pas historisées par l’application à ce stade.</p></section>
+
+    {% elif section == 'users' %}
+    <section class="card"><div class="toolbar"><div><h2>Comptes utilisateurs</h2><div class="subtle">{{ total_utilisateurs }} compte(s) · page {{ page }} / {{ pages }}</div></div><form class="search" method="get"><input type="hidden" name="section" value="users"><input name="q" type="search" value="{{ recherche }}" placeholder="Rechercher par e-mail" aria-label="Rechercher par e-mail"><button>Rechercher</button></form></div>
+      {% if utilisateurs %}<div class="table-wrap"><table><thead><tr><th>Compte</th><th>Créé le</th><th>Conversations</th><th>Activité récente</th><th>Forfait</th><th>Accès manuel</th><th>Action</th></tr></thead><tbody>
+      {% for ligne in utilisateurs %}<tr><td class="email">{{ ligne.email }}</td><td>{{ ligne.created }}</td><td>{{ ligne.conversations }}</td><td>{{ ligne.activite }}</td><td><span class="badge">{{ ligne.niveau }}</span></td><td>{{ 'Actif' if ligne.manuel else '—' }}</td><td><form class="actions" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="user_id" value="{{ ligne.id }}"><input type="hidden" name="q" value="{{ recherche }}"><input type="hidden" name="page" value="{{ page }}"><select name="palier" aria-label="Palier pour {{ ligne.email }}"><option value="free" {{ 'selected' if ligne.niveau == 'free' }}>Free</option><option value="pro" {{ 'selected' if ligne.niveau == 'pro' }}>Pro</option><option value="prime" {{ 'selected' if ligne.niveau == 'prime' }}>Prime</option></select><button name="action" value="appliquer">Appliquer</button>{% if ligne.manuel %}<button class="secondary" name="action" value="retirer">Retirer</button>{% endif %}</form></td></tr>{% endfor %}
+      </tbody></table></div>{% else %}<p class="subtle">Aucun compte ne correspond à cette recherche.</p>{% endif %}
+      <div class="pagination"><span>Affichage paginé · {{ page_size }} comptes maximum par page</span><span>{% if page > 1 %}<a href="{{ url_for('admin',section='users',q=recherche,page=page-1) }}">← Précédent</a>{% endif %} {% if page < pages %}<a href="{{ url_for('admin',section='users',q=recherche,page=page+1) }}">Suivant →</a>{% endif %}</span></div>
+    </section>
+
+    {% elif section == 'conversations' %}
+    <section class="card"><h2>Conversations — métadonnées uniquement</h2><p class="subtle">Les textes des messages ne sont pas rendus dans cette vue. Résultats limités aux {{ conversations|length }} conversations les plus récentes.</p><div class="table-wrap"><table><thead><tr><th>Compte</th><th>Titre</th><th>Créée</th><th>Dernière activité</th><th>Messages</th><th>Conservation</th></tr></thead><tbody>{% for c in conversations %}<tr><td class="email">{{ c.email }}</td><td>{{ c.titre }}</td><td>{{ c.creee }}</td><td>{{ c.activite }}</td><td>{{ c.messages }}</td><td>{{ 'Archivée' if c.archivee else 'Active' }}</td></tr>{% else %}<tr><td colspan="6">Aucune conversation.</td></tr>{% endfor %}</tbody></table></div></section>
+
+    {% elif section == 'memory' %}
+    <div class="grid">{% for label,valeur,note in memoire_cartes %}<article class="card"><div class="metric-label">{{ label }}</div><div class="metric">{{ valeur }}</div><div class="metric-note">{{ note }}</div></article>{% endfor %}</div>
+    <section class="card"><h2>Protection des contenus</h2><p class="subtle">Cette page n’affiche aucune clé ni valeur de souvenir. Les comptes connectés sont comptés par identifiant utilisateur. Les visiteurs ne disposent pas d’une mémoire personnelle; leurs commandes de mémorisation sont refusées.</p></section>
+
+    {% elif section == 'activity' %}
+    <section class="card"><h2>Journal d’activité</h2><p class="notice">Aucun journal durable des connexions ou actions administratives n’est actuellement configuré. DASHLE ne fabrique pas d’événements historiques.</p></section>
+
+    {% elif section == 'statistics' %}
+    <div class="grid">{% for label,valeur,note in cartes %}<article class="card"><div class="metric-label">{{ label }}</div><div class="metric">{{ valeur }}</div><div class="metric-note">{{ note }}</div></article>{% endfor %}</div>
+
+    {% elif section == 'system' %}
+    <section class="card"><h2>Contrôles effectués par cette requête</h2><div class="status-list">{% for nom,statut,classe,detail in etats %}<div class="status"><span><strong>{{ nom }}</strong><br><span class="subtle">{{ detail }}</span></span><span class="pill {{ classe }}">{{ statut }}</span></div>{% endfor %}</div></section>
+    <section class="card"><h2>Déploiement Render</h2><p class="subtle">Le YAML déclare un service web Python, une commande Gunicorn et une ressource PostgreSQL. Le panneau ne peut pas vérifier le plan, les sauvegardes, la branche réellement configurée ni l’instance actuellement déployée. Vérifiez ces éléments dans le tableau de bord Render.</p></section>
+
+    {% elif section == 'security' %}
+    <section class="card"><h2>Sécurité observée</h2><div class="status-list">{% for nom,statut,classe,detail in securite %}<div class="status"><span><strong>{{ nom }}</strong><br><span class="subtle">{{ detail }}</span></span><span class="pill {{ classe }}">{{ statut }}</span></div>{% endfor %}</div></section>
+
+    {% elif section == 'backups' %}
+    <section class="card"><h2>Sauvegardes</h2><p class="notice">Aucune sauvegarde applicative ni restauration n’est déclenchée depuis ce panneau. Vérifiez et exportez la base PostgreSQL depuis Render avant toute opération de schéma ou migration.</p></section>
+
+    {% elif section == 'settings' %}
+    <section class="card"><h2>Paramètres du service</h2><p class="subtle">Les secrets et valeurs d’environnement ne sont jamais affichés ici. Les réglages de déploiement restent administrés dans Render.</p><div class="status-list">{% for nom,statut,classe,detail in configuration %}<div class="status"><span><strong>{{ nom }}</strong><br><span class="subtle">{{ detail }}</span></span><span class="pill {{ classe }}">{{ statut }}</span></div>{% endfor %}</div></section>
+    {% endif %}
+  </main>
+</div>
+</body></html>
