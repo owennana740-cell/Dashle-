@@ -76,7 +76,10 @@ def meteo_du_jour(ville):
         _CACHE_METEO[cle_cache] = (time.time() + 600, resultat)
         return resultat
     except (requests.RequestException, ValueError, KeyError, TypeError) as exc:
-        logging.getLogger(__name__).warning("OpenWeather indisponible (%s)", type(exc).__name__)
+        status = exc.response.status_code if isinstance(exc, requests.HTTPError) and exc.response is not None else None
+        logging.getLogger(__name__).warning(
+            "OpenWeather indisponible (%s%s)", type(exc).__name__, f", HTTP {status}" if status else ""
+        )
         return {"erreur": "Le service météo est momentanément indisponible."}
 
 
@@ -108,6 +111,8 @@ def actualites_recentes(limite=8):
                 })
             if len(items) >= 20:
                 break
+        if not items:
+            logging.getLogger(__name__).warning("Flux RSS reçu sans articles exploitables")
         _CACHE_ACTUALITES.update(expire=maintenant + 300, items=items)
         return list(items[:limite])
     except (requests.RequestException, ET.ParseError, ValueError, TypeError) as exc:
