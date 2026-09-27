@@ -2185,7 +2185,7 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
       mode: modeActuel,
       resultIndex: e.resultIndex,
       results: Array.from(e.results || []).map(function(r) {
-        return { transcript: r[0] && r[0].transcript, isFinal: r.isFinal };
+        return { hasTranscript: Boolean(r[0] && String(r[0].transcript || '').trim()), isFinal: r.isFinal };
       }),
       resultatsAutorises: recoResultatsAutorises
     });
@@ -2239,7 +2239,9 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
 
   reco.onend = function() {
     console.log('[DASHLE][SpeechRecognition] onend', {
-      mode: modeActuel, vocalActif: vocalActif, transcription: transcriptionFinaleVocale
+      mode: modeActuel, vocalActif: vocalActif,
+      hasTranscription: Boolean(transcriptionFinaleVocale),
+      transcriptionLength: transcriptionFinaleVocale.length
     });
     btnMicro.classList.remove('actif');
     recoEnCours = false;  // reco s'est arrêté, le guard est libéré
