@@ -18,6 +18,7 @@ import random
 import secrets
 import hashlib
 import hmac
+import re
 import requests
 from datetime import datetime, timedelta, timezone
 import calendar
@@ -330,6 +331,19 @@ _PREFS_VISITEUR = {
 }
 
 
+def _titre_automatique(texte):
+    titre = re.sub(r"\s+", " ", str(texte or "")).strip()
+    if re.fullmatch(r"\[(?:image|vidéo) envoyée\]", titre, flags=re.IGNORECASE):
+        return ""
+    titre = re.sub(r"^(?:salut|bonjour|bonsoir)(?:\s+dashle)?[\s,!.:;-]*", "", titre, flags=re.IGNORECASE)
+    titre = titre.strip(" \t\r\n,.;:!?-–—")
+    if not titre:
+        return ""
+    if len(titre) > 58:
+        titre = titre[:58].rsplit(" ", 1)[0].rstrip(" ,.;:-")
+    return titre or ""
+
+
 def ajouter_message(user_id, conversation_id, texte, auteur):
     with session_base() as db:
         conv = db.query(Conversation).filter_by(
@@ -341,7 +355,7 @@ def ajouter_message(user_id, conversation_id, texte, auteur):
         db.add(msg)
         db.flush()
         if auteur == "user" and conv.title == "Nouvelle conversation":
-            conv.title = texte[:48] or conv.title
+            conv.title = _titre_automatique(texte) or conv.title
         conv.updated_at = datetime.utcnow()
         return msg.id
 
@@ -4334,6 +4348,13 @@ def repondre_image():
 
     if user_id:
         mid = ajouter_message(user_id, conversation_id, reponse, "bot")
+        if texte_msg == "[Image envoyée]":
+            titre_image = _titre_automatique(reponse.splitlines()[0].split(". ", 1)[0])
+            if titre_image:
+                with session_base() as db:
+                    conversation = db.query(Conversation).filter_by(id=conversation_id, user_id=user_id).one_or_none()
+                    if conversation and conversation.title == "Nouvelle conversation":
+                        conversation.title = titre_image
         _actualiser_resume(user_id, conversation_id)
     else:
         _ajouter_message_visiteur(reponse, "bot")
