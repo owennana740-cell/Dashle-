@@ -5492,6 +5492,12 @@ def deconnexion():
 
 @app.route("/health")
 def health():
+    try:
+        with session_base() as db:
+            db.execute(text("SELECT 1"))
+    except Exception as exc:
+        app.logger.error("Health check base indisponible : %s", type(exc).__name__)
+        return jsonify({"ok": False, "service": "dashle"}), 503
     return jsonify({"ok": True, "service": "dashle"})
 
 
