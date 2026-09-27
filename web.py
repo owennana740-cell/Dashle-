@@ -2489,6 +2489,28 @@ function afficherApercuFichier(fichier) {
 }
 
 let fichierImage = null;
+async function preparerImagePourEnvoi(fichier) {
+  if (!fichier || !fichier.type.startsWith('image/') || fichier.size <= 5 * 1024 * 1024) return fichier;
+  try {
+    const bitmap = await createImageBitmap(fichier);
+    const echelle = Math.min(1, 2048 / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(bitmap.width * echelle));
+    canvas.height = Math.max(1, Math.round(bitmap.height * echelle));
+    const contexte = canvas.getContext('2d');
+    contexte.fillStyle = '#fff';
+    contexte.fillRect(0, 0, canvas.width, canvas.height);
+    contexte.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    bitmap.close();
+    const blob = await new Promise(function(resolve) { canvas.toBlob(resolve, 'image/jpeg', 0.84); });
+    if (!blob || blob.size >= fichier.size) return fichier;
+    const nom = (fichier.name || 'image').replace(/\.[^.]+$/, '') + '.jpg';
+    return new File([blob], nom, { type: 'image/jpeg', lastModified: Date.now() });
+  } catch (erreur) {
+    console.warn('[DASHLE] Compression de l’image impossible, envoi de l’originale :', erreur);
+    return fichier;
+  }
+}
 inputImage.addEventListener('change', function(e) {
   fichierImage = e.target.files[0] || null;
   afficherApercuFichier(fichierImage);
@@ -2780,26 +2802,28 @@ form.addEventListener('submit', async function(e) {
 
   // --- Envoi image ---
   if (fichierImage) {
-    ajouterMessageImage(texte, fichierImage);
+    const imageOriginale = fichierImage;
     champ.value = '';
     champ.style.height = 'auto';
     afficherReflexion();
 
-    const fd = new FormData();
-    fd.append('message', texte);
-    fd.append('image', fichierImage);
-    const headers = {};
-    if (estConnecte) headers['X-CSRF-Token'] = csrfToken;
-
     try {
+      const imageEnvoyee = await preparerImagePourEnvoi(imageOriginale);
+      ajouterMessageImage(texte, imageEnvoyee);
+      const fd = new FormData();
+      fd.append('message', texte);
+      fd.append('image', imageEnvoyee, imageEnvoyee.name);
+      const headers = {};
+      if (estConnecte) headers['X-CSRF-Token'] = csrfToken;
       const res  = await fetch(urlImage, { method: 'POST', headers, body: fd });
-      const data = await res.json();
+      const data = await res.json().catch(function() { return {}; });
       retirerReflexion();
-      if (!res.ok) throw new Error(data.erreur || 'Erreur image');
+      if (!res.ok) throw new Error(data.erreur || data.reponse || 'Erreur image (' + res.status + '). Réessaie.');
       ajouterReponse(data.reponse, data.message_id);
     } catch(err) {
       retirerReflexion();
-      ajouterMessage("Erreur d'envoi de l'image. Réessaie.", 'bot');
+      console.warn('[DASHLE] Échec envoi image :', err);
+      ajouterMessage(err.message || "Erreur d'envoi de l'image. Réessaie.", 'bot');
     }
     fichierImage = null;
     effacerApercuFichier();

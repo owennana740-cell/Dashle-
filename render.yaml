@@ -3,7 +3,7 @@ services:
     name: dashle
     runtime: python
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn --workers 1 --bind 0.0.0.0:$PORT web:app
+    startCommand: gunicorn --workers 1 --timeout 60 --bind 0.0.0.0:$PORT web:app
     envVars:
       - key: DATABASE_URL
         fromDatabase:
