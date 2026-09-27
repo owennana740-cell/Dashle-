@@ -20,6 +20,7 @@ import hashlib
 import hmac
 import re
 import requests
+import threading
 from datetime import datetime, timedelta, timezone
 import calendar
 from html import escape as html_escape
@@ -34,7 +35,7 @@ from sqlalchemy import func, text
 from sqlalchemy.exc import IntegrityError
 from app import streamer_message, traiter_message, traiter_message_image
 from brain import emails_owner, niveau_abonnement, resumer_conversation
-from config import MODELE_GEMINI
+from config import MAX_MESSAGES_CONTEXTE, MODELE_GEMINI
 from database import (
     AdminAuditLog, Conversation, Message, MessageFeedback, ShareLink, SubscriptionPayment, User,
     UserMemory, UserPreference, StatisticalAnalysisUsage, Project, Reminder, UserPlugin,
@@ -253,7 +254,9 @@ def _conversation_selectionnee(user_id):
 def _contexte_chat_temporaire(user_id, conversation_id, valeur, message):
     historique = _historique_recu_temporaire(valeur)
     if not historique and conversation_id:
-        historique = _messages_conversation(user_id, conversation_id)
+        historique = _messages_conversation(
+            user_id, conversation_id, limite=MAX_MESSAGES_CONTEXTE
+        )
     if not historique or historique[-1].get("auteur") != "user" or historique[-1].get("texte") != message:
         historique.append({"auteur": "user", "texte": message})
     return historique
@@ -318,13 +321,20 @@ def _liste_conversations(user_id):
         return [{"id": c.id, "titre": c.title} for c in convs]
 
 
-def _messages_conversation(user_id, conversation_id):
+def _messages_conversation(user_id, conversation_id, limite=None):
     with session_base() as db:
         conv = db.query(Conversation).filter_by(
             id=conversation_id, user_id=user_id
         ).one_or_none()
         if conv is None:
             return []
+        if limite is not None:
+            messages = db.query(Message).filter_by(
+                conversation_id=conv.id
+            ).order_by(Message.id.desc()).limit(limite).all()
+            messages.reverse()
+        else:
+            messages = conv.messages
         return [
             {
                 "id": m.id,
@@ -332,7 +342,7 @@ def _messages_conversation(user_id, conversation_id):
                 "texte": m.texte,
                 "date": m.created_at.isoformat(),
             }
-            for m in conv.messages
+            for m in messages
         ]
 
 
@@ -350,21 +360,58 @@ def _actualiser_resume(user_id, conversation_id):
     Amélioration : seuil abaissé à 20 (au lieu de 24) et période réduite
     à 10 messages (au lieu de 12) pour une couverture plus régulière.
     """
-    historique = _messages_conversation(user_id, conversation_id)
-    n = len(historique)
-    if n < 20:
-        return
-    if (n - 20) % 10 != 0:
-        return
-    resume = _resume_conversation(user_id, conversation_id)
+    with session_base() as db:
+        conv = db.query(Conversation).filter_by(
+            id=conversation_id, user_id=user_id
+        ).one_or_none()
+        if conv is None:
+            return
+        n = db.query(func.count(Message.id)).filter_by(
+            conversation_id=conversation_id
+        ).scalar() or 0
+        if n < 20 or (n - 20) % 10 != 0:
+            return
+        resume = conv.resume
+        nombre_messages = n
+        messages = db.query(Message).filter_by(
+            conversation_id=conversation_id
+        ).order_by(Message.id.desc()).limit(40).all()
+        messages.reverse()
+        historique = [
+            {"id": m.id, "auteur": m.auteur, "texte": m.texte,
+             "date": m.created_at.isoformat()}
+            for m in messages
+        ]
     nouveau = resumer_conversation(historique, resume, user_id=user_id)
     if nouveau and nouveau != resume:
         with session_base() as db:
             conv = db.query(Conversation).filter_by(
                 id=conversation_id, user_id=user_id
             ).one_or_none()
-            if conv is not None:
+            nombre_actuel = db.query(func.count(Message.id)).filter_by(
+                conversation_id=conversation_id
+            ).scalar() or 0
+            if (conv is not None and conv.resume == resume
+                    and nombre_actuel == nombre_messages):
                 conv.resume = nouveau
+
+
+def _actualiser_resume_en_arriere_plan(user_id, conversation_id):
+    """Met à jour le résumé hors du flux SSE, sans conserver de contexte temporaire."""
+    def actualiser():
+        try:
+            _actualiser_resume(user_id, conversation_id)
+        except Exception as exc:
+            app.logger.error(
+                "Échec de la mise à jour du résumé (%s)", type(exc).__name__
+            )
+
+    try:
+        threading.Thread(target=actualiser, daemon=True).start()
+    except RuntimeError as exc:
+        app.logger.error(
+            "Impossible de démarrer la mise à jour du résumé (%s)", type(exc).__name__
+        )
 
 
 def _preferences(user_id):
@@ -4309,7 +4356,9 @@ def repondre():
             reponse = traiter_message(message, historique, user_id, resume)
             return jsonify({"reponse": reponse, "message_id": None})
         conversation_id = _conv_courante(user_id)
-        historique = _messages_conversation(user_id, conversation_id)
+        historique = _messages_conversation(
+            user_id, conversation_id, limite=MAX_MESSAGES_CONTEXTE
+        )
         resume = _resume_conversation(user_id, conversation_id)
         ajouter_message(user_id, conversation_id, message, "user")
         reponse = traiter_message(
@@ -4360,7 +4409,9 @@ def repondre_flux():
         conserver = _conserver_historique(user_id)
         if conserver:
             conversation_id = _conv_courante(user_id)
-            historique = _messages_conversation(user_id, conversation_id)
+            historique = _messages_conversation(
+                user_id, conversation_id, limite=MAX_MESSAGES_CONTEXTE
+            )
             resume = _resume_conversation(user_id, conversation_id)
             ajouter_message(user_id, conversation_id, message, "user")
             contexte_historique = historique + [{"auteur": "user", "texte": message}]
@@ -4400,7 +4451,7 @@ def repondre_flux():
                 # Utilisateur connecté : sauvegarde BDD directement dans le générateur.
                 if reponse_complete:
                     mid = ajouter_message(user_id, conversation_id, reponse_complete, "bot")
-                    _actualiser_resume(user_id, conversation_id)
+                    _actualiser_resume_en_arriere_plan(user_id, conversation_id)
                 else:
                     mid = None
                 yield "data: " + json.dumps(
@@ -4502,13 +4553,17 @@ def repondre_image():
         conserver = _conserver_historique(user_id)
         if conserver:
             conversation_id = _conv_courante(user_id)
-            historique = _messages_conversation(user_id, conversation_id)
+            historique = _messages_conversation(
+                user_id, conversation_id, limite=MAX_MESSAGES_CONTEXTE
+            )
             resume = _resume_conversation(user_id, conversation_id)
         else:
             conversation_id = _conversation_selectionnee(user_id)
             historique = _historique_recu_temporaire(request.form.get("historique"))
             if not historique and conversation_id:
-                historique = _messages_conversation(user_id, conversation_id)
+                historique = _messages_conversation(
+                    user_id, conversation_id, limite=MAX_MESSAGES_CONTEXTE
+                )
             resume = _resume_conversation(user_id, conversation_id) if conversation_id else ""
     else:
         conserver = False

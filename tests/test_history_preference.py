@@ -3,6 +3,7 @@
 import io
 import json
 import os
+import threading
 import unittest
 import uuid
 from unittest.mock import patch
@@ -98,7 +99,8 @@ class HistoryPreferenceTests(unittest.TestCase):
             {"auteur": "bot", "texte": "old answer"},
             {"auteur": "user", "texte": "follow-up"},
         ]
-        with patch.object(web, "streamer_message", fake_stream):
+        with patch.object(web, "streamer_message", fake_stream), \
+                patch.object(web, "_actualiser_resume_en_arriere_plan") as schedule_resume:
             response = self.client.post(
                 "/repondre_flux",
                 data={"message": "follow-up", "historique": json.dumps(context)},
@@ -112,6 +114,7 @@ class HistoryPreferenceTests(unittest.TestCase):
         events = [json.loads(line[6:]) for line in response.get_data(as_text=True).splitlines() if line.startswith("data: ")]
         final = next(event for event in events if event.get("termine"))
         self.assertIsNone(final["message_id"])
+        schedule_resume.assert_not_called()
         self.assertEqual(self.message_count(), 2)
 
     def test_disabled_sync_image_and_regeneration_do_not_persist(self):
@@ -161,7 +164,8 @@ class HistoryPreferenceTests(unittest.TestCase):
         def fake_stream(message, history, user_id, resume):
             yield "saved answer"
 
-        with patch.object(web, "streamer_message", fake_stream):
+        with patch.object(web, "streamer_message", fake_stream), \
+                patch.object(web, "_actualiser_resume_en_arriere_plan"):
             response = self.client.post(
                 "/repondre_flux",
                 data={"message": "saved question"},
@@ -172,6 +176,89 @@ class HistoryPreferenceTests(unittest.TestCase):
         final = next(event for event in events if event.get("termine"))
         self.assertIsNotNone(final["message_id"])
         self.assertEqual(self.message_count(), 4)
+
+    def test_sse_does_not_wait_for_background_summary(self):
+        with session_base() as db:
+            preference = db.query(UserPreference).filter_by(user_id=self.user_id).one()
+            preference.conserver_historique = True
+
+        summary_started = threading.Event()
+        release_summary = threading.Event()
+
+        def slow_summary(*_args):
+            summary_started.set()
+            release_summary.wait(timeout=5)
+
+        try:
+            with patch.object(web, "_actualiser_resume", side_effect=slow_summary), \
+                    patch.object(web, "streamer_message", return_value=iter(["saved answer"])):
+                response = self.client.post(
+                    "/repondre_flux",
+                    data={"message": "saved question"},
+                    headers=self.post_headers(),
+                    buffered=True,
+                )
+                self.assertTrue(summary_started.wait(timeout=1))
+            self.assertEqual(response.status_code, 200)
+            events = [
+                json.loads(line[6:])
+                for line in response.get_data(as_text=True).splitlines()
+                if line.startswith("data: ")
+            ]
+            self.assertTrue(any(event.get("termine") for event in events))
+            self.assertEqual(self.message_count(), 4)
+        finally:
+            release_summary.set()
+
+    def test_conversation_context_fetch_can_be_limited_to_recent_messages(self):
+        with session_base() as db:
+            db.add_all([
+                Message(
+                    conversation_id=self.conversation_id,
+                    auteur="user",
+                    texte=f"question {index}",
+                )
+                for index in range(30)
+            ])
+
+        recent = web._messages_conversation(
+            self.user_id, self.conversation_id, limite=5
+        )
+        full = web._messages_conversation(self.user_id, self.conversation_id)
+        self.assertEqual(len(recent), 5)
+        self.assertEqual([message["texte"] for message in recent], [
+            "question 25", "question 26", "question 27", "question 28", "question 29"
+        ])
+        self.assertEqual(len(full), 32)
+
+    def test_summary_uses_recent_messages_without_loading_or_deleting_old_history(self):
+        with session_base() as db:
+            db.add_all([
+                Message(
+                    conversation_id=self.conversation_id,
+                    auteur="user",
+                    texte=f"summary question {index}",
+                )
+                for index in range(58)
+            ])
+
+        captured = {}
+
+        def fake_summary(history, previous, user_id=None):
+            captured["history"] = history
+            captured["previous"] = previous
+            return "updated summary"
+
+        with patch.object(web, "resumer_conversation", side_effect=fake_summary):
+            web._actualiser_resume(self.user_id, self.conversation_id)
+
+        self.assertEqual(len(captured["history"]), 40)
+        self.assertEqual(captured["history"][0]["texte"], "summary question 18")
+        self.assertEqual(captured["history"][-1]["texte"], "summary question 57")
+        self.assertEqual(len(web._messages_conversation(self.user_id, self.conversation_id)), 60)
+        with session_base() as db:
+            conversation = db.query(Conversation).filter_by(id=self.conversation_id).one()
+            self.assertEqual(conversation.resume, "updated summary")
 
     def test_visitor_sse_still_keeps_its_temporary_session_history(self):
         client = web.app.test_client()
