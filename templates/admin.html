@@ -70,7 +70,7 @@
     <section class="card"><h2>Protection des contenus</h2><p class="subtle">Cette page n’affiche aucune clé ni valeur de souvenir. Les comptes connectés sont comptés par identifiant utilisateur. Les visiteurs ne disposent pas d’une mémoire personnelle; leurs commandes de mémorisation sont refusées.</p></section>
 
     {% elif section == 'activity' %}
-    <section class="card"><h2>Journal d’activité</h2><p class="notice">Aucun journal durable des connexions ou actions administratives n’est actuellement configuré. DASHLE ne fabrique pas d’événements historiques.</p></section>
+    <section class="card"><h2>Journal d’activité administrative</h2><p class="subtle">Connexions, consultations des sections protégées et changements de forfait. Aucun secret ni contenu privé n’est enregistré.</p><div class="table-wrap"><table><thead><tr><th>Date</th><th>Administrateur</th><th>Action</th><th>Section</th><th>Compte ciblé</th><th>Détail</th></tr></thead><tbody>{% for event in journal %}<tr><td>{{ event.date }}</td><td>{{ event.admin }}</td><td>{{ event.action }}</td><td>{{ event.section or '—' }}</td><td>{{ event.target or '—' }}</td><td>{{ event.details or '—' }}</td></tr>{% else %}<tr><td colspan="6">Aucune action enregistrée.</td></tr>{% endfor %}</tbody></table></div></section>
 
     {% elif section == 'statistics' %}
     <div class="grid">{% for label,valeur,note in cartes %}<article class="card"><div class="metric-label">{{ label }}</div><div class="metric">{{ valeur }}</div><div class="metric-note">{{ note }}</div></article>{% endfor %}</div>

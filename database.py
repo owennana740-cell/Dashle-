@@ -177,6 +177,21 @@ class UserMemory(Base):
     valeur: Mapped[str] = mapped_column(Text, nullable=False)
 
 
+class AdminAuditLog(Base):
+    """Journal non sensible des connexions et actions administratives."""
+    __tablename__ = "admin_audit_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    admin_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    action: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    section: Mapped[str] = mapped_column(String(40), default="", nullable=False)
+    target_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    details: Mapped[str] = mapped_column(String(200), default="", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+
 def initialiser_base():
     Base.metadata.create_all(engine)
     colonnes_utilisateurs = {

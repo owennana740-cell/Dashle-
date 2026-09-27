@@ -36,7 +36,7 @@ from app import streamer_message, traiter_message, traiter_message_image
 from brain import emails_owner, niveau_abonnement, resumer_conversation
 from config import MODELE_GEMINI
 from database import (
-    Conversation, Message, MessageFeedback, ShareLink, SubscriptionPayment, User,
+    AdminAuditLog, Conversation, Message, MessageFeedback, ShareLink, SubscriptionPayment, User,
     UserMemory, UserPreference, StatisticalAnalysisUsage, Project, Reminder, UserPlugin,
     initialiser_base, session_base,
 )
@@ -4873,6 +4873,16 @@ ADMIN_NAVIGATION = (
 ADMIN_TITLES = {code: label for code, label, _ in ADMIN_NAVIGATION}
 
 
+def _journaliser_action_admin(db, admin_user_id, action, section="", target_user_id=None, details=""):
+    db.add(AdminAuditLog(
+        admin_user_id=admin_user_id,
+        action=action[:40],
+        section=section[:40],
+        target_user_id=target_user_id,
+        details=details[:200],
+    ))
+
+
 @app.route("/admin", methods=["GET", "POST"])
 def admin():
     user_id = session.get("user_id")
@@ -4891,6 +4901,8 @@ def admin():
             motif = "session absente" if not user_id else "compte de session introuvable" if not administrateur else "compte non présent dans OWNER_EMAILS"
             app.logger.warning("Accès /admin refusé (404) : %s", motif)
             return "Not Found", 404
+        if request.method == "GET":
+            _journaliser_action_admin(db, user_id, "consultation", section)
 
     if request.method == "POST":
         try:
@@ -4908,11 +4920,14 @@ def admin():
                     return "Choix de palier invalide", 400
                 cible.palier = palier
                 cible.acces_manuel = True
+                detail_action = f"palier manuel défini: {palier}"
             elif action == "retirer":
                 cible.palier = None
                 cible.acces_manuel = False
+                detail_action = "accès manuel retiré"
             else:
                 return "Action invalide", 400
+            _journaliser_action_admin(db, user_id, "modification_forfait", "users", cible.id, detail_action)
         return redirect(url_for("admin", section="users", q=recherche, page=request.form.get("page", 1)))
 
     with session_base() as db:
@@ -4968,6 +4983,21 @@ def admin():
             "messages": comptages_messages.get(conv.id, 0),
             "archivee": conv.archivee,
         } for conv, email in lignes_conversations]
+        journal = []
+        if section == "activity":
+            evenements = db.query(AdminAuditLog, User.email).outerjoin(
+                User, AdminAuditLog.admin_user_id == User.id
+            ).order_by(AdminAuditLog.created_at.desc()).limit(100).all()
+            for evenement, auteur in evenements:
+                compte_cible = db.get(User, evenement.target_user_id) if evenement.target_user_id else None
+                journal.append({
+                    "date": evenement.created_at.strftime("%d/%m/%Y %H:%M:%S") if evenement.created_at else "—",
+                    "admin": auteur or "Compte supprimé",
+                    "action": evenement.action,
+                    "section": evenement.section,
+                    "target": compte_cible.email if compte_cible else "",
+                    "details": evenement.details,
+                })
         backend = db.bind.dialect.name
         try:
             db.execute(text("SELECT 1"))
@@ -5025,6 +5055,7 @@ def admin():
         cartes=cartes,
         memoire_cartes=memoire_cartes,
         conversations=conversations,
+        journal=journal,
         etats=etats,
         securite=securite,
         configuration=configuration,
@@ -5328,6 +5359,8 @@ def connexion():
         with session_base() as db:
             user = db.query(User).filter_by(email=email).one_or_none()
             if user and check_password_hash(user.password_hash, request.form.get("password", "")):
+                if user.email.strip().lower() in emails_owner():
+                    _journaliser_action_admin(db, user.id, "connexion_admin")
                 hist_visiteur = list(_historique_visiteur())
                 session.clear()
                 session.permanent = True
