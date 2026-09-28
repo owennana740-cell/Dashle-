@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine, inspect, text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, LargeBinary, String, Text, UniqueConstraint, create_engine, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
 
 
@@ -87,7 +87,27 @@ class Project(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
+    instructions: Mapped[str] = mapped_column(Text, default="", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    files: Mapped[list["ProjectFile"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
+
+
+class ProjectFile(Base):
+    __tablename__ = "project_files"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    content: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    extracted_text: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    project: Mapped[Project] = relationship(back_populates="files")
 
 
 class Reminder(Base):
@@ -229,6 +249,15 @@ def initialiser_base():
         for nom, definition in colonnes_conversations.items():
             if nom not in colonnes_existantes:
                 connexion.execute(text(f"ALTER TABLE conversations ADD COLUMN {nom} {definition}"))
+
+    colonnes_projets = {
+        "instructions": "TEXT NOT NULL DEFAULT ''",
+    }
+    colonnes_existantes = {colonne["name"] for colonne in inspect(engine).get_columns("projects")}
+    with engine.begin() as connexion:
+        for nom, definition in colonnes_projets.items():
+            if nom not in colonnes_existantes:
+                connexion.execute(text(f"ALTER TABLE projects ADD COLUMN {nom} {definition}"))
 
     colonnes_preferences = {
         "memoire_active": "BOOLEAN NOT NULL DEFAULT TRUE",
