@@ -3819,26 +3819,44 @@ TARIFS_PAGE = """
 <!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Tarifs — DASHLE</title><style>
 :root{font-family:Inter,Segoe UI,sans-serif;color:#18352c;background:#f3f8f6}*{box-sizing:border-box}body{margin:0;padding:28px 16px 48px}
-header{max-width:1100px;margin:0 auto 28px;display:flex;align-items:center;justify-content:space-between}header a{color:#187a60;text-decoration:none;font-weight:600}
-h1{text-align:center;font-size:clamp(30px,5vw,44px);margin:18px 0 8px} .intro{text-align:center;color:#657b73;margin:0 auto 28px;max-width:640px}
-.plans{max-width:1100px;margin:auto;display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:16px}.plan{background:white;border:1px solid #dce9e4;border-radius:18px;padding:24px;box-shadow:0 10px 28px #173a2b0c;display:flex;flex-direction:column}.plan.featured{border:2px solid #35a982}
-.plan h2{margin:4px 0 10px}.price{font-size:27px;font-weight:750;color:#137d61}.price small{font-size:14px;color:#70847c;font-weight:500}.features{padding-left:20px;line-height:1.65;flex:1;color:#526a61}
-form{margin-top:20px}select{width:100%;padding:10px;border:1px solid #d5e3dd;border-radius:9px;background:#fff;font:inherit}button,.button{display:block;width:100%;margin-top:9px;padding:11px;border:0;border-radius:10px;font-family:inherit;font-size:14px;font-weight:600;text-align:center;text-decoration:none;cursor:pointer;background:linear-gradient(110deg,#25bd80,#3b82f6);color:white}.button.secondary{background:#e8f4ef;color:#17654f}.notice,.error{max-width:740px;margin:14px auto;padding:12px 15px;border-radius:10px;background:#e7f6ef;color:#27634e}.error{background:#fff0ed;color:#9b3828}.current{text-align:center;color:#61796f;margin:14px}
+header{max-width:1100px;margin:0 auto 28px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}header a{color:#187a60;text-decoration:none;font-weight:600}
+h1{text-align:center;font-size:clamp(30px,5vw,44px);margin:18px 0 8px}.intro{text-align:center;color:#657b73;margin:0 auto 10px;max-width:680px}
+.indicatif{text-align:center;color:#71837b;font-size:13px;margin:0 auto 28px}.plans{max-width:1100px;margin:auto;display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:16px}
+.plan{background:white;border:1px solid #dce9e4;border-radius:18px;padding:24px;box-shadow:0 10px 28px #173a2b0c;display:flex;flex-direction:column}.plan.featured{border:2px solid #35a982}
+.plan h2{margin:4px 0 10px}.price{font-size:27px;font-weight:750;color:#137d61}.price small{font-size:14px;color:#70847c;font-weight:500}.indicatifs-prix{font-size:13px;color:#657b73;margin-top:5px}.features{padding-left:20px;line-height:1.65;flex:1;color:#526a61}
+form{margin-top:20px}select{width:100%;padding:10px;border:1px solid #d5e3dd;border-radius:9px;background:#fff;font:inherit}
+button,.button{display:block;width:100%;margin-top:9px;padding:11px;border:0;border-radius:10px;font-family:inherit;font-size:14px;font-weight:600;text-align:center;text-decoration:none;cursor:pointer;background:linear-gradient(110deg,#25bd80,#3b82f6);color:white}.button.secondary{background:#e8f4ef;color:#17654f}
+.notice,.error{max-width:740px;margin:14px auto;padding:12px 15px;border-radius:10px;background:#e7f6ef;color:#27634e}.error{background:#fff0ed;color:#9b3828}.current{text-align:center;color:#61796f;margin:20px auto;max-width:760px}
+.sr-only{position:absolute;left:-10000px}
 </style></head><body>
-<header><a href="{{ url_for('accueil') }}">← Retour à DASHLE</a>{% if utilisateur %}<span>{{ utilisateur }} · offre {{ niveau|capitalize }}</span>{% else %}<a href="{{ url_for('connexion') }}">Connexion</a>{% endif %}</header>
-<h1>Un palier adapté à tes besoins</h1><p class="intro">Choisis une formule mensuelle ou annuelle. Les tarifs sont indiqués en FCFA.</p>
+<header><a href="{{ url_for('accueil') }}">← Retour à DASHLE</a>{% if utilisateur %}<span>{{ utilisateur }} · offre {{ niveau|capitalize }} · <a href="{{ url_for('factures') }}">Factures</a></span>{% else %}<a href="{{ url_for('connexion') }}">Connexion</a>{% endif %}</header>
+<h1>Tarifs</h1><p class="intro">Les abonnements sont facturés en FCFA (XOF), devise de règlement.</p>
+<p class="indicatif">Pour les clients hors zone FCFA : équivalent EUR et USD affiché à titre indicatif, selon un taux mis à jour régulièrement. <strong>Prix indicatif</strong>.</p>
 {% if erreur %}<p class="error">{{ erreur }}</p>{% endif %}{% if request.args.get('retour') %}<p class="notice">Le paiement a été transmis. Ton offre sera activée après confirmation du prestataire.</p>{% endif %}
 <div class="plans">
-  <article class="plan"><h2>Dashle Free</h2><div class="price">0 FCFA <small>/ toujours</small></div><ul class="features"><li>Chat conversationnel</li><li>Quota Gemini standard</li></ul><a class="button secondary" href="{{ url_for('accueil') }}">Commencer gratuitement</a></article>
-  {% for code, nom, mensuel, annuel, avantages in offres %}
-  <article class="plan {{ 'featured' if code == 'prime' else '' }}"><h2>{{ nom }}</h2><div class="price"><span data-month="{{ mensuel }}" data-year="{{ annuel }}">{{ '{:,}'.format(mensuel).replace(',', ' ') }}</span> FCFA <small class="period">/ mois</small></div><ul class="features">{% for avantage in avantages %}<li>{{ avantage }}</li>{% endfor %}</ul>
-  {% if utilisateur %}<form method="post" action="{{ url_for('initier_paiement') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="tier" value="{{ code }}"><label class="sr-only" for="cadence-{{ code }}">Périodicité</label><select id="cadence-{{ code }}" name="cadence" class="cadence"><option value="monthly">Mensuel</option><option value="annual">Annuel — 2 mois offerts</option></select><button name="provider" value="paydunya">Mobile Money · PayDunya</button><button class="button secondary" name="provider" value="stripe">Carte bancaire · Stripe</button></form>
-  {% else %}<a class="button" href="{{ url_for('connexion', next=url_for('tarifs')) }}">Connecte-toi pour choisir</a>{% endif %}</article>
-  {% endfor %}
+<article class="plan"><h2>Dashle Free</h2><div class="price">0 FCFA <small>/ toujours</small></div><ul class="features"><li>Chat conversationnel</li><li>Quota Gemini standard</li></ul><a class="button secondary" href="{{ url_for('accueil') }}">Commencer gratuitement</a></article>
+{% for code, nom, mensuel, annuel, avantages in offres %}
+<article class="plan {{ 'featured' if code == 'prime' else '' }}"><h2>{{ nom }}</h2>
+<div class="price"><span data-month="{{ mensuel }}" data-year="{{ annuel }}">{{ '{:,}'.format(mensuel).replace(',', ' ') }}</span> FCFA <small class="period">/ mois</small></div>
+<div class="indicatifs-prix" data-xof="{{ mensuel }}">≈ {{ '%.2f'|format(mensuel / taux_eur) }} € · ≈ {{ '%.2f'|format(mensuel / taux_eur * taux_usd) }} $ — prix indicatif</div>
+<ul class="features">{% for avantage in avantages %}<li>{{ avantage }}</li>{% endfor %}</ul>
+{% if utilisateur %}
+<form method="post" action="{{ url_for('initier_paiement') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="tier" value="{{ code }}">
+<label class="sr-only" for="cadence-{{ code }}">Périodicité</label><select id="cadence-{{ code }}" name="cadence" class="cadence"><option value="monthly">Mensuel</option><option value="annual">Annuel — 2 mois offerts</option></select>
+{% if 'paydunya' in moyens_paiement %}<button name="provider" value="paydunya">Mobile Money + carte · PayDunya</button>{% endif %}
+{% if 'cinetpay' in moyens_paiement %}<button name="provider" value="cinetpay">CinetPay</button>{% endif %}
+{% if 'stripe' in moyens_paiement %}<button class="button secondary" name="provider" value="stripe">Carte bancaire</button>{% endif %}
+</form>
+{% else %}<a class="button" href="{{ url_for('connexion', next=url_for('tarifs')) }}">Connecte-toi pour choisir</a>{% endif %}
+</article>{% endfor %}
 </div>
-<p class="current">Le paiement Mobile Money est à renouveler manuellement à l’échéance. La carte bancaire utilise un abonnement Stripe renouvelé automatiquement.</p>
-<script>document.querySelectorAll('.plan').forEach(function(plan){var select=plan.querySelector('.cadence');if(!select)return;var price=plan.querySelector('.price span'),period=plan.querySelector('.period');select.addEventListener('change',function(){var annuel=select.value==='annual';price.textContent=Number(price.dataset[annuel?'year':'month']).toLocaleString('fr-FR');period.textContent=annuel?'/ an':'/ mois';});});</script>
-</body></html>
+<p class="current">La facturation et le règlement restent en XOF. Les équivalents EUR/USD ne sont jamais le montant débité.</p>
+<script>
+document.querySelectorAll('.plan').forEach(function(plan){var select=plan.querySelector('.cadence');if(!select)return;
+var price=plan.querySelector('.price span'),period=plan.querySelector('.period'),indicatif=plan.querySelector('.indicatifs-prix');
+function render(){var annuel=select.value==='annual';var xof=Number(price.dataset[annuel?'year':'month']);price.textContent=xof.toLocaleString('fr-FR');period.textContent=annuel?'/ an':'/ mois';var eur=Number(xof/{{ taux_eur }}),usd=eur*Number({{ taux_usd }});indicatif.textContent='≈ '+eur.toFixed(2)+' € · ≈ '+usd.toFixed(2)+' $ — prix indicatif';}
+select.addEventListener('change',render);render();});
+</script></body></html>
 """
 
 
