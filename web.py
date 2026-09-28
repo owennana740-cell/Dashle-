@@ -4272,6 +4272,13 @@ def parametres():
         return redirect(url_for("connexion"))
 
     if request.method == "POST":
+        pays = request.form.get("pays", "").strip().upper()
+        telephone_saisi = request.form.get("telephone", "").strip()
+        telephone, telephone_national = _normaliser_telephone(pays, telephone_saisi)
+        if pays not in PAYS_CODES:
+            return redirect(url_for("parametres", erreur="Sélectionne un pays."))
+        if not telephone:
+            return redirect(url_for("parametres", erreur="Indique un numéro de téléphone valide pour le pays sélectionné."))
         def num(nom, lo, hi, defaut):
             try:
                 return max(lo, min(hi, float(request.form.get(nom, defaut))))
@@ -4279,6 +4286,12 @@ def parametres():
                 return defaut
 
         with session_base() as db:
+            user = db.get(User, user_id)
+            if user is None:
+                return redirect(url_for("connexion"))
+            user.pays = pays
+            user.telephone = telephone
+            user.telephone_national = telephone_national
             prefs = db.query(UserPreference).filter_by(user_id=user_id).one_or_none()
             if prefs is None:
                 prefs = UserPreference(user_id=user_id)
@@ -4309,6 +4322,7 @@ def parametres():
         return redirect(url_for("parametres"))
 
     with session_base() as db:
+        user = db.get(User, user_id)
         souvenirs = db.query(UserMemory).filter_by(user_id=user_id).all()
     reglages = {souvenir.cle: souvenir.valeur for souvenir in souvenirs}
     cle_consignes = "__dashle_consignes_personnalisees__"
@@ -4321,6 +4335,9 @@ def parametres():
     return render_template_string(
         SETTINGS_PAGE,
         utilisateur=session["user_email"],
+        pays_profil=PAYS_PROFIL,
+        pays_utilisateur=(user.pays if user else ""),
+        telephone_utilisateur=(user.telephone_national if user else ""),
         preferences=_preferences(user_id),
         modele_gemini=MODELE_GEMINI,
         consignes_personnalisees=reglages.get(cle_consignes, ""),
