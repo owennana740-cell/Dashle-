@@ -75,6 +75,104 @@ def definir_charset_json_utf8(response):
 # Nombre maximal de messages conservés en session pour les visiteurs anonymes.
 MAX_HISTORIQUE_VISITEUR = 30
 
+# Profil international et règles de paiement. Le pays choisi par l'utilisateur
+# est la source de vérité : aucune déduction par adresse IP n'est utilisée.
+PAYS_PROFIL = [
+    ("AF","Afghanistan","93"),("ZA","Afrique du Sud","27"),("AL","Albanie","355"),("DZ","Algérie","213"),
+    ("DE","Allemagne","49"),("AD","Andorre","376"),("AO","Angola","244"),("AI","Anguilla","1264"),
+    ("AG","Antigua-et-Barbuda","1268"),("SA","Arabie saoudite","966"),("AR","Argentine","54"),
+    ("AM","Arménie","374"),("AW","Aruba","297"),("AU","Australie","61"),("AT","Autriche","43"),
+    ("AZ","Azerbaïdjan","994"),("BI","Burundi","257"),("BE","Belgique","32"),("BJ","Bénin","229"),
+    ("BF","Burkina Faso","226"),("BD","Bangladesh","880"),("BG","Bulgarie","359"),("BH","Bahreïn","973"),
+    ("BS","Bahamas","1242"),("BA","Bosnie-Herzégovine","387"),("BY","Biélorussie","375"),("BZ","Belize","501"),
+    ("BR","Brésil","55"),("BB","Barbade","1246"),("BN","Brunei","673"),("BT","Bhoutan","975"),
+    ("BW","Botswana","267"),("CF","République centrafricaine","236"),("CA","Canada","1"),("CH","Suisse","41"),
+    ("CL","Chili","56"),("CN","Chine","86"),("CI","Côte d’Ivoire","225"),("CM","Cameroun","237"),
+    ("CD","République démocratique du Congo","243"),("CG","Congo-Brazzaville","242"),("CO","Colombie","57"),
+    ("KM","Comores","269"),("CV","Cap-Vert","238"),("CR","Costa Rica","506"),("CU","Cuba","53"),
+    ("CW","Curaçao","599"),("CY","Chypre","357"),("CZ","Tchéquie","420"),("DK","Danemark","45"),
+    ("DJ","Djibouti","253"),("DM","Dominique","1767"),("DO","République dominicaine","1809"),("DZ","Algérie","213"),
+    ("EC","Équateur","593"),("EG","Égypte","20"),("ER","Érythrée","291"),("ES","Espagne","34"),
+    ("EE","Estonie","372"),("ET","Éthiopie","251"),("FI","Finlande","358"),("FJ","Fidji","679"),
+    ("FR","France","33"),("GA","Gabon","241"),("GM","Gambie","220"),("GE","Géorgie","995"),
+    ("GH","Ghana","233"),("GI","Gibraltar","350"),("GR","Grèce","30"),("GD","Grenade","1473"),
+    ("GP","Guadeloupe","590"),("GT","Guatemala","502"),("GF","Guyane française","594"),("GN","Guinée","224"),
+    ("GW","Guinée-Bissau","245"),("GQ","Guinée équatoriale","240"),("GY","Guyana","592"),("HT","Haïti","509"),
+    ("HN","Honduras","504"),("HK","Hong Kong","852"),("HU","Hongrie","36"),("IS","Islande","354"),
+    ("IN","Inde","91"),("ID","Indonésie","62"),("IR","Iran","98"),("IQ","Irak","964"),("IE","Irlande","353"),
+    ("IL","Israël","972"),("IT","Italie","39"),("JM","Jamaïque","1876"),("JP","Japon","81"),("JO","Jordanie","962"),
+    ("KZ","Kazakhstan","76"),("KE","Kenya","254"),("KG","Kirghizistan","996"),("KH","Cambodge","855"),
+    ("KR","Corée du Sud","82"),("KW","Koweït","965"),("LA","Laos","856"),("LB","Liban","961"),("LR","Libéria","231"),
+    ("LY","Libye","218"),("LI","Liechtenstein","423"),("LK","Sri Lanka","94"),("LS","Lesotho","266"),
+    ("LT","Lituanie","370"),("LU","Luxembourg","352"),("LV","Lettonie","371"),("MA","Maroc","212"),
+    ("MC","Monaco","377"),("MD","Moldavie","373"),("MG","Madagascar","261"),("ML","Mali","223"),
+    ("MT","Malte","356"),("MR","Mauritanie","222"),("MU","Maurice","230"),("MW","Malawi","265"),
+    ("MY","Malaisie","60"),("MZ","Mozambique","258"),("NA","Namibie","264"),("NE","Niger","227"),
+    ("NG","Nigeria","234"),("NI","Nicaragua","505"),("NL","Pays-Bas","31"),("NO","Norvège","47"),
+    ("NP","Népal","977"),("NZ","Nouvelle-Zélande","64"),("OM","Oman","968"),("PK","Pakistan","92"),
+    ("PA","Panama","507"),("PE","Pérou","51"),("PH","Philippines","63"),("PL","Pologne","48"),
+    ("PT","Portugal","351"),("PY","Paraguay","595"),("PS","Palestine","970"),("QA","Qatar","974"),
+    ("RE","La Réunion","262"),("RO","Roumanie","40"),("RU","Russie","7"),("RW","Rwanda","250"),
+    ("SA","Arabie saoudite","966"),("SN","Sénégal","221"),("SG","Singapour","65"),("SL","Sierra Leone","232"),
+    ("SK","Slovaquie","421"),("SI","Slovénie","386"),("SO","Somalie","252"),("SS","Soudan du Sud","211"),
+    ("SD","Soudan","249"),("SE","Suède","46"),("CH","Suisse","41"),("SY","Syrie","963"),("TD","Tchad","235"),
+    ("TG","Togo","228"),("TH","Thaïlande","66"),("TN","Tunisie","216"),("TR","Turquie","90"),("UG","Ouganda","256"),
+    ("UA","Ukraine","380"),("AE","Émirats arabes unis","971"),("GB","Royaume-Uni","44"),("US","États-Unis","1"),
+    ("UY","Uruguay","598"),("UZ","Ouzbékistan","998"),("VE","Venezuela","58"),("VN","Vietnam","84"),
+    ("YE","Yémen","967"),("ZM","Zambie","260"),("ZW","Zimbabwe","263"),
+]
+# Les six marchés Mobile Money PayDunya demandés.
+PAYDUNYA_MOBILE_COUNTRIES = {"SN","CI","BJ","BF","TG","ML"}
+# CinetPay est proposé séparément lorsque le pays est dans la couverture
+# commerciale configurée pour Dashle; la liste peut évoluer sans toucher aux profils.
+CINETPAY_COUNTRIES = {"SN","CI","BJ","BF","TG","ML"}
+PAYS_CODES = {code for code, _, _ in PAYS_PROFIL}
+INDICATIFS = {code: indicatif for code, _, indicatif in PAYS_PROFIL}
+
+def _normaliser_telephone(pays, telephone):
+    pays = (pays or "").strip().upper()
+    brut = re.sub(r"[^d+]", "", str(telephone or ""))
+    if pays not in PAYS_CODES or not brut:
+        return None, None
+    indicatif = INDICATIFS[pays]
+    if brut.startswith("+"):
+        chiffres = brut[1:]
+        if not chiffres.startswith(indicatif):
+            return None, None
+        national = chiffres[len(indicatif):]
+    else:
+        national = brut
+        # Un numéro saisi avec le code pays sans + est aussi accepté.
+        if national.startswith(indicatif):
+            national = national[len(indicatif):]
+    if not national.isdigit():
+        return None, None
+    # Les numéros locaux commencent par 0 dans plusieurs pays. On le conserve
+    # dans telephone_national, tout en produisant un E.164 sans le 0 pour l'API.
+    if national.startswith("0"):
+        e164 = "+" + indicatif + national[1:]
+    else:
+        e164 = "+" + indicatif + national
+    # Contrôle générique sûr : 6 à 14 chiffres nationaux, sans inventer une
+    # longueur unique pour tous les pays.
+    if not 6 <= len(national) <= 14:
+        return None, None
+    return e164, national
+
+def _moyens_paiement_pays(pays):
+    pays = (pays or "").upper()
+    if pays in PAYDUNYA_MOBILE_COUNTRIES:
+        return ["paydunya", "cinetpay", "stripe"]
+    if pays in CINETPAY_COUNTRIES:
+        return ["cinetpay", "stripe"]
+    return ["stripe"]
+
+def _pays_client(user_id):
+    with session_base() as db:
+        user = db.get(User, user_id)
+        return user.pays if user else None
+
+
 MESSAGES_ACCUEIL_VISITEUR = (
     "Bonjour, que veux-tu faire aujourd’hui ?",
     "Prêt à commencer ?",
