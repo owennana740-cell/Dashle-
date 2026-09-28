@@ -5,7 +5,10 @@ from memory import memoire_active, retenir, se_souvenir
 from learn import apprendre
 
 
-def traiter_message(message, historique=None, user_id=None, resume=""):
+def traiter_message(
+    message, historique=None, user_id=None, resume="",
+    instructions_projet="", fichiers_projet="",
+):
     message_lower = message.lower()
 
     if message_lower.startswith("retiens que"):
@@ -49,14 +52,26 @@ def traiter_message(message, historique=None, user_id=None, resume=""):
         return se_souvenir("information", user_id)
 
     else:
-        return reflechir(message, historique, user_id, resume)
+        return reflechir(
+            message, historique, user_id, resume,
+            instructions_projet, fichiers_projet,
+        )
 
 
-def traiter_message_image(message, image_b64, mime_type, historique=None, resume="", user_id=None):
-    return demander_a_lia_image(message, image_b64, mime_type, historique, resume, user_id)
+def traiter_message_image(
+    message, image_b64, mime_type, historique=None, resume="", user_id=None,
+    instructions_projet="", fichiers_projet="",
+):
+    return demander_a_lia_image(
+        message, image_b64, mime_type, historique, resume, user_id,
+        instructions_projet, fichiers_projet,
+    )
 
 
-def streamer_message(message, historique=None, user_id=None, resume=""):
+def streamer_message(
+    message, historique=None, user_id=None, resume="",
+    instructions_projet="", fichiers_projet="",
+):
     """Diffuse une reponse IA tout en gardant les commandes locales synchrones."""
     message_lower = message.lower()
     est_local = (
@@ -67,9 +82,16 @@ def streamer_message(message, historique=None, user_id=None, resume=""):
         or "que retiens" in message_lower
     )
     if est_local:
-        yield traiter_message(message, historique, user_id, resume)
+        yield traiter_message(
+            message, historique, user_id, resume,
+            instructions_projet, fichiers_projet,
+        )
         return
-    yield from streamer_a_lia(message, historique, resume, user_id=user_id)
+    yield from streamer_a_lia(
+        message, historique, resume, user_id=user_id,
+        instructions_projet=instructions_projet,
+        fichiers_projet=fichiers_projet,
+    )
 
 
 if __name__ == "__main__":

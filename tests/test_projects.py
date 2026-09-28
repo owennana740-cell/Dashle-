@@ -165,6 +165,66 @@ class ProjectRouteTests(unittest.TestCase):
             self.assertEqual(conversation.user_id, self.user_id)
             self.assertEqual(conversation.project_id, self.project_id)
 
+    def test_sync_chat_passes_project_instructions_and_files_to_model(self):
+        with session_base() as db:
+            conversation = Conversation(user_id=self.user_id, project_id=self.project_id)
+            db.add(conversation)
+            db.add(UserPreference(user_id=self.user_id, conserver_historique=False))
+            db.add(ProjectFile(
+                project_id=self.project_id,
+                filename="brief.txt",
+                mime_type="text/plain",
+                size_bytes=17,
+                content=b"Internal project brief",
+                extracted_text="Internal project brief",
+            ))
+            db.flush()
+            conversation_id = conversation.id
+        with self.client.session_transaction() as state:
+            state["conversation_id"] = conversation_id
+
+        captured = {}
+
+        def fake_answer(*_args, **kwargs):
+            captured.update(kwargs)
+            return "project answer"
+
+        from unittest.mock import patch
+        with patch.object(web, "traiter_message", side_effect=fake_answer):
+            response = self.client.post(
+                "/repondre", data={"message": "question"}, headers=self.post_headers()
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(captured["instructions_projet"], "Use the project brief.")
+        self.assertIn("Internal project brief", captured["fichiers_projet"])
+
+    def test_sse_chat_passes_project_context_to_streamer(self):
+        with session_base() as db:
+            conversation = Conversation(user_id=self.user_id, project_id=self.project_id)
+            db.add(conversation)
+            db.flush()
+            conversation_id = conversation.id
+        with self.client.session_transaction() as state:
+            state["conversation_id"] = conversation_id
+
+        captured = {}
+
+        def fake_stream(*_args, **kwargs):
+            captured.update(kwargs)
+            yield "project stream"
+
+        from unittest.mock import patch
+        with patch.object(web, "streamer_message", side_effect=fake_stream), \
+                patch.object(web, "_actualiser_resume_en_arriere_plan"):
+            response = self.client.post(
+                "/repondre_flux",
+                data={"message": "question"},
+                headers=self.post_headers(),
+                buffered=True,
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(captured["instructions_projet"], "Use the project brief.")
+
 
 if __name__ == "__main__":
     unittest.main()

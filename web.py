@@ -383,7 +383,10 @@ def _actualiser_resume(user_id, conversation_id):
              "date": m.created_at.isoformat()}
             for m in messages
         ]
-    nouveau = resumer_conversation(historique, resume, user_id=user_id)
+    contexte_projet = _arguments_contexte_projet(user_id, conversation_id)
+    nouveau = resumer_conversation(
+        historique, resume, user_id=user_id, **contexte_projet
+    )
     if nouveau and nouveau != resume:
         with session_base() as db:
             conv = db.query(Conversation).filter_by(
@@ -4037,7 +4040,10 @@ def regenerer(message_id):
     if not dernier_user:
         return jsonify({"erreur": "Aucun message utilisateur à régénérer."}), 400
     resume = _resume_conversation(user_id, conv_id)
-    reponse = traiter_message(dernier_user, historique, user_id, resume)
+    reponse = traiter_message(
+        dernier_user, historique, user_id, resume,
+        **_arguments_contexte_projet(user_id, conv_id),
+    )
     mid = ajouter_message(user_id, conv_id, reponse, "bot") if conserver else None
     return jsonify({"reponse": reponse, "message_id": mid})
 
@@ -4354,7 +4360,10 @@ def repondre():
                 user_id, conversation_id, request.form.get("historique"), message
             )
             resume = _resume_conversation(user_id, conversation_id) if conversation_id else ""
-            reponse = traiter_message(message, historique, user_id, resume)
+            reponse = traiter_message(
+                message, historique, user_id, resume,
+                **_arguments_contexte_projet(user_id, conversation_id),
+            )
             return jsonify({"reponse": reponse, "message_id": None})
         conversation_id = _conv_courante(user_id)
         historique = _messages_conversation(
@@ -4363,7 +4372,8 @@ def repondre():
         resume = _resume_conversation(user_id, conversation_id)
         ajouter_message(user_id, conversation_id, message, "user")
         reponse = traiter_message(
-            message, historique + [{"auteur": "user", "texte": message}], user_id, resume
+            message, historique + [{"auteur": "user", "texte": message}], user_id, resume,
+            **_arguments_contexte_projet(user_id, conversation_id),
         )
         mid = ajouter_message(user_id, conversation_id, reponse, "bot")
         _actualiser_resume(user_id, conversation_id)
@@ -4431,12 +4441,16 @@ def repondre_flux():
         contexte_historique = historique + [{"auteur": "user", "texte": message}]
         conversation_id = None
 
+    contexte_projet = (
+        _arguments_contexte_projet(user_id, conversation_id) if user_id else {}
+    )
+
     @stream_with_context
     def generer():
         morceaux = []
         try:
             for morceau in streamer_message(
-                message, contexte_historique, user_id, resume
+                message, contexte_historique, user_id, resume, **contexte_projet
             ):
                 if not morceau:
                     continue
@@ -4601,7 +4615,13 @@ def repondre_image():
     elif not user_id:
         _ajouter_message_visiteur(texte_msg, "user")
 
-    reponse = traiter_message_image(message, image_b64, mime_type, historique, resume, user_id=user_id)
+    contexte_projet = (
+        _arguments_contexte_projet(user_id, conversation_id) if user_id else {}
+    )
+    reponse = traiter_message_image(
+        message, image_b64, mime_type, historique, resume,
+        user_id=user_id, **contexte_projet,
+    )
 
     if user_id and conserver:
         mid = ajouter_message(user_id, conversation_id, reponse, "bot")
@@ -4867,8 +4887,6 @@ def _contexte_projet_pour_conversation(user_id, conversation_id=None):
     with session_base() as db:
         projet = db.query(Project).filter_by(id=project_id, user_id=user_id).one_or_none()
         if projet is None:
-            if session.get("projet_temporaire_id") == project_id:
-                session.pop("projet_temporaire_id", None)
             return "", ""
         instructions = (projet.instructions or "")[:2000]
         fichiers = db.query(ProjectFile.filename, ProjectFile.extracted_text).filter_by(
@@ -4887,6 +4905,18 @@ def _contexte_projet_pour_conversation(user_id, conversation_id=None):
             extraits.append(morceau)
             restant -= len(morceau)
     return instructions, "".join(extraits)
+
+
+def _arguments_contexte_projet(user_id, conversation_id=None):
+    instructions, fichiers = _contexte_projet_pour_conversation(
+        user_id, conversation_id
+    )
+    if not instructions and not fichiers:
+        return {}
+    return {
+        "instructions_projet": instructions,
+        "fichiers_projet": fichiers,
+    }
 
 
 @app.route("/projets")
