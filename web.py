@@ -173,7 +173,7 @@ _ROUTES_PUBLIQUES = {
     "accueil", "actualites", "repondre_flux", "repondre", "repondre_image",
     "confirmer_message", "nouvelle_conv", "conditions_utilisation",
     "health", "robots_txt", "sitemap_xml", "tarifs", "paiement_retour",
-    "cinetpay_notification", "stripe_webhook", "temps_reel", "api_temps_reel",
+    "cinetpay_notification", "paydunya_callback", "stripe_webhook", "temps_reel", "api_temps_reel",
     "telecharger_pdf_temps_reel", "admin",
 }
 
@@ -3722,7 +3722,7 @@ form{margin-top:20px}select{width:100%;padding:10px;border:1px solid #d5e3dd;bor
   <article class="plan"><h2>Dashle Free</h2><div class="price">0 FCFA <small>/ toujours</small></div><ul class="features"><li>Chat conversationnel</li><li>Quota Gemini standard</li></ul><a class="button secondary" href="{{ url_for('accueil') }}">Commencer gratuitement</a></article>
   {% for code, nom, mensuel, annuel, avantages in offres %}
   <article class="plan {{ 'featured' if code == 'prime' else '' }}"><h2>{{ nom }}</h2><div class="price"><span data-month="{{ mensuel }}" data-year="{{ annuel }}">{{ '{:,}'.format(mensuel).replace(',', ' ') }}</span> FCFA <small class="period">/ mois</small></div><ul class="features">{% for avantage in avantages %}<li>{{ avantage }}</li>{% endfor %}</ul>
-  {% if utilisateur %}<form method="post" action="{{ url_for('initier_paiement') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="tier" value="{{ code }}"><label class="sr-only" for="cadence-{{ code }}">Périodicité</label><select id="cadence-{{ code }}" name="cadence" class="cadence"><option value="monthly">Mensuel</option><option value="annual">Annuel — 2 mois offerts</option></select><button name="provider" value="cinetpay">Mobile Money · CinetPay</button><button class="button secondary" name="provider" value="stripe">Carte bancaire · Stripe</button></form>
+  {% if utilisateur %}<form method="post" action="{{ url_for('initier_paiement') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="tier" value="{{ code }}"><label class="sr-only" for="cadence-{{ code }}">Périodicité</label><select id="cadence-{{ code }}" name="cadence" class="cadence"><option value="monthly">Mensuel</option><option value="annual">Annuel — 2 mois offerts</option></select><button name="provider" value="paydunya">Mobile Money · PayDunya</button><button class="button secondary" name="provider" value="stripe">Carte bancaire · Stripe</button></form>
   {% else %}<a class="button" href="{{ url_for('connexion', next=url_for('tarifs')) }}">Connecte-toi pour choisir</a>{% endif %}</article>
   {% endfor %}
 </div>
@@ -5032,6 +5032,13 @@ def tarifs():
 
 @app.route("/abonnement/retour")
 def paiement_retour():
+    token = request.args.get("token", "").strip()
+    if token:
+        ok, message, code = _confirmer_paydunya_token(token)
+        if ok:
+            return redirect(url_for("tarifs", retour=1))
+        if code not in {200, 404}:
+            return _rendre_tarifs(message), code
     return _rendre_tarifs()
 
 
@@ -5231,7 +5238,7 @@ def admin():
         ("Cookie Secure", "Actif" if app.config.get("SESSION_COOKIE_SECURE") else "Inactif", "ok" if app.config.get("SESSION_COOKIE_SECURE") else "warn", "Doit être actif en HTTPS de production"),
     ]
     configuration = []
-    for nom in ("DATABASE_URL", "GEMINI_API_KEY", "OWNER_EMAILS", "FLASK_SECRET_KEY", "CINETPAY_API_KEY", "STRIPE_SECRET_KEY", "OPENWEATHER_API_KEY"):
+    for nom in ("DATABASE_URL", "GEMINI_API_KEY", "OWNER_EMAILS", "FLASK_SECRET_KEY", "PAYDUNYA_MASTER_KEY", "PAYDUNYA_PRIVATE_KEY", "PAYDUNYA_TOKEN", "STRIPE_SECRET_KEY", "OPENWEATHER_API_KEY"):
         present = bool(os.environ.get(nom))
         configuration.append((nom, "Configurée" if present else "Absente", "ok" if present else "warn", "Valeur masquée"))
     cartes = [
@@ -5270,6 +5277,141 @@ def admin():
     )
 
 
+def _paydunya_config():
+    """Retourne la configuration PayDunya sans exposer les secrets."""
+    mode = os.environ.get("PAYDUNYA_MODE", "test").strip().lower()
+    if mode not in {"test", "live"}:
+        mode = "test"
+    master_key = os.environ.get("PAYDUNYA_MASTER_KEY", "").strip()
+    private_key = os.environ.get("PAYDUNYA_PRIVATE_KEY", "").strip()
+    token = os.environ.get("PAYDUNYA_TOKEN", "").strip()
+    base_url = (
+        "https://app.paydunya.com/api/v1"
+        if mode == "live"
+        else "https://app.paydunya.com/sandbox-api/v1"
+    )
+    return mode, master_key, private_key, token, base_url
+
+
+def _confirmer_paydunya_token(invoice_token, expected_reference=None):
+    """Confirme une facture PayDunya et applique l'abonnement seulement si elle est payée."""
+    mode, master_key, private_key, api_token, base_url = _paydunya_config()
+    if not all((master_key, private_key, api_token, invoice_token)):
+        return False, "PayDunya n’est pas encore configuré sur le serveur.", 503
+
+    try:
+        response = requests.get(
+            f"{base_url}/checkout-invoice/confirm/{invoice_token}",
+            headers={
+                "Content-Type": "application/json",
+                "PAYDUNYA-MASTER-KEY": master_key,
+                "PAYDUNYA-PRIVATE-KEY": private_key,
+                "PAYDUNYA-TOKEN": api_token,
+                "User-Agent": "DASHLE/1.0",
+                "Accept": "application/json",
+            },
+            timeout=15,
+        )
+        body = response.json()
+    except (requests.RequestException, ValueError):
+        return False, "Impossible de vérifier le paiement PayDunya.", 502
+
+    if not response.ok or body.get("response_code") != "00":
+        return False, "Le paiement PayDunya n’a pas pu être vérifié.", 502
+
+    invoice = body.get("invoice") or {}
+    status = str(body.get("status") or invoice.get("status") or "").lower()
+    custom_data = body.get("custom_data") or {}
+    reference = str(custom_data.get("dashle_reference") or expected_reference or "").strip()
+    if status != "completed" or not reference:
+        return False, "Le paiement PayDunya n’est pas confirmé.", 200
+
+    received_amount = invoice.get("total_amount")
+    try:
+        received_amount = int(float(received_amount))
+    except (TypeError, ValueError):
+        return False, "Montant PayDunya invalide.", 200
+
+    maintenant = datetime.utcnow()
+    with session_base() as db:
+        payment = db.query(SubscriptionPayment).filter_by(
+            reference=reference, provider="paydunya"
+        ).with_for_update().one_or_none()
+        if not payment:
+            return False, "Paiement Dashle introuvable.", 404
+        if received_amount != payment.amount or payment.currency != "XOF":
+            return False, "Montant du paiement PayDunya invalide.", 200
+        if payment.status == "paid":
+            return True, "Paiement déjà confirmé.", 200
+        user = db.get(User, payment.user_id)
+        if not user:
+            return False, "Utilisateur Dashle introuvable.", 404
+        depart = user.subscription_expires_at
+        if not depart or depart < maintenant:
+            depart = maintenant
+        user.subscription_level = payment.tier
+        user.subscription_provider = "paydunya"
+        user.provider_subscription_id = str(invoice_token)
+        user.subscription_expires_at = _date_apres_mois(
+            depart, 1 if payment.cadence == "monthly" else 12
+        )
+        payment.provider_reference = str(invoice_token)
+        payment.status = "paid"
+        payment.paid_at = maintenant
+    return True, "Paiement confirmé.", 200
+
+
+def _hash_paydunya_valide(data, master_key):
+    """Vérifie le hash SHA-512 envoyé par PayDunya dans son callback."""
+    received_hash = str(data.get("hash", "")).strip().lower()
+    if not received_hash or not master_key:
+        return False
+    expected_hash = hashlib.sha512(master_key.encode("utf-8")).hexdigest().lower()
+    return hmac.compare_digest(received_hash, expected_hash)
+
+
+@app.route("/paiement/paydunya/callback", methods=["POST"])
+def paydunya_callback():
+    mode, master_key, _, _, _ = _paydunya_config()
+    if not master_key:
+        return jsonify({"erreur": "PayDunya non configuré."}), 503
+
+    raw_data = request.form.get("data")
+    if raw_data:
+        try:
+            data = json.loads(raw_data) if isinstance(raw_data, str) else raw_data
+        except (TypeError, ValueError):
+            return jsonify({"ok": False}), 400
+    else:
+        payload = request.get_json(silent=True) or {}
+        data = payload.get("data", payload)
+
+    if not isinstance(data, dict) or not _hash_paydunya_valide(data, master_key):
+        return jsonify({"ok": False}), 400
+
+    invoice = data.get("invoice") or {}
+    token = str(data.get("token") or invoice.get("token") or "").strip()
+    status = str(data.get("status") or "").lower()
+    custom_data = data.get("custom_data") or {}
+    reference = str(custom_data.get("dashle_reference") or "").strip()
+
+    if status in {"cancelled", "failed"}:
+        if reference:
+            with session_base() as db:
+                payment = db.query(SubscriptionPayment).filter_by(
+                    reference=reference, provider="paydunya"
+                ).one_or_none()
+                if payment and payment.status == "pending":
+                    payment.status = "cancelled" if status == "cancelled" else "failed"
+        return jsonify({"ok": True})
+
+    if status != "completed" or not token:
+        return jsonify({"ok": True})
+
+    ok, _, code = _confirmer_paydunya_token(token, expected_reference=reference)
+    return jsonify({"ok": ok}), 200 if ok else code
+
+
 @app.route("/paiement/initier", methods=["POST"])
 def initier_paiement():
     user_id = session.get("user_id")
@@ -5283,9 +5425,9 @@ def initier_paiement():
         return _rendre_tarifs("Choix d’offre invalide."), 400
     offre = OFFRES_ABONNEMENT[tier]
     amount = offre["mensuel"] if cadence == "monthly" else offre["annuel"]
-    currency = os.environ.get("CINETPAY_CURRENCY", "XOF").upper()
-    if currency not in {"XOF", "XAF"}:
-        return _rendre_tarifs("La devise de paiement doit être XOF ou XAF."), 503
+    currency = "XOF"
+    if os.environ.get("PAYDUNYA_CURRENCY", "XOF").upper() != currency:
+        return _rendre_tarifs("PayDunya doit être configuré en XOF pour Dashle."), 503
     stripe_currency = os.environ.get("STRIPE_CURRENCY", "XOF").upper()
     if stripe_currency not in {"XOF", "XAF"}:
         return _rendre_tarifs("La devise de paiement doit être XOF ou XAF."), 503
@@ -5303,48 +5445,73 @@ def initier_paiement():
         )
         db.add(payment)
 
-    if provider == "cinetpay":
-        api_key = os.environ.get("CINETPAY_API_KEY")
-        site_id = os.environ.get("CINETPAY_SITE_ID")
-        if not api_key or not site_id:
-            return _rendre_tarifs("CinetPay n’est pas encore configuré sur le serveur."), 503
+    if provider == "paydunya":
+        mode, master_key, private_key, api_token, base_url = _paydunya_config()
+        if not all((master_key, private_key, api_token)):
+            with session_base() as db:
+                payment = db.query(SubscriptionPayment).filter_by(reference=reference).one_or_none()
+                if payment:
+                    payment.status = "failed"
+            return _rendre_tarifs("PayDunya n’est pas encore configuré sur le serveur."), 503
+
         with session_base() as db:
             user = db.get(User, user_id)
+            nom = user.nom or ""
             email = user.email
+
         payload = {
-            "apikey": api_key,
-            "site_id": site_id,
-            "transaction_id": reference,
-            "amount": amount,
-            "currency": currency,
-            "description": f"Abonnement {offre['nom']} {cadence}",
-            "return_url": url_for("paiement_retour", _external=True) + "?retour=1",
-            "notify_url": url_for("cinetpay_notification", _external=True),
-            "channels": "MOBILE_MONEY",
-            "lang": "fr",
-            "customer_id": str(user_id),
-            "customer_email": email,
-            "metadata": f"{user_id}:{tier}:{cadence}",
+            "invoice": {
+                "total_amount": amount,
+                "description": f"Abonnement {offre['nom']} {cadence}",
+                "customer": {"name": nom, "email": email},
+                "channels": ["orange-money-burkina", "moov-burkina-faso"],
+            },
+            "store": {
+                "name": os.environ.get("PAYDUNYA_STORE_NAME", "Dashle"),
+                "website_url": request.host_url.rstrip("/"),
+            },
+            "custom_data": {
+                "dashle_reference": reference,
+                "dashle_user_id": str(user_id),
+                "dashle_tier": tier,
+                "dashle_cadence": cadence,
+            },
+            "actions": {
+                "cancel_url": url_for("tarifs", _external=True),
+                "return_url": url_for("paiement_retour", _external=True),
+                "callback_url": url_for("paydunya_callback", _external=True),
+            },
         }
         try:
             response = requests.post(
-                "https://api-checkout.cinetpay.com/v2/payment",
+                f"{base_url}/checkout-invoice/create",
                 json=payload,
-                headers={"User-Agent": "DASHLE/1.0", "Accept": "application/json"},
+                headers={
+                    "Content-Type": "application/json",
+                    "PAYDUNYA-MASTER-KEY": master_key,
+                    "PAYDUNYA-PRIVATE-KEY": private_key,
+                    "PAYDUNYA-TOKEN": api_token,
+                    "User-Agent": "DASHLE/1.0",
+                    "Accept": "application/json",
+                },
                 timeout=20,
             )
             body = response.json()
-            if response.ok and body.get("code") == "201":
+            payment_url = body.get("response_text")
+            invoice_token = body.get("token")
+            if response.ok and body.get("response_code") == "00" and payment_url and invoice_token:
                 with session_base() as db:
                     payment = db.query(SubscriptionPayment).filter_by(reference=reference).one()
-                    payment.provider_reference = body.get("data", {}).get("payment_token")
-                return redirect(body["data"]["payment_url"], code=303)
+                    payment.provider_reference = invoice_token
+                return redirect(payment_url, code=303)
         except (requests.RequestException, ValueError, KeyError):
             pass
         with session_base() as db:
             payment = db.query(SubscriptionPayment).filter_by(reference=reference).one_or_none()
             if payment:
                 payment.status = "failed"
+        return _rendre_tarifs("Impossible de créer le paiement PayDunya. Réessaie plus tard."), 502
+
         return _rendre_tarifs("Impossible de créer le paiement CinetPay. Réessaie plus tard."), 502
 
     if provider == "stripe":
