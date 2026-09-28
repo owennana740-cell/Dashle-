@@ -77,6 +77,11 @@ MAX_HISTORIQUE_VISITEUR = 30
 
 # Profil international et règles de paiement. Le pays choisi par l'utilisateur
 # est la source de vérité : aucune déduction par adresse IP n'est utilisée.
+# Architecture de langue : le français est actif aujourd'hui; l'anglais peut
+# être ajouté progressivement sans changer les données ni les routes métier.
+LANGUES_INTERFACE = {"fr": "Français", "en": "English"}
+LANGUE_INTERFACE_DEFAUT = "fr"
+
 PAYS_PROFIL = [
     ("AF","Afghanistan","93"),("ZA","Afrique du Sud","27"),("AL","Albanie","355"),("DZ","Algérie","213"),
     ("DE","Allemagne","49"),("AD","Andorre","376"),("AO","Angola","244"),("AI","Anguilla","1264"),
