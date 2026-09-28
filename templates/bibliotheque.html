@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Bibliothèque — DASHLE</title>
+  <style>
+    :root{font-family:Inter,"Segoe UI",sans-serif;color:#17392f;background:#f3f8f5}
+    *{box-sizing:border-box}body{margin:0;padding:32px 16px;background:linear-gradient(145deg,#effaf3,#f0f5ff);min-height:100vh}
+    main{max-width:1050px;margin:auto}.head{display:flex;justify-content:space-between;align-items:center;gap:20px;flex-wrap:wrap}
+    h1{margin:0;font-size:clamp(28px,5vw,40px)}.sub{color:#60766c;margin:8px 0 24px}
+    .card{background:#fff;border:1px solid #dcebe3;border-radius:18px;padding:20px;box-shadow:0 12px 32px #1b554012;margin:16px 0}
+    form.filters{display:flex;gap:10px;flex-wrap:wrap}input,select,button,a.button{font:inherit;border:1px solid #d6e4dc;border-radius:10px;padding:10px 12px;background:white;color:inherit}
+    input{flex:1;min-width:180px}button,.primary{background:linear-gradient(110deg,#22a879,#3988df)!important;color:white!important;border:0!important;cursor:pointer;text-decoration:none;font-weight:650}
+    .quota{color:#61766c;font-size:14px;margin-top:12px}.items{display:grid;gap:10px}.item{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px;border:1px solid #e1ebe6;border-radius:13px}
+    .meta{color:#71847b;font-size:13px;margin-top:5px}.actions{display:flex;gap:8px;align-items:center}.actions form{margin:0}.delete{background:#fff;color:#a23e45;border:1px solid #f0d8da} .empty{text-align:center;color:#667b71;padding:36px}
+    @media(max-width:600px){.item{align-items:flex-start;flex-direction:column}.actions{width:100%}.actions>*{flex:1;text-align:center}}
+  </style>
+</head>
+<body><main>
+  <div class="head"><div><h1>Ta bibliothèque</h1><p class="sub">Retrouve les documents, analyses et graphiques créés par DASHLE.</p></div><a class="button" href="{{ url_for('accueil') }}">Retour au chat</a></div>
+  <section class="card">
+    <form class="filters" method="get">
+      <input name="q" value="{{ recherche }}" maxlength="100" placeholder="Rechercher par titre">
+      <select name="type" aria-label="Filtrer par type"><option value="">Tous les types</option>{% for code,label in [('pdf','PDF'),('graphique','Graphiques'),('analyse','Analyses'),('image','Images')] %}<option value="{{ code }}" {{ 'selected' if filtre == code }}>{{ label }}</option>{% endfor %}</select>
+      <button type="submit">Filtrer</button>
+    </form>
+    <div class="quota">Stockage utilisé : {{ (utilise / 1048576)|round(1) }} Mio / {{ (limite / 1048576)|round(0)|int }} Mio · jusqu’aux 200 éléments les plus récents</div>
+  </section>
+  {% if erreur %}<p role="alert">{{ erreur }}</p>{% endif %}
+  <section class="card items" aria-label="Éléments enregistrés">
+    {% for item in elements %}
+      <article class="item"><div><strong>{{ item.title }}</strong><div class="meta">{{ item.type|capitalize }} · {{ (item.size_bytes / 1024)|round(1) }} Ko · {{ item.created_at.strftime('%d/%m/%Y %H:%M') }}</div></div>
+        <div class="actions"><a class="button primary" href="{{ url_for('telecharger_element_bibliotheque', item_id=item.id) }}">Télécharger</a><form method="post" action="{{ url_for('supprimer_element_bibliotheque', item_id=item.id) }}" onsubmit="return confirm('Supprimer cet élément de la bibliothèque ?')"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="delete" type="submit">Supprimer</button></form></div></article>
+    {% else %}<div class="empty">Rien ici pour le moment. Tes futurs PDF et analyses apparaîtront ici.</div>{% endfor %}
+  </section>
+</main></body></html>

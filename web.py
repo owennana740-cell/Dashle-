@@ -38,7 +38,7 @@ from app import streamer_message, traiter_message, traiter_message_image
 from brain import emails_owner, niveau_abonnement, resumer_conversation
 from config import MAX_MESSAGES_CONTEXTE, MODELE_GEMINI
 from database import (
-    AdminAuditLog, Conversation, Message, MessageFeedback, ShareLink, SubscriptionPayment, User,
+    AdminAuditLog, Conversation, LibraryItem, Message, MessageFeedback, ShareLink, SubscriptionPayment, User,
     UserMemory, UserPreference, StatisticalAnalysisUsage, Project, ProjectFile, Reminder, UserPlugin,
     initialiser_base, session_base,
 )
@@ -1516,6 +1516,7 @@ if ('serviceWorker' in navigator) {
     <a href="{{ url_for('planification') }}">&#128197; Planification</a>
     <a href="{{ url_for('plugins') }}">&#128268; Plugins</a>
     <a href="{{ url_for('projets') }}">&#128193; Projets</a>
+    <a href="{{ url_for('bibliotheque') }}">&#128218; Biblioth&egrave;que</a>
   {% else %}
     <a href="{{ url_for('connexion') }}">&#128197; Planification</a>
     <a href="{{ url_for('connexion') }}">&#128268; Plugins</a>
@@ -4672,6 +4673,104 @@ def api_temps_reel():
     })
 
 
+LIBRARY_PLAN_LIMITS = {
+    "free": 25 * 1024 * 1024,
+    "pro": 500 * 1024 * 1024,
+    "prime": 2 * 1024 * 1024 * 1024,
+}
+MAX_LIBRARY_ITEM_BYTES = 8 * 1024 * 1024
+
+
+def _enregistrer_element_bibliotheque(user_id, type_element, titre, mime_type, contenu,
+                                      conversation_id=None):
+    """Persist a generated artifact when the signed-in user's quota allows it."""
+    if not user_id or type_element not in {"pdf", "graphique", "analyse", "image"}:
+        return False
+    if isinstance(contenu, str):
+        contenu = contenu.encode("utf-8")
+    if not contenu or len(contenu) > MAX_LIBRARY_ITEM_BYTES:
+        return False
+    try:
+        with session_base() as db:
+            user = db.query(User).filter_by(id=user_id).with_for_update().one_or_none()
+            if user is None:
+                return False
+            niveau = niveau_abonnement(user)
+            limite = LIBRARY_PLAN_LIMITS.get(niveau, LIBRARY_PLAN_LIMITS["free"])
+            utilise = int(db.query(func.coalesce(func.sum(LibraryItem.size_bytes), 0))
+                          .filter_by(user_id=user_id).scalar() or 0)
+            if utilise + len(contenu) > limite:
+                return False
+            if conversation_id and not db.query(Conversation.id).filter_by(
+                    id=conversation_id, user_id=user_id).first():
+                conversation_id = None
+            db.add(LibraryItem(
+                user_id=user_id, type=type_element, title=(titre or "Sans titre")[:200],
+                mime_type=mime_type[:100], content=contenu, size_bytes=len(contenu),
+                conversation_id=conversation_id,
+            ))
+        return True
+    except Exception:
+        app.logger.exception("Échec d'enregistrement d'un élément de bibliothèque")
+        return False
+
+
+@app.route("/bibliotheque")
+def bibliotheque():
+    user_id = session.get("user_id")
+    if not user_id:
+        return redirect(url_for("connexion"))
+    filtre = request.args.get("type", "")
+    recherche = request.args.get("q", "").strip()[:100]
+    with session_base() as db:
+        user = db.get(User, user_id)
+        if user is None:
+            return redirect(url_for("connexion"))
+        requete = db.query(LibraryItem).filter_by(user_id=user_id)
+        if filtre in {"pdf", "graphique", "analyse", "image"}:
+            requete = requete.filter_by(type=filtre)
+        if recherche:
+            requete = requete.filter(LibraryItem.title.ilike(f"%{recherche}%"))
+        elements = requete.order_by(LibraryItem.created_at.desc(), LibraryItem.id.desc()).limit(200).all()
+        utilise = int(db.query(func.coalesce(func.sum(LibraryItem.size_bytes), 0))
+                      .filter_by(user_id=user_id).scalar() or 0)
+        limite = LIBRARY_PLAN_LIMITS.get(niveau_abonnement(user), LIBRARY_PLAN_LIMITS["free"])
+        vues = [{"id": item.id, "type": item.type, "title": item.title,
+                 "mime_type": item.mime_type, "size_bytes": item.size_bytes,
+                 "created_at": item.created_at} for item in elements]
+    return render_template(
+        "bibliotheque.html", elements=vues, filtre=filtre, recherche=recherche,
+        utilise=utilise, limite=limite, erreur=request.args.get("erreur"),
+        csrf_token=jeton_csrf(),
+    )
+
+
+@app.route("/bibliotheque/<int:item_id>/telecharger")
+def telecharger_element_bibliotheque(item_id):
+    user_id = session.get("user_id")
+    with session_base() as db:
+        item = db.query(LibraryItem).filter_by(id=item_id, user_id=user_id).one_or_none()
+        if item is None:
+            return "Élément introuvable.", 404
+        contenu, mime_type, titre, type_element = item.content, item.mime_type, item.title, item.type
+    extension = {"application/pdf": ".pdf", "image/svg+xml": ".svg", "image/png": ".png",
+                 "text/plain": ".txt", "text/csv": ".csv"}.get(mime_type, ".bin")
+    nom = secure_filename(titre) or type_element
+    return send_file(io.BytesIO(contenu), mimetype=mime_type, as_attachment=True,
+                     download_name=nom[:150] + extension)
+
+
+@app.route("/bibliotheque/<int:item_id>/supprimer", methods=["POST"])
+def supprimer_element_bibliotheque(item_id):
+    user_id = session.get("user_id")
+    with session_base() as db:
+        item = db.query(LibraryItem).filter_by(id=item_id, user_id=user_id).one_or_none()
+        if item is None:
+            return "Élément introuvable.", 404
+        db.delete(item)
+    return redirect(url_for("bibliotheque"))
+
+
 @app.route("/telecharger-pdf-temps-reel", methods=["POST"])
 def telecharger_pdf_temps_reel():
     """Generate an on-demand PDF from available weather and news data."""
@@ -4728,6 +4827,10 @@ def telecharger_pdf_temps_reel():
             sortie_sujet, pagesize=A4, rightMargin=52, leftMargin=52,
             topMargin=48, bottomMargin=48, title=titre_sujet, author="DASHLE",
         ).build(paragraphs)
+        _enregistrer_element_bibliotheque(
+            session.get("user_id"), "pdf", titre_sujet, "application/pdf",
+            sortie_sujet.getvalue(), session.get("conversation_id"),
+        )
         sortie_sujet.seek(0)
         return send_file(
             sortie_sujet, mimetype="application/pdf", as_attachment=True,
@@ -4801,6 +4904,10 @@ def telecharger_pdf_temps_reel():
     contenu.append(Paragraph("Source : Le Monde (flux RSS).", styles["DashleBody"]))
 
     document.build(contenu)
+    _enregistrer_element_bibliotheque(
+        session.get("user_id"), "pdf", "Le temps, maintenant", "application/pdf",
+        sortie.getvalue(), session.get("conversation_id"),
+    )
     sortie.seek(0)
     return send_file(
         sortie,
@@ -5254,6 +5361,23 @@ def statistiques():
                         + "\nInterprète les résultats sans modifier les nombres et rappelle les hypothèses utiles."
                     )
                     interpretation = traiter_message(prompt, [], user_id, "")
+                    library_conversation_id = session.get("conversation_id")
+                    titre_analyse = f"Analyse — {secure_filename(fichier.filename) or 'données'}"
+                    _enregistrer_element_bibliotheque(
+                        user_id, "analyse", titre_analyse,
+                        "text/plain", f"Question : {question}\n\n{calculs}\n\nInterprétation DASHLE :\n{interpretation or ''}",
+                        library_conversation_id,
+                    )
+                    graphique = (metriques or {}).get("graphique") or ""
+                    if graphique.startswith("data:image/svg+xml;base64,"):
+                        try:
+                            svg = base64.b64decode(graphique.split(",", 1)[1], validate=True)
+                            _enregistrer_element_bibliotheque(
+                                user_id, "graphique", f"Graphique — {secure_filename(fichier.filename) or 'analyse'}",
+                                "image/svg+xml", svg, library_conversation_id,
+                            )
+                        except (ValueError, base64.binascii.Error):
+                            app.logger.warning("Graphique statistique non sauvegardé : SVG invalide")
 
     return render_template_string(
         STATISTIQUES_PAGE,
