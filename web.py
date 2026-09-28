@@ -3838,39 +3838,45 @@ AUTH_PAGE = """
 <title>Dashle — {{ titre }}</title>
 <style>
 body{font-family:Segoe UI,sans-serif;background:#f5f7f6;margin:0;display:grid;place-items:center;min-height:100vh}
-.carte{width:min(380px,90vw);padding:32px 28px;background:#fff;border-radius:16px;box-shadow:0 4px 24px rgba(0,0,0,0.09)}
-.logo-titre{display:flex;align-items:center;gap:10px;margin-bottom:4px}
-img.logo{height:36px;border-radius:50%}
-h1{color:#22C55E;margin:0;font-size:22px}
-h2{color:#333;margin:0 0 20px;font-size:16px;font-weight:500}
-label,input,button{display:block;width:100%;box-sizing:border-box}
-label{margin-top:14px;font-size:14px;color:#444}
-input{padding:10px 12px;margin-top:5px;border:1px solid #ddd;border-radius:8px;font:inherit;font-size:15px}
-input:focus{outline:none;border-color:#3B82F6;box-shadow:0 0 0 2px rgba(34,197,94,.16)}
-button{margin-top:22px;padding:12px;border:0;border-radius:10px;background:linear-gradient(110deg,#22C55E,#3B82F6);color:#fff;cursor:pointer;font-size:15px;font-weight:600;transition:background .15s}
-button:hover{filter:brightness(.94)}
-.erreur{color:#b00020;font-size:13px;margin-top:8px}
-p{font-size:14px;color:#555;margin-top:16px}
-p a{color:#22C55E;font-weight:600;text-decoration:none}
-.visiteur{display:block;text-align:center;margin-top:12px;font-size:13px;color:#71837b}
-.visiteur a{color:#22C55E}
-</style></head>
-<body><main class="carte">
-<div class="logo-titre">
-  <img class="logo" src="/static/icons/dashle-logo-header.png" alt="Dashle">
-  <h1>Dashle</h1>
-</div>
+.carte{width:min(420px,92vw);padding:32px 28px;background:#fff;border-radius:16px;box-shadow:0 4px 24px rgba(0,0,0,.09)}
+.logo-titre{display:flex;align-items:center;gap:10px;margin-bottom:4px}.logo{height:36px;border-radius:50%}
+h1{color:#22C55E;margin:0;font-size:22px}h2{color:#333;margin:0 0 20px;font-size:16px;font-weight:500}
+label,input,select,button{display:block;width:100%;box-sizing:border-box}label{margin-top:14px;font-size:14px;color:#444}
+input,select{padding:10px 12px;margin-top:5px;border:1px solid #ddd;border-radius:8px;font:inherit;font-size:15px;background:#fff}
+input:focus,select:focus{outline:none;border-color:#3B82F6;box-shadow:0 0 0 2px rgba(34,197,94,.16)}
+button{margin-top:22px;padding:12px;border:0;border-radius:10px;background:linear-gradient(110deg,#22C55E,#3B82F6);color:#fff;cursor:pointer;font-size:15px;font-weight:600}
+.erreur{color:#b00020;font-size:13px;margin-top:8px}.note{font-size:12px;color:#71837b;margin:7px 0 0}
+p{font-size:14px;color:#555;margin-top:16px}p a{color:#22C55E;font-weight:600;text-decoration:none}
+.visiteur{display:block;text-align:center;margin-top:12px;font-size:13px;color:#71837b}.visiteur a{color:#22C55E}
+.phone{display:grid;grid-template-columns:130px 1fr;gap:8px}.phone select,.phone input{margin-top:5px}
+</style></head><body><main class="carte">
+<div class="logo-titre"><img class="logo" src="/static/icons/dashle-logo-header.png" alt="Dashle"><h1>Dashle</h1></div>
 <h2>{{ titre }}</h2>
 {% if erreur %}<p class="erreur">{{ erreur }}</p>{% endif %}
 <form method="post">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-  <label>E-mail<input name="email" type="email" required maxlength="254" autocomplete="email"></label>
-  {% if afficher_nom %}<label>Nom<input name="nom" type="text" required maxlength="160" autocomplete="name"></label>{% endif %}
-  <label>Mot de passe<input name="password" type="password" required minlength="8" autocomplete="{{ autocomplete }}"></label>
-  <button type="submit">{{ action }}</button>
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+<label>E-mail<input name="email" type="email" required maxlength="254" autocomplete="email"></label>
+{% if afficher_nom %}<label>Nom<input name="nom" type="text" required maxlength="160" autocomplete="name"></label>
+<label>Pays
+<select name="pays" id="pays" required autocomplete="country">
+<option value="">Sélectionner un pays</option>
+{% for code, nom_pays, indicatif in pays_profil %}<option value="{{ code }}">{{ nom_pays }} (+{{ indicatif }})</option>{% endfor %}
+</select></label>
+<label>Numéro de téléphone
+<div class="phone"><select id="indicatif" aria-label="Indicatif" disabled><option>+---</option></select><input id="telephone" name="telephone" type="tel" required autocomplete="tel-national" inputmode="tel" placeholder="Numéro national"></div>
+<p class="note">Le numéro est enregistré avec son indicatif international. Le 0 initial est conservé dans ton profil.</p>
+</label>{% endif %}
+<label>Mot de passe<input name="password" type="password" required minlength="8" autocomplete="{{ autocomplete }}"></label>
+<button type="submit">{{ action }}</button>
 </form>
 <p>{{ texte_lien }} <a href="{{ url_for(lien) }}">{{ libelle_lien }}</a></p>
 <span class="visiteur">Pas encore prêt ? <a href="{{ url_for('accueil') }}">Continuer sans compte →</a></span>
+{% if afficher_pays %}<script>
+const pays=document.getElementById('pays'), indicatif=document.getElementById('indicatif');
+const indicatifs={% for code, nom_pays, indicatif in pays_profil %}{{ code|tojson }}:{{ ("+"+indicatif)|tojson }},{% endfor %};
+function syncIndicatif(){indicatif.options[0].textContent=indicatifs[pays.value]||'+---';}
+pays.addEventListener('change',syncIndicatif); syncIndicatif();
+</script>{% endif %}
 </main></body></html>
 """
 
