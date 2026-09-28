@@ -47,6 +47,9 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("TRUE"), nullable=False)
+    pays: Mapped[str | None] = mapped_column(String(2), nullable=True, index=True)
+    telephone: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    telephone_national: Mapped[str | None] = mapped_column(String(32), nullable=True)
     subscription_level: Mapped[str] = mapped_column(String(20), default="free", nullable=False)
     subscription_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     subscription_provider: Mapped[str | None] = mapped_column(String(20), nullable=True)
@@ -69,6 +72,8 @@ class SubscriptionPayment(Base):
     currency: Mapped[str] = mapped_column(String(3), nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False)
     provider_reference: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    pays: Mapped[str | None] = mapped_column(String(2), nullable=True, index=True)
+    moyen_paiement: Mapped[str | None] = mapped_column(String(30), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     paid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
@@ -286,12 +291,25 @@ def initialiser_base():
         "subscription_provider": "VARCHAR(20) NULL",
         "provider_subscription_id": "VARCHAR(255) NULL",
         "is_active": "BOOLEAN NOT NULL DEFAULT TRUE",
+        "pays": "VARCHAR(2) NULL",
+        "telephone": "VARCHAR(32) NULL",
+        "telephone_national": "VARCHAR(32) NULL",
     }
     colonnes_existantes = {colonne["name"] for colonne in inspect(engine).get_columns("users")}
     with engine.begin() as connexion:
         for nom, definition in colonnes_utilisateurs.items():
             if nom not in colonnes_existantes:
                 connexion.execute(text(f"ALTER TABLE users ADD COLUMN {nom} {definition}"))
+
+    colonnes_paiements = {
+        "pays": "VARCHAR(2) NULL",
+        "moyen_paiement": "VARCHAR(30) NULL",
+    }
+    colonnes_existantes = {colonne["name"] for colonne in inspect(engine).get_columns("subscription_payments")}
+    with engine.begin() as connexion:
+        for nom, definition in colonnes_paiements.items():
+            if nom not in colonnes_existantes:
+                connexion.execute(text(f"ALTER TABLE subscription_payments ADD COLUMN {nom} {definition}"))
 
     colonnes_conversations = {
         "resume": "TEXT NOT NULL DEFAULT ''",

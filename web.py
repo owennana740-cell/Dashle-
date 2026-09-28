@@ -76,6 +76,106 @@ def definir_charset_json_utf8(response):
 # Nombre maximal de messages conservés en session pour les visiteurs anonymes.
 MAX_HISTORIQUE_VISITEUR = 30
 
+# Profil international et règles de paiement. Le pays choisi par l'utilisateur
+# est la source de vérité : aucune déduction par adresse IP n'est utilisée.
+PAYS_PROFIL = [
+    ("AF","Afghanistan","93"),("ZA","Afrique du Sud","27"),("AL","Albanie","355"),("DZ","Algérie","213"),
+    ("DE","Allemagne","49"),("AD","Andorre","376"),("AO","Angola","244"),("AI","Anguilla","1264"),
+    ("AG","Antigua-et-Barbuda","1268"),("SA","Arabie saoudite","966"),("AR","Argentine","54"),
+    ("AM","Arménie","374"),("AW","Aruba","297"),("AU","Australie","61"),("AT","Autriche","43"),
+    ("AZ","Azerbaïdjan","994"),("BI","Burundi","257"),("BE","Belgique","32"),("BJ","Bénin","229"),
+    ("BF","Burkina Faso","226"),("BD","Bangladesh","880"),("BG","Bulgarie","359"),("BH","Bahreïn","973"),
+    ("BS","Bahamas","1242"),("BA","Bosnie-Herzégovine","387"),("BY","Biélorussie","375"),("BZ","Belize","501"),
+    ("BR","Brésil","55"),("BB","Barbade","1246"),("BN","Brunei","673"),("BT","Bhoutan","975"),
+    ("BW","Botswana","267"),("CF","République centrafricaine","236"),("CA","Canada","1"),("CH","Suisse","41"),
+    ("CL","Chili","56"),("CN","Chine","86"),("CI","Côte d’Ivoire","225"),("CM","Cameroun","237"),
+    ("CD","République démocratique du Congo","243"),("CG","Congo-Brazzaville","242"),("CO","Colombie","57"),
+    ("KM","Comores","269"),("CV","Cap-Vert","238"),("CR","Costa Rica","506"),("CU","Cuba","53"),
+    ("CW","Curaçao","599"),("CY","Chypre","357"),("CZ","Tchéquie","420"),("DK","Danemark","45"),
+    ("DJ","Djibouti","253"),("DM","Dominique","1767"),("DO","République dominicaine","1809"),("DZ","Algérie","213"),
+    ("EC","Équateur","593"),("EG","Égypte","20"),("ER","Érythrée","291"),("ES","Espagne","34"),
+    ("EE","Estonie","372"),("ET","Éthiopie","251"),("FI","Finlande","358"),("FJ","Fidji","679"),
+    ("FR","France","33"),("GA","Gabon","241"),("GM","Gambie","220"),("GE","Géorgie","995"),
+    ("GH","Ghana","233"),("GI","Gibraltar","350"),("GR","Grèce","30"),("GD","Grenade","1473"),
+    ("GP","Guadeloupe","590"),("GT","Guatemala","502"),("GF","Guyane française","594"),("GN","Guinée","224"),
+    ("GW","Guinée-Bissau","245"),("GQ","Guinée équatoriale","240"),("GY","Guyana","592"),("HT","Haïti","509"),
+    ("HN","Honduras","504"),("HK","Hong Kong","852"),("HU","Hongrie","36"),("IS","Islande","354"),
+    ("IN","Inde","91"),("ID","Indonésie","62"),("IR","Iran","98"),("IQ","Irak","964"),("IE","Irlande","353"),
+    ("IL","Israël","972"),("IT","Italie","39"),("JM","Jamaïque","1876"),("JP","Japon","81"),("JO","Jordanie","962"),
+    ("KZ","Kazakhstan","76"),("KE","Kenya","254"),("KG","Kirghizistan","996"),("KH","Cambodge","855"),
+    ("KR","Corée du Sud","82"),("KW","Koweït","965"),("LA","Laos","856"),("LB","Liban","961"),("LR","Libéria","231"),
+    ("LY","Libye","218"),("LI","Liechtenstein","423"),("LK","Sri Lanka","94"),("LS","Lesotho","266"),
+    ("LT","Lituanie","370"),("LU","Luxembourg","352"),("LV","Lettonie","371"),("MA","Maroc","212"),
+    ("MC","Monaco","377"),("MD","Moldavie","373"),("MG","Madagascar","261"),("ML","Mali","223"),
+    ("MT","Malte","356"),("MR","Mauritanie","222"),("MU","Maurice","230"),("MW","Malawi","265"),
+    ("MY","Malaisie","60"),("MZ","Mozambique","258"),("NA","Namibie","264"),("NE","Niger","227"),
+    ("NG","Nigeria","234"),("NI","Nicaragua","505"),("NL","Pays-Bas","31"),("NO","Norvège","47"),
+    ("NP","Népal","977"),("NZ","Nouvelle-Zélande","64"),("OM","Oman","968"),("PK","Pakistan","92"),
+    ("PA","Panama","507"),("PE","Pérou","51"),("PH","Philippines","63"),("PL","Pologne","48"),
+    ("PT","Portugal","351"),("PY","Paraguay","595"),("PS","Palestine","970"),("QA","Qatar","974"),
+    ("RE","La Réunion","262"),("RO","Roumanie","40"),("RU","Russie","7"),("RW","Rwanda","250"),
+    ("SA","Arabie saoudite","966"),("SN","Sénégal","221"),("SG","Singapour","65"),("SL","Sierra Leone","232"),
+    ("SK","Slovaquie","421"),("SI","Slovénie","386"),("SO","Somalie","252"),("SS","Soudan du Sud","211"),
+    ("SD","Soudan","249"),("SE","Suède","46"),("CH","Suisse","41"),("SY","Syrie","963"),("TD","Tchad","235"),
+    ("TG","Togo","228"),("TH","Thaïlande","66"),("TN","Tunisie","216"),("TR","Turquie","90"),("UG","Ouganda","256"),
+    ("UA","Ukraine","380"),("AE","Émirats arabes unis","971"),("GB","Royaume-Uni","44"),("US","États-Unis","1"),
+    ("UY","Uruguay","598"),("UZ","Ouzbékistan","998"),("VE","Venezuela","58"),("VN","Vietnam","84"),
+    ("YE","Yémen","967"),("ZM","Zambie","260"),("ZW","Zimbabwe","263"),
+]
+# Les six marchés Mobile Money PayDunya demandés.
+PAYDUNYA_MOBILE_COUNTRIES = {"SN","CI","BJ","BF","TG","ML"}
+# CinetPay est proposé séparément lorsque le pays est dans la couverture
+# commerciale configurée pour Dashle; la liste peut évoluer sans toucher aux profils.
+CINETPAY_COUNTRIES = {"SN","CI","BJ","BF","TG","ML"}
+PAYS_CODES = {code for code, _, _ in PAYS_PROFIL}
+INDICATIFS = {code: indicatif for code, _, indicatif in PAYS_PROFIL}
+
+def _normaliser_telephone(pays, telephone):
+    pays = (pays or "").strip().upper()
+    brut = re.sub(r"[^d+]", "", str(telephone or ""))
+    if pays not in PAYS_CODES or not brut:
+        return None, None
+    indicatif = INDICATIFS[pays]
+    if brut.startswith("+"):
+        chiffres = brut[1:]
+        if not chiffres.startswith(indicatif):
+            return None, None
+        national = chiffres[len(indicatif):]
+    else:
+        national = brut
+        # Un numéro saisi avec le code pays sans + est aussi accepté.
+        if national.startswith(indicatif):
+            national = national[len(indicatif):]
+    if not national.isdigit():
+        return None, None
+    # Les numéros locaux commencent par 0 dans plusieurs pays. On le conserve
+    # dans telephone_national, tout en produisant un E.164 sans le 0 pour l'API.
+    if national.startswith("0"):
+        e164 = "+" + indicatif + national[1:]
+    else:
+        e164 = "+" + indicatif + national
+    longueurs = {"BF": 8, "SN": 9, "CI": 10, "BJ": 10, "TG": 8, "ML": 8}
+    longueur_attendue = longueurs.get(pays)
+    if longueur_attendue is not None and len(national) != longueur_attendue:
+        return None, None
+    if not 6 <= len(national) <= 14:
+        return None, None
+    return e164, national
+
+def _moyens_paiement_pays(pays):
+    pays = (pays or "").upper()
+    if pays in PAYDUNYA_MOBILE_COUNTRIES:
+        return ["paydunya", "cinetpay", "stripe"]
+    if pays in CINETPAY_COUNTRIES:
+        return ["cinetpay", "stripe"]
+    return ["stripe"]
+
+def _pays_client(user_id):
+    with session_base() as db:
+        user = db.get(User, user_id)
+        return user.pays if user else None
+
+
 MESSAGES_ACCUEIL_VISITEUR = (
     "Bonjour, que veux-tu faire aujourd’hui ?",
     "Prêt à commencer ?",
@@ -3415,6 +3515,15 @@ body.theme-sombre label{border-color:#294238}
 <form method="post">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <section class="carte"><h2>Compte</h2><p>{{ utilisateur }}</p>
+    <label>Pays
+      <select name="pays" required autocomplete="country">
+        {% for code, nom_pays, indicatif in pays_profil %}<option value="{{ code }}" {% if pays_utilisateur == code %}selected{% endif %}>{{ nom_pays }} (+{{ indicatif }})</option>{% endfor %}
+      </select>
+    </label>
+    <label>Numéro de téléphone
+      <input name="telephone" type="tel" required inputmode="tel" autocomplete="tel-national" value="{{ telephone_utilisateur }}">
+    </label>
+    <p class="note">Le numéro est enregistré avec son indicatif international. Le 0 initial reste conservé dans ton profil.</p>
     <p class="note">La modification de l'adresse e-mail et la récupération de compte ne sont pas encore disponibles.</p>
   </section>
   <section class="carte"><h2>Apparence</h2>
@@ -3715,26 +3824,44 @@ TARIFS_PAGE = """
 <!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Tarifs — DASHLE</title><style>
 :root{font-family:Inter,Segoe UI,sans-serif;color:#18352c;background:#f3f8f6}*{box-sizing:border-box}body{margin:0;padding:28px 16px 48px}
-header{max-width:1100px;margin:0 auto 28px;display:flex;align-items:center;justify-content:space-between}header a{color:#187a60;text-decoration:none;font-weight:600}
-h1{text-align:center;font-size:clamp(30px,5vw,44px);margin:18px 0 8px} .intro{text-align:center;color:#657b73;margin:0 auto 28px;max-width:640px}
-.plans{max-width:1100px;margin:auto;display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:16px}.plan{background:white;border:1px solid #dce9e4;border-radius:18px;padding:24px;box-shadow:0 10px 28px #173a2b0c;display:flex;flex-direction:column}.plan.featured{border:2px solid #35a982}
-.plan h2{margin:4px 0 10px}.price{font-size:27px;font-weight:750;color:#137d61}.price small{font-size:14px;color:#70847c;font-weight:500}.features{padding-left:20px;line-height:1.65;flex:1;color:#526a61}
-form{margin-top:20px}select{width:100%;padding:10px;border:1px solid #d5e3dd;border-radius:9px;background:#fff;font:inherit}button,.button{display:block;width:100%;margin-top:9px;padding:11px;border:0;border-radius:10px;font-family:inherit;font-size:14px;font-weight:600;text-align:center;text-decoration:none;cursor:pointer;background:linear-gradient(110deg,#25bd80,#3b82f6);color:white}.button.secondary{background:#e8f4ef;color:#17654f}.notice,.error{max-width:740px;margin:14px auto;padding:12px 15px;border-radius:10px;background:#e7f6ef;color:#27634e}.error{background:#fff0ed;color:#9b3828}.current{text-align:center;color:#61796f;margin:14px}
+header{max-width:1100px;margin:0 auto 28px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}header a{color:#187a60;text-decoration:none;font-weight:600}
+h1{text-align:center;font-size:clamp(30px,5vw,44px);margin:18px 0 8px}.intro{text-align:center;color:#657b73;margin:0 auto 10px;max-width:680px}
+.indicatif{text-align:center;color:#71837b;font-size:13px;margin:0 auto 28px}.plans{max-width:1100px;margin:auto;display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:16px}
+.plan{background:white;border:1px solid #dce9e4;border-radius:18px;padding:24px;box-shadow:0 10px 28px #173a2b0c;display:flex;flex-direction:column}.plan.featured{border:2px solid #35a982}
+.plan h2{margin:4px 0 10px}.price{font-size:27px;font-weight:750;color:#137d61}.price small{font-size:14px;color:#70847c;font-weight:500}.indicatifs-prix{font-size:13px;color:#657b73;margin-top:5px}.features{padding-left:20px;line-height:1.65;flex:1;color:#526a61}
+form{margin-top:20px}select{width:100%;padding:10px;border:1px solid #d5e3dd;border-radius:9px;background:#fff;font:inherit}
+button,.button{display:block;width:100%;margin-top:9px;padding:11px;border:0;border-radius:10px;font-family:inherit;font-size:14px;font-weight:600;text-align:center;text-decoration:none;cursor:pointer;background:linear-gradient(110deg,#25bd80,#3b82f6);color:white}.button.secondary{background:#e8f4ef;color:#17654f}
+.notice,.error{max-width:740px;margin:14px auto;padding:12px 15px;border-radius:10px;background:#e7f6ef;color:#27634e}.error{background:#fff0ed;color:#9b3828}.current{text-align:center;color:#61796f;margin:20px auto;max-width:760px}
+.sr-only{position:absolute;left:-10000px}
 </style></head><body>
-<header><a href="{{ url_for('accueil') }}">← Retour à DASHLE</a>{% if utilisateur %}<span>{{ utilisateur }} · offre {{ niveau|capitalize }}</span>{% else %}<a href="{{ url_for('connexion') }}">Connexion</a>{% endif %}</header>
-<h1>Un palier adapté à tes besoins</h1><p class="intro">Choisis une formule mensuelle ou annuelle. Les tarifs sont indiqués en FCFA.</p>
+<header><a href="{{ url_for('accueil') }}">← Retour à DASHLE</a>{% if utilisateur %}<span>{{ utilisateur }} · offre {{ niveau|capitalize }} · <a href="{{ url_for('factures') }}">Factures</a></span>{% else %}<a href="{{ url_for('connexion') }}">Connexion</a>{% endif %}</header>
+<h1>Tarifs</h1><p class="intro">Les abonnements sont facturés en FCFA (XOF), devise de règlement.</p>
+<p class="indicatif">Pour les clients hors zone FCFA : équivalent EUR et USD affiché à titre indicatif, selon un taux mis à jour régulièrement. <strong>Prix indicatif</strong>.</p>
 {% if erreur %}<p class="error">{{ erreur }}</p>{% endif %}{% if request.args.get('retour') %}<p class="notice">Le paiement a été transmis. Ton offre sera activée après confirmation du prestataire.</p>{% endif %}
 <div class="plans">
-  <article class="plan"><h2>Dashle Free</h2><div class="price">0 FCFA <small>/ toujours</small></div><ul class="features"><li>Chat conversationnel</li><li>Quota Gemini standard</li></ul><a class="button secondary" href="{{ url_for('accueil') }}">Commencer gratuitement</a></article>
-  {% for code, nom, mensuel, annuel, avantages in offres %}
-  <article class="plan {{ 'featured' if code == 'prime' else '' }}"><h2>{{ nom }}</h2><div class="price"><span data-month="{{ mensuel }}" data-year="{{ annuel }}">{{ '{:,}'.format(mensuel).replace(',', ' ') }}</span> FCFA <small class="period">/ mois</small></div><ul class="features">{% for avantage in avantages %}<li>{{ avantage }}</li>{% endfor %}</ul>
-  {% if utilisateur %}<form method="post" action="{{ url_for('initier_paiement') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="tier" value="{{ code }}"><label class="sr-only" for="cadence-{{ code }}">Périodicité</label><select id="cadence-{{ code }}" name="cadence" class="cadence"><option value="monthly">Mensuel</option><option value="annual">Annuel — 2 mois offerts</option></select><button name="provider" value="paydunya">Mobile Money · PayDunya</button><button class="button secondary" name="provider" value="stripe">Carte bancaire · Stripe</button></form>
-  {% else %}<a class="button" href="{{ url_for('connexion', next=url_for('tarifs')) }}">Connecte-toi pour choisir</a>{% endif %}</article>
-  {% endfor %}
+<article class="plan"><h2>Dashle Free</h2><div class="price">0 FCFA <small>/ toujours</small></div><ul class="features"><li>Chat conversationnel</li><li>Quota Gemini standard</li></ul><a class="button secondary" href="{{ url_for('accueil') }}">Commencer gratuitement</a></article>
+{% for code, nom, mensuel, annuel, avantages in offres %}
+<article class="plan {{ 'featured' if code == 'prime' else '' }}"><h2>{{ nom }}</h2>
+<div class="price"><span data-month="{{ mensuel }}" data-year="{{ annuel }}">{{ '{:,}'.format(mensuel).replace(',', ' ') }}</span> FCFA <small class="period">/ mois</small></div>
+<div class="indicatifs-prix" data-xof="{{ mensuel }}">≈ {{ '%.2f'|format(mensuel / taux_eur) }} € · ≈ {{ '%.2f'|format(mensuel / taux_eur * taux_usd) }} $ — prix indicatif</div>
+<ul class="features">{% for avantage in avantages %}<li>{{ avantage }}</li>{% endfor %}</ul>
+{% if utilisateur %}
+<form method="post" action="{{ url_for('initier_paiement') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="tier" value="{{ code }}">
+<label class="sr-only" for="cadence-{{ code }}">Périodicité</label><select id="cadence-{{ code }}" name="cadence" class="cadence"><option value="monthly">Mensuel</option><option value="annual">Annuel — 2 mois offerts</option></select>
+{% if 'paydunya' in moyens_paiement %}<button name="provider" value="paydunya">Mobile Money + carte · PayDunya</button>{% endif %}
+{% if 'cinetpay' in moyens_paiement %}<button name="provider" value="cinetpay">CinetPay</button>{% endif %}
+{% if 'stripe' in moyens_paiement %}<button class="button secondary" name="provider" value="stripe">Carte bancaire</button>{% endif %}
+</form>
+{% else %}<a class="button" href="{{ url_for('connexion', next=url_for('tarifs')) }}">Connecte-toi pour choisir</a>{% endif %}
+</article>{% endfor %}
 </div>
-<p class="current">Le paiement Mobile Money est à renouveler manuellement à l’échéance. La carte bancaire utilise un abonnement Stripe renouvelé automatiquement.</p>
-<script>document.querySelectorAll('.plan').forEach(function(plan){var select=plan.querySelector('.cadence');if(!select)return;var price=plan.querySelector('.price span'),period=plan.querySelector('.period');select.addEventListener('change',function(){var annuel=select.value==='annual';price.textContent=Number(price.dataset[annuel?'year':'month']).toLocaleString('fr-FR');period.textContent=annuel?'/ an':'/ mois';});});</script>
-</body></html>
+<p class="current">La facturation et le règlement restent en XOF. Les équivalents EUR/USD ne sont jamais le montant débité.</p>
+<script>
+document.querySelectorAll('.plan').forEach(function(plan){var select=plan.querySelector('.cadence');if(!select)return;
+var price=plan.querySelector('.price span'),period=plan.querySelector('.period'),indicatif=plan.querySelector('.indicatifs-prix');
+function render(){var annuel=select.value==='annual';var xof=Number(price.dataset[annuel?'year':'month']);price.textContent=xof.toLocaleString('fr-FR');period.textContent=annuel?'/ an':'/ mois';var eur=Number(xof/{{ taux_eur }}),usd=eur*Number({{ taux_usd }});indicatif.textContent='≈ '+eur.toFixed(2)+' € · ≈ '+usd.toFixed(2)+' $ — prix indicatif';}
+select.addEventListener('change',render);render();});
+</script></body></html>
 """
 
 
@@ -3743,39 +3870,45 @@ AUTH_PAGE = """
 <title>Dashle — {{ titre }}</title>
 <style>
 body{font-family:Segoe UI,sans-serif;background:#f5f7f6;margin:0;display:grid;place-items:center;min-height:100vh}
-.carte{width:min(380px,90vw);padding:32px 28px;background:#fff;border-radius:16px;box-shadow:0 4px 24px rgba(0,0,0,0.09)}
-.logo-titre{display:flex;align-items:center;gap:10px;margin-bottom:4px}
-img.logo{height:36px;border-radius:50%}
-h1{color:#22C55E;margin:0;font-size:22px}
-h2{color:#333;margin:0 0 20px;font-size:16px;font-weight:500}
-label,input,button{display:block;width:100%;box-sizing:border-box}
-label{margin-top:14px;font-size:14px;color:#444}
-input{padding:10px 12px;margin-top:5px;border:1px solid #ddd;border-radius:8px;font:inherit;font-size:15px}
-input:focus{outline:none;border-color:#3B82F6;box-shadow:0 0 0 2px rgba(34,197,94,.16)}
-button{margin-top:22px;padding:12px;border:0;border-radius:10px;background:linear-gradient(110deg,#22C55E,#3B82F6);color:#fff;cursor:pointer;font-size:15px;font-weight:600;transition:background .15s}
-button:hover{filter:brightness(.94)}
-.erreur{color:#b00020;font-size:13px;margin-top:8px}
-p{font-size:14px;color:#555;margin-top:16px}
-p a{color:#22C55E;font-weight:600;text-decoration:none}
-.visiteur{display:block;text-align:center;margin-top:12px;font-size:13px;color:#71837b}
-.visiteur a{color:#22C55E}
-</style></head>
-<body><main class="carte">
-<div class="logo-titre">
-  <img class="logo" src="/static/icons/dashle-logo-header.png" alt="Dashle">
-  <h1>Dashle</h1>
-</div>
+.carte{width:min(420px,92vw);padding:32px 28px;background:#fff;border-radius:16px;box-shadow:0 4px 24px rgba(0,0,0,.09)}
+.logo-titre{display:flex;align-items:center;gap:10px;margin-bottom:4px}.logo{height:36px;border-radius:50%}
+h1{color:#22C55E;margin:0;font-size:22px}h2{color:#333;margin:0 0 20px;font-size:16px;font-weight:500}
+label,input,select,button{display:block;width:100%;box-sizing:border-box}label{margin-top:14px;font-size:14px;color:#444}
+input,select{padding:10px 12px;margin-top:5px;border:1px solid #ddd;border-radius:8px;font:inherit;font-size:15px;background:#fff}
+input:focus,select:focus{outline:none;border-color:#3B82F6;box-shadow:0 0 0 2px rgba(34,197,94,.16)}
+button{margin-top:22px;padding:12px;border:0;border-radius:10px;background:linear-gradient(110deg,#22C55E,#3B82F6);color:#fff;cursor:pointer;font-size:15px;font-weight:600}
+.erreur{color:#b00020;font-size:13px;margin-top:8px}.note{font-size:12px;color:#71837b;margin:7px 0 0}
+p{font-size:14px;color:#555;margin-top:16px}p a{color:#22C55E;font-weight:600;text-decoration:none}
+.visiteur{display:block;text-align:center;margin-top:12px;font-size:13px;color:#71837b}.visiteur a{color:#22C55E}
+.phone{display:grid;grid-template-columns:130px 1fr;gap:8px}.phone select,.phone input{margin-top:5px}
+</style></head><body><main class="carte">
+<div class="logo-titre"><img class="logo" src="/static/icons/dashle-logo-header.png" alt="Dashle"><h1>Dashle</h1></div>
 <h2>{{ titre }}</h2>
 {% if erreur %}<p class="erreur">{{ erreur }}</p>{% endif %}
 <form method="post">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-  <label>E-mail<input name="email" type="email" required maxlength="254" autocomplete="email"></label>
-  {% if afficher_nom %}<label>Nom<input name="nom" type="text" required maxlength="160" autocomplete="name"></label>{% endif %}
-  <label>Mot de passe<input name="password" type="password" required minlength="8" autocomplete="{{ autocomplete }}"></label>
-  <button type="submit">{{ action }}</button>
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+<label>E-mail<input name="email" type="email" required maxlength="254" autocomplete="email"></label>
+{% if afficher_nom %}<label>Nom<input name="nom" type="text" required maxlength="160" autocomplete="name"></label>
+<label>Pays
+<select name="pays" id="pays" required autocomplete="country">
+<option value="">Sélectionner un pays</option>
+{% for code, nom_pays, indicatif in pays_profil %}<option value="{{ code }}">{{ nom_pays }} (+{{ indicatif }})</option>{% endfor %}
+</select></label>
+<label>Numéro de téléphone
+<div class="phone"><select id="indicatif" aria-label="Indicatif" disabled><option>+---</option></select><input id="telephone" name="telephone" type="tel" required autocomplete="tel-national" inputmode="tel" placeholder="Numéro national"></div>
+<p class="note">Le numéro est enregistré avec son indicatif international. Le 0 initial est conservé dans ton profil.</p>
+</label>{% endif %}
+<label>Mot de passe<input name="password" type="password" required minlength="8" autocomplete="{{ autocomplete }}"></label>
+<button type="submit">{{ action }}</button>
 </form>
 <p>{{ texte_lien }} <a href="{{ url_for(lien) }}">{{ libelle_lien }}</a></p>
 <span class="visiteur">Pas encore prêt ? <a href="{{ url_for('accueil') }}">Continuer sans compte →</a></span>
+{% if afficher_pays %}<script>
+const pays=document.getElementById('pays'), indicatif=document.getElementById('indicatif');
+const indicatifs={% for code, nom_pays, indicatif in pays_profil %}{{ code|tojson }}:{{ ("+"+indicatif)|tojson }},{% endfor %};
+function syncIndicatif(){indicatif.options[0].textContent=indicatifs[pays.value]||'+---';}
+pays.addEventListener('change',syncIndicatif); syncIndicatif();
+</script>{% endif %}
 </main></body></html>
 """
 
@@ -4171,6 +4304,13 @@ def parametres():
         return redirect(url_for("connexion"))
 
     if request.method == "POST":
+        pays = request.form.get("pays", "").strip().upper()
+        telephone_saisi = request.form.get("telephone", "").strip()
+        telephone, telephone_national = _normaliser_telephone(pays, telephone_saisi)
+        if pays not in PAYS_CODES:
+            return redirect(url_for("parametres", erreur="Sélectionne un pays."))
+        if not telephone:
+            return redirect(url_for("parametres", erreur="Indique un numéro de téléphone valide pour le pays sélectionné."))
         def num(nom, lo, hi, defaut):
             try:
                 return max(lo, min(hi, float(request.form.get(nom, defaut))))
@@ -4178,6 +4318,12 @@ def parametres():
                 return defaut
 
         with session_base() as db:
+            user = db.get(User, user_id)
+            if user is None:
+                return redirect(url_for("connexion"))
+            user.pays = pays
+            user.telephone = telephone
+            user.telephone_national = telephone_national
             prefs = db.query(UserPreference).filter_by(user_id=user_id).one_or_none()
             if prefs is None:
                 prefs = UserPreference(user_id=user_id)
@@ -4208,6 +4354,7 @@ def parametres():
         return redirect(url_for("parametres"))
 
     with session_base() as db:
+        user = db.get(User, user_id)
         souvenirs = db.query(UserMemory).filter_by(user_id=user_id).all()
     reglages = {souvenir.cle: souvenir.valeur for souvenir in souvenirs}
     cle_consignes = "__dashle_consignes_personnalisees__"
@@ -4220,6 +4367,9 @@ def parametres():
     return render_template_string(
         SETTINGS_PAGE,
         utilisateur=session["user_email"],
+        pays_profil=PAYS_PROFIL,
+        pays_utilisateur=(user.pays if user else ""),
+        telephone_utilisateur=(user.telephone_national if user else ""),
         preferences=_preferences(user_id),
         modele_gemini=MODELE_GEMINI,
         consignes_personnalisees=reglages.get(cle_consignes, ""),
@@ -5618,6 +5768,32 @@ def _date_apres_mois(date, nombre):
     return date.replace(year=annee, month=mois, day=jour)
 
 
+_TAUX_CACHE = {"at": None, "eur": 655.957, "usd": 0.90}
+
+def _taux_indicatifs():
+    maintenant = datetime.utcnow()
+    at = _TAUX_CACHE["at"]
+    if at and maintenant - at < timedelta(hours=6):
+        return {"eur": _TAUX_CACHE["eur"], "usd": _TAUX_CACHE["usd"]}
+    try:
+        response = requests.get(
+            "https://api.frankfurter.app/latest?from=EUR&to=USD,XOF",
+            timeout=5,
+            headers={"Accept": "application/json", "User-Agent": "DASHLE/1.0"},
+        )
+        data = response.json()
+        rates = data.get("rates", {})
+        eur_xof = float(rates.get("XOF", 655.957))
+        usd_per_eur = float(rates.get("USD", 0.90))
+        if eur_xof > 0 and usd_per_eur > 0:
+            _TAUX_CACHE.update({"at": maintenant, "eur": eur_xof, "usd": usd_per_eur})
+    except (requests.RequestException, ValueError, TypeError):
+        pass
+    return {"eur": _TAUX_CACHE["eur"], "usd": _TAUX_CACHE["usd"]}
+
+def _moyens_labels(moyens):
+    return {m: {"paydunya": "Mobile Money + carte · PayDunya", "cinetpay": "CinetPay", "stripe": "Carte bancaire"}[m] for m in moyens}
+
 def _rendre_tarifs(erreur=None):
     user_id = session.get("user_id")
     niveau = "free"
@@ -5630,11 +5806,23 @@ def _rendre_tarifs(erreur=None):
         (code, offre["nom"], offre["mensuel"], offre["annuel"], offre["avantages"])
         for code, offre in OFFRES_ABONNEMENT.items()
     ]
+    pays = None
+    moyens = ["stripe"]
+    if user_id:
+        with session_base() as db:
+            user = db.get(User, user_id)
+            pays = user.pays if user else None
+            moyens = _moyens_paiement_pays(pays)
+    taux = _taux_indicatifs()
     return render_template_string(
         TARIFS_PAGE,
         utilisateur=session.get("user_email"),
         niveau=niveau,
         offres=offres,
+        pays_utilisateur=pays,
+        moyens_paiement=moyens,
+        taux_eur=taux["eur"],
+        taux_usd=taux["usd"],
         csrf_token=jeton_csrf() if user_id else "",
         erreur=erreur or request.args.get("erreur"),
     )
@@ -5644,6 +5832,37 @@ def _rendre_tarifs(erreur=None):
 def tarifs():
     return _rendre_tarifs()
 
+
+FACTURES_PAGE = """
+<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Factures — Dashle</title><style>
+body{font:15px/1.5 Segoe UI,sans-serif;color:#18352c;background:#f3f8f6;margin:0}.page{max-width:980px;margin:auto;padding:28px 16px 50px}
+a{color:#187a60;text-decoration:none;font-weight:600}.card{background:#fff;border:1px solid #dce9e4;border-radius:16px;padding:18px;margin:14px 0;overflow:auto}
+table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:11px 8px;border-bottom:1px solid #edf2f0;white-space:nowrap}.note{color:#71837b;font-size:13px}
+</style></head><body><main class="page"><a href="{{ url_for('tarifs') }}">← Tarifs</a><h1>Factures</h1>
+<p class="note">Historique des paiements et factures Dashle. Tous les règlements sont enregistrés en XOF.</p>
+<section class="card">{% if paiements %}<table><thead><tr><th>Date</th><th>Référence</th><th>Offre</th><th>Montant</th><th>Statut</th><th>Pays</th><th>Moyen</th></tr></thead><tbody>
+{% for p in paiements %}<tr><td>{{ p.date }}</td><td>{{ p.reference }}</td><td>{{ p.tier }}</td><td>{{ '{:,}'.format(p.amount).replace(',', ' ') }} XOF</td><td>{{ p.status }}</td><td>{{ p.pays or '—' }}</td><td>{{ p.moyen }}</td></tr>{% endfor %}
+</tbody></table>{% else %}<p>Aucune transaction pour le moment.</p>{% endif %}</section></main></body></html>
+"""
+
+@app.route("/factures")
+def factures():
+    user_id = session.get("user_id")
+    if not user_id:
+        return redirect(url_for("connexion", next=url_for("factures")))
+    with session_base() as db:
+        paiements_db = db.query(SubscriptionPayment).filter_by(user_id=user_id).order_by(SubscriptionPayment.created_at.desc()).all()
+        paiements = [{
+            "date": p.created_at.strftime("%d/%m/%Y %H:%M") if p.created_at else "—",
+            "reference": p.reference,
+            "tier": p.tier,
+            "amount": p.amount,
+            "status": p.status,
+            "pays": p.pays,
+            "moyen": {"paydunya":"PayDunya","cinetpay":"CinetPay","stripe":"Carte bancaire"}.get(p.provider,p.provider),
+        } for p in paiements_db]
+    return render_template_string(FACTURES_PAGE, paiements=paiements)
 
 @app.route("/abonnement/retour")
 def paiement_retour():
@@ -6040,7 +6259,15 @@ def initier_paiement():
         return _rendre_tarifs("Choix d’offre invalide."), 400
     offre = OFFRES_ABONNEMENT[tier]
     amount = offre["mensuel"] if cadence == "monthly" else offre["annuel"]
-    currency = os.environ.get("CINETPAY_CURRENCY", os.environ.get("PAYDUNYA_CURRENCY", "XOF")).upper()
+    currency = "XOF"
+    with session_base() as db:
+        user = db.get(User, user_id)
+        if not user or user.pays not in PAYS_CODES or not user.telephone:
+            return _rendre_tarifs("Complète ton pays et ton numéro de téléphone dans Paramètres avant de payer."), 400
+        pays_client = user.pays
+        moyens_autorises = _moyens_paiement_pays(pays_client)
+    if provider not in moyens_autorises:
+        return _rendre_tarifs("Ce moyen de paiement n'est pas disponible pour ton pays."), 400
     if currency not in {"XOF", "XAF"}:
         return _rendre_tarifs("La devise de paiement doit être XOF ou XAF."), 503
     stripe_currency = os.environ.get("STRIPE_CURRENCY", "XOF").upper()
@@ -6055,8 +6282,8 @@ def initier_paiement():
             return redirect(url_for("connexion"))
         payment = SubscriptionPayment(
             user_id=user_id, reference=reference, provider=provider,
-            tier=tier, cadence=cadence, amount=amount,
-            currency=(stripe_currency if provider == "stripe" else currency),
+            tier=tier, cadence=cadence, amount=amount, currency="XOF",
+            pays=pays_client, moyen_paiement=provider,
         )
         db.add(payment)
 
@@ -6080,8 +6307,8 @@ def initier_paiement():
             "invoice": {
                 "total_amount": amount,
                 "description": f"Abonnement {offre['nom']} {cadence}",
-                "customer": {"name": nom, "email": email},
-                "channels": ["orange-money-burkina", "moov-burkina-faso"],
+                "customer": {"name": nom, "email": email, "phone": user.telephone},
+                "channels": ["card"],
             },
             "store": {
                 "name": os.environ.get("PAYDUNYA_STORE_NAME", "Dashle"),
@@ -6092,6 +6319,8 @@ def initier_paiement():
                 "dashle_user_id": str(user_id),
                 "dashle_tier": tier,
                 "dashle_cadence": cadence,
+                "dashle_country": pays_client,
+                "dashle_payment_method": provider,
             },
             "actions": {
                 "cancel_url": url_for("tarifs", _external=True),
@@ -6139,6 +6368,7 @@ def initier_paiement():
         with session_base() as db:
             user = db.get(User, user_id)
             email = user.email
+            telephone = user.telephone
         payload = {
             "apikey": api_key,
             "site_id": site_id,
@@ -6148,11 +6378,12 @@ def initier_paiement():
             "description": f"Abonnement {offre['nom']} {cadence}",
             "return_url": url_for("paiement_retour", _external=True) + "?retour=1",
             "notify_url": url_for("cinetpay_notification", _external=True),
-            "channels": "MOBILE_MONEY",
+            "channels": "ALL",
             "lang": "fr",
             "customer_id": str(user_id),
             "customer_email": email,
-            "metadata": f"{user_id}:{tier}:{cadence}",
+            "customer_phone_number": telephone,
+            "metadata": f"{user_id}:{tier}:{cadence}:{pays_client}:{provider}",
         }
         try:
             response = requests.post(
@@ -6190,10 +6421,13 @@ def initier_paiement():
             "metadata[dashle_reference]": reference,
             "metadata[dashle_tier]": tier,
             "metadata[dashle_cadence]": cadence,
+            "metadata[dashle_country]": pays_client,
+            "metadata[dashle_payment_method]": provider,
             "subscription_data[metadata][dashle_reference]": reference,
             "subscription_data[metadata][dashle_tier]": tier,
             "subscription_data[metadata][dashle_cadence]": cadence,
             "subscription_data[metadata][dashle_user_id]": str(user_id),
+            "subscription_data[metadata][dashle_country]": pays_client,
             "success_url": url_for("paiement_retour", _external=True) + "?retour=1&session_id={CHECKOUT_SESSION_ID}",
             "cancel_url": url_for("tarifs", _external=True),
         }
@@ -6344,10 +6578,17 @@ def inscription():
         email    = request.form.get("email", "").strip().lower()
         nom      = request.form.get("nom", "").strip()
         password = request.form.get("password", "")
+        pays     = request.form.get("pays", "").strip().upper()
+        telephone_saisi = request.form.get("telephone", "").strip()
+        telephone, telephone_national = _normaliser_telephone(pays, telephone_saisi)
         if not nom or len(nom) > 160:
             erreur = "Indique ton nom (160 caractères maximum)."
         elif "@" not in email or len(email) > 254:
             erreur = "Indique une adresse e-mail valide."
+        elif pays not in PAYS_CODES:
+            erreur = "Sélectionne ton pays."
+        elif not telephone:
+            erreur = "Indique un numéro de téléphone valide pour le pays sélectionné."
         elif len(password) < 8:
             erreur = "Le mot de passe doit contenir au moins 8 caractères."
         else:
@@ -6356,6 +6597,9 @@ def inscription():
                     user = User(
                         email=email,
                         nom=nom,
+                        pays=pays,
+                        telephone=telephone,
+                        telephone_national=telephone_national,
                         password_hash=generate_password_hash(password),
                     )
                     db.add(user)
@@ -6382,6 +6626,8 @@ def inscription():
         libelle_lien="Se connecter",
         autocomplete="new-password",
         afficher_nom=True,
+        afficher_pays=True,
+        pays_profil=PAYS_PROFIL,
         csrf_token=jeton_csrf(),
     )
 
