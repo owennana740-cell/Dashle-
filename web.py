@@ -3510,6 +3510,15 @@ body.theme-sombre label{border-color:#294238}
 <form method="post">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <section class="carte"><h2>Compte</h2><p>{{ utilisateur }}</p>
+    <label>Pays
+      <select name="pays" required autocomplete="country">
+        {% for code, nom_pays, indicatif in pays_profil %}<option value="{{ code }}" {% if pays_utilisateur == code %}selected{% endif %}>{{ nom_pays }} (+{{ indicatif }})</option>{% endfor %}
+      </select>
+    </label>
+    <label>Numéro de téléphone
+      <input name="telephone" type="tel" required inputmode="tel" autocomplete="tel-national" value="{{ telephone_utilisateur }}">
+    </label>
+    <p class="note">Le numéro est enregistré avec son indicatif international. Le 0 initial reste conservé dans ton profil.</p>
     <p class="note">La modification de l'adresse e-mail et la récupération de compte ne sont pas encore disponibles.</p>
   </section>
   <section class="carte"><h2>Apparence</h2>
