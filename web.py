@@ -5425,9 +5425,9 @@ def initier_paiement():
         return _rendre_tarifs("Choix d’offre invalide."), 400
     offre = OFFRES_ABONNEMENT[tier]
     amount = offre["mensuel"] if cadence == "monthly" else offre["annuel"]
-    currency = "XOF"
-    if os.environ.get("PAYDUNYA_CURRENCY", "XOF").upper() != currency:
-        return _rendre_tarifs("PayDunya doit être configuré en XOF pour Dashle."), 503
+    currency = os.environ.get("CINETPAY_CURRENCY", os.environ.get("PAYDUNYA_CURRENCY", "XOF")).upper()
+    if currency not in {"XOF", "XAF"}:
+        return _rendre_tarifs("La devise de paiement doit être XOF ou XAF."), 503
     stripe_currency = os.environ.get("STRIPE_CURRENCY", "XOF").upper()
     if stripe_currency not in {"XOF", "XAF"}:
         return _rendre_tarifs("La devise de paiement doit être XOF ou XAF."), 503
@@ -5514,6 +5514,50 @@ def initier_paiement():
                 payment.status = "failed"
         return _rendre_tarifs("Impossible de créer le paiement PayDunya. Réessaie plus tard."), 502
 
+        return _rendre_tarifs("Impossible de créer le paiement CinetPay. Réessaie plus tard."), 502
+
+    if provider == "cinetpay":
+        api_key = os.environ.get("CINETPAY_API_KEY")
+        site_id = os.environ.get("CINETPAY_SITE_ID")
+        if not api_key or not site_id:
+            return _rendre_tarifs("CinetPay n’est pas encore configuré sur le serveur."), 503
+        with session_base() as db:
+            user = db.get(User, user_id)
+            email = user.email
+        payload = {
+            "apikey": api_key,
+            "site_id": site_id,
+            "transaction_id": reference,
+            "amount": amount,
+            "currency": currency,
+            "description": f"Abonnement {offre['nom']} {cadence}",
+            "return_url": url_for("paiement_retour", _external=True) + "?retour=1",
+            "notify_url": url_for("cinetpay_notification", _external=True),
+            "channels": "MOBILE_MONEY",
+            "lang": "fr",
+            "customer_id": str(user_id),
+            "customer_email": email,
+            "metadata": f"{user_id}:{tier}:{cadence}",
+        }
+        try:
+            response = requests.post(
+                "https://api-checkout.cinetpay.com/v2/payment",
+                json=payload,
+                headers={"User-Agent": "DASHLE/1.0", "Accept": "application/json"},
+                timeout=20,
+            )
+            body = response.json()
+            if response.ok and body.get("code") == "201":
+                with session_base() as db:
+                    payment = db.query(SubscriptionPayment).filter_by(reference=reference).one()
+                    payment.provider_reference = body.get("data", {}).get("payment_token")
+                return redirect(body["data"]["payment_url"], code=303)
+        except (requests.RequestException, ValueError, KeyError):
+            pass
+        with session_base() as db:
+            payment = db.query(SubscriptionPayment).filter_by(reference=reference).one_or_none()
+            if payment:
+                payment.status = "failed"
         return _rendre_tarifs("Impossible de créer le paiement CinetPay. Réessaie plus tard."), 502
 
     if provider == "stripe":
