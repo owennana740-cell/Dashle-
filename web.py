@@ -31,6 +31,7 @@ from flask import (
     redirect, stream_with_context, url_for, session, jsonify, send_file,
 )
 from werkzeug.security import check_password_hash, generate_password_hash
+from werkzeug.utils import secure_filename
 from sqlalchemy import func, text
 from sqlalchemy.exc import IntegrityError
 from app import streamer_message, traiter_message, traiter_message_image
@@ -38,7 +39,7 @@ from brain import emails_owner, niveau_abonnement, resumer_conversation
 from config import MAX_MESSAGES_CONTEXTE, MODELE_GEMINI
 from database import (
     AdminAuditLog, Conversation, Message, MessageFeedback, ShareLink, SubscriptionPayment, User,
-    UserMemory, UserPreference, StatisticalAnalysisUsage, Project, Reminder, UserPlugin,
+    UserMemory, UserPreference, StatisticalAnalysisUsage, Project, ProjectFile, Reminder, UserPlugin,
     initialiser_base, session_base,
 )
 from statistiques import analyser_fichier
@@ -3891,6 +3892,7 @@ def accueil():
 @app.route("/nouvelle", methods=["POST"])
 def nouvelle_conv():
     user_id = session.get("user_id")
+    session.pop("projet_temporaire_id", None)
     if not user_id:
         # Visiteur : effacer la conversation temporaire
         session.pop("historique_visiteur", None)
@@ -3912,6 +3914,7 @@ def charger_conv(i):
     user_id = session.get("user_id")
     if not user_id:
         return redirect(url_for("accueil"))
+    session.pop("projet_temporaire_id", None)
     with session_base() as db:
         if db.query(Conversation).filter_by(id=i, user_id=user_id).one_or_none():
             session["conversation_id"] = i
@@ -4830,29 +4833,284 @@ def supprimer_rappel(reminder_id):
     return redirect(url_for("planification"))
 
 
+PROJECT_PLAN_LIMITS = {
+    "free": {"projects": 1, "storage_bytes": 10 * 1024 * 1024},
+    "pro": {"projects": 10, "storage_bytes": 100 * 1024 * 1024},
+    "prime": {"projects": None, "storage_bytes": 500 * 1024 * 1024},
+}
+MAX_PROJECT_FILE_BYTES = 7 * 1024 * 1024
+
+
+def _limites_projets(user):
+    return PROJECT_PLAN_LIMITS[niveau_abonnement(user)]
+
+
+def _stockage_projets_utilise(db, user_id):
+    return int(db.query(func.coalesce(func.sum(ProjectFile.size_bytes), 0))
+               .join(Project, Project.id == ProjectFile.project_id)
+               .filter(Project.user_id == user_id).scalar() or 0)
+
+
+def _contexte_projet_pour_conversation(user_id, conversation_id=None):
+    """Charge le contexte d'un projet uniquement si celui-ci appartient au compte."""
+    if not user_id:
+        return "", ""
+    if conversation_id:
+        with session_base() as db:
+            conversation = db.query(Conversation).filter_by(
+                id=conversation_id, user_id=user_id
+            ).one_or_none()
+            project_id = conversation.project_id if conversation else None
+    else:
+        project_id = session.get("projet_temporaire_id")
+    if not project_id:
+        return "", ""
+
+    with session_base() as db:
+        projet = db.query(Project).filter_by(id=project_id, user_id=user_id).one_or_none()
+        if projet is None:
+            if session.get("projet_temporaire_id") == project_id:
+                session.pop("projet_temporaire_id", None)
+            return "", ""
+        instructions = (projet.instructions or "")[:2000]
+        fichiers = db.query(ProjectFile.filename, ProjectFile.extracted_text).filter_by(
+            project_id=projet.id
+        ).order_by(ProjectFile.created_at, ProjectFile.id).all()
+
+    extraits = []
+    restant = 4000
+    for nom_fichier, texte in fichiers:
+        if restant <= 0:
+            break
+        extrait = (texte or "")[:min(1200, restant)]
+        if extrait:
+            entete = f"\n[{nom_fichier}]\n"
+            morceau = (entete + extrait)[:restant]
+            extraits.append(morceau)
+            restant -= len(morceau)
+    return instructions, "".join(extraits)
+
+
 @app.route("/projets")
 def projets():
     user_id = session.get("user_id")
+    if not user_id:
+        return redirect(url_for("connexion"))
     with session_base() as db:
-        liste_projets = db.query(Project).filter_by(user_id=user_id).order_by(Project.name).all()
-        conversations = db.query(Conversation).filter_by(user_id=user_id, archivee=False).order_by(Conversation.updated_at.desc()).all()
-        for projet in liste_projets:
-            projet.conversations = [conv for conv in conversations if conv.project_id == projet.id]
-        return render_template_string(ESPACE_PAGE, mode="projets", titre="Projets", intro="Classe tes conversations dans des dossiers nommés.", projets=liste_projets, conversations=conversations, erreur=None, csrf_token=jeton_csrf())
+        user = db.get(User, user_id)
+        if user is None:
+            return redirect(url_for("connexion"))
+        limites = _limites_projets(user)
+        liste = db.query(Project).filter_by(user_id=user_id).order_by(Project.name).all()
+        conversations = db.query(Conversation).filter_by(
+            user_id=user_id, archivee=False
+        ).order_by(Conversation.updated_at.desc()).all()
+        fichiers = db.query(ProjectFile).join(Project).filter(
+            Project.user_id == user_id
+        ).order_by(ProjectFile.created_at.desc()).all()
+        par_projet = {projet.id: [] for projet in liste}
+        for fichier in fichiers:
+            par_projet.setdefault(fichier.project_id, []).append({
+                "id": fichier.id,
+                "filename": fichier.filename,
+                "size_bytes": fichier.size_bytes,
+            })
+        vues = []
+        for projet in liste:
+            vues.append({
+                "id": projet.id,
+                "name": projet.name,
+                "instructions": projet.instructions,
+                "files": par_projet.get(projet.id, []),
+                "conversations": [
+                    {"id": conv.id, "title": conv.title}
+                    for conv in conversations if conv.project_id == projet.id
+                ],
+            })
+        sans_projet = [
+            {"id": conv.id, "title": conv.title, "project_id": conv.project_id}
+            for conv in conversations if conv.project_id is None
+        ]
+        nombre = db.query(func.count(Project.id)).filter_by(user_id=user_id).scalar() or 0
+        stockage = _stockage_projets_utilise(db, user_id)
+        erreur = request.args.get("erreur")
+        succes = request.args.get("succes")
+        limite_projets = limites["projects"]
+        quota = {
+            "projects_used": nombre,
+            "projects_limit": limite_projets,
+            "storage_used": stockage,
+            "storage_limit": limites["storage_bytes"],
+            "file_limit": MAX_PROJECT_FILE_BYTES,
+        }
+        return render_template_string(
+            ESPACE_PAGE,
+            mode="projets", titre="Projets", intro="Organise tes conversations, consignes et fichiers par projet.",
+            projets=vues, conversations=sans_projet, quota=quota,
+            erreur=erreur, succes=succes, csrf_token=jeton_csrf(),
+        )
 
 
 @app.route("/projets/creer", methods=["POST"])
 def creer_projet():
-    nom = request.form.get("name", "").strip()[:100]
-    if nom:
-        with session_base() as db:
-            db.add(Project(user_id=session.get("user_id"), name=nom))
-    return redirect(url_for("projets"))
+    user_id = session.get("user_id")
+    if not user_id:
+        return redirect(url_for("connexion"))
+    nom = request.form.get("name", "").strip()
+    instructions = request.form.get("instructions", "").strip()
+    if not nom or len(nom) > 100 or len(instructions) > 2000:
+        return redirect(url_for("projets", erreur="Vérifie le nom et les consignes (2 000 caractères maximum)."))
+    with session_base() as db:
+        user = db.query(User).filter_by(id=user_id).with_for_update().one_or_none()
+        if user is None:
+            return redirect(url_for("connexion"))
+        limite = _limites_projets(user)["projects"]
+        compte = db.query(func.count(Project.id)).filter_by(user_id=user_id).scalar() or 0
+        if limite is not None and compte >= limite:
+            return redirect(url_for("projets", erreur=f"Ton offre limite les projets à {limite}. Supprime un projet ou change d’offre."))
+        db.add(Project(user_id=user_id, name=nom, instructions=instructions))
+    return redirect(url_for("projets", succes="Projet créé."))
+
+
+@app.route("/projets/<int:project_id>/modifier", methods=["POST"])
+def modifier_projet(project_id):
+    user_id = session.get("user_id")
+    if not user_id:
+        return redirect(url_for("connexion"))
+    nom = request.form.get("name", "").strip()
+    instructions = request.form.get("instructions", "").strip()
+    if not nom or len(nom) > 100 or len(instructions) > 2000:
+        return redirect(url_for("projets", erreur="Vérifie le nom et les consignes (2 000 caractères maximum)."))
+    with session_base() as db:
+        projet = db.query(Project).filter_by(id=project_id, user_id=user_id).one_or_none()
+        if projet is None:
+            return "Projet introuvable.", 404
+        projet.name = nom
+        projet.instructions = instructions
+    return redirect(url_for("projets", succes="Projet mis à jour."))
+
+
+@app.route("/projets/<int:project_id>/supprimer", methods=["POST"])
+def supprimer_projet(project_id):
+    user_id = session.get("user_id")
+    if not user_id:
+        return redirect(url_for("connexion"))
+    with session_base() as db:
+        projet = db.query(Project).filter_by(id=project_id, user_id=user_id).one_or_none()
+        if projet is None:
+            return "Projet introuvable.", 404
+        # Les conversations survivent à la suppression du projet et redeviennent générales.
+        db.query(Conversation).filter_by(
+            user_id=user_id, project_id=project_id
+        ).update({Conversation.project_id: None}, synchronize_session=False)
+        db.delete(projet)
+    if session.get("projet_temporaire_id") == project_id:
+        session.pop("projet_temporaire_id", None)
+    return redirect(url_for("projets", succes="Projet supprimé ; les conversations ont été conservées."))
+
+
+@app.route("/projets/<int:project_id>/conversation", methods=["POST"])
+def nouvelle_conversation_projet(project_id):
+    user_id = session.get("user_id")
+    if not user_id:
+        return redirect(url_for("connexion"))
+    with session_base() as db:
+        projet = db.query(Project).filter_by(id=project_id, user_id=user_id).one_or_none()
+        if projet is None:
+            return "Projet introuvable.", 404
+        preference = db.query(UserPreference).filter_by(user_id=user_id).one_or_none()
+        conserver = preference is None or preference.conserver_historique
+        if conserver:
+            conversation = Conversation(user_id=user_id, project_id=projet.id)
+            db.add(conversation)
+            db.flush()
+            session["conversation_id"] = conversation.id
+            session.pop("projet_temporaire_id", None)
+        else:
+            # Respecte la préférence d'historique : le projet reste actif dans la session,
+            # mais aucune conversation n'est créée en base.
+            session.pop("conversation_id", None)
+            session["projet_temporaire_id"] = projet.id
+    return redirect(url_for("accueil"))
+
+
+@app.route("/projets/<int:project_id>/fichiers", methods=["POST"])
+def ajouter_fichier_projet(project_id):
+    user_id = session.get("user_id")
+    if not user_id:
+        return redirect(url_for("connexion"))
+    fichier = request.files.get("file")
+    nom = secure_filename(fichier.filename or "") if fichier else ""
+    if not fichier or not nom:
+        return redirect(url_for("projets", erreur="Choisis un fichier CSV, PDF, TXT ou Markdown."))
+    with session_base() as db:
+        projet = db.query(Project.id).filter_by(id=project_id, user_id=user_id).one_or_none()
+        if projet is None:
+            return "Projet introuvable.", 404
+    contenu = fichier.stream.read(MAX_PROJECT_FILE_BYTES + 1)
+    if len(contenu) > MAX_PROJECT_FILE_BYTES:
+        return redirect(url_for("projets", erreur="Un fichier ne peut pas dépasser 7 Mio."))
+    from project_files import extract_project_file
+    try:
+        mime_type, texte = extract_project_file(nom, contenu)
+    except ValueError as exc:
+        return redirect(url_for("projets", erreur=str(exc)))
+
+    with session_base() as db:
+        user = db.query(User).filter_by(id=user_id).with_for_update().one_or_none()
+        projet = db.query(Project).filter_by(id=project_id, user_id=user_id).one_or_none()
+        if user is None or projet is None:
+            return "Projet introuvable.", 404
+        stockage_max = _limites_projets(user)["storage_bytes"]
+        stockage_actuel = _stockage_projets_utilise(db, user_id)
+        if stockage_actuel + len(contenu) > stockage_max:
+            max_mio = stockage_max // (1024 * 1024)
+            return redirect(url_for("projets", erreur=f"Le stockage de fichiers de ton offre est limité à {max_mio} Mio."))
+        db.add(ProjectFile(
+            project_id=projet.id, filename=nom, mime_type=mime_type,
+            size_bytes=len(contenu), content=contenu, extracted_text=texte,
+        ))
+    return redirect(url_for("projets", succes="Fichier ajouté au projet."))
+
+
+@app.route("/projets/<int:project_id>/fichiers/<int:file_id>/telecharger")
+def telecharger_fichier_projet(project_id, file_id):
+    user_id = session.get("user_id")
+    if not user_id:
+        return redirect(url_for("connexion"))
+    with session_base() as db:
+        fichier = db.query(ProjectFile).join(Project).filter(
+            ProjectFile.id == file_id, ProjectFile.project_id == project_id,
+            Project.user_id == user_id,
+        ).one_or_none()
+        if fichier is None:
+            return "Fichier introuvable.", 404
+        contenu = fichier.content
+        nom, mime_type = fichier.filename, fichier.mime_type
+    return send_file(io.BytesIO(contenu), mimetype=mime_type, as_attachment=True, download_name=nom)
+
+
+@app.route("/projets/<int:project_id>/fichiers/<int:file_id>/supprimer", methods=["POST"])
+def supprimer_fichier_projet(project_id, file_id):
+    user_id = session.get("user_id")
+    if not user_id:
+        return redirect(url_for("connexion"))
+    with session_base() as db:
+        fichier = db.query(ProjectFile).join(Project).filter(
+            ProjectFile.id == file_id, ProjectFile.project_id == project_id,
+            Project.user_id == user_id,
+        ).one_or_none()
+        if fichier is None:
+            return "Fichier introuvable.", 404
+        db.delete(fichier)
+    return redirect(url_for("projets", succes="Fichier supprimé."))
 
 
 @app.route("/projets/conversation/<int:conversation_id>", methods=["POST"])
 def affecter_conversation(conversation_id):
     user_id = session.get("user_id")
+    if not user_id:
+        return redirect(url_for("connexion"))
     selection = request.form.get("project_id", "").strip()
     try:
         projet_id = int(selection) if selection else None

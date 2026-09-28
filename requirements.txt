@@ -12,3 +12,4 @@ scipy
 openpyxl
 xlrd
 reportlab
+pypdf
