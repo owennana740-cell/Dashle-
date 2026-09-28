@@ -16,6 +16,8 @@ services:
         value: owennana39@gmail.com,owennana740@gmail.com
       - key: FLASK_SECRET_KEY
         generateValue: true
+      - key: CRON_SECRET
+        generateValue: true
       - key: SESSION_COOKIE_SECURE
         value: "1"
       - key: CINETPAY_API_KEY
@@ -44,6 +46,20 @@ services:
         value: XOF
       - key: OPENWEATHER_API_KEY
         sync: false
+  - type: cron
+    name: dashle-scheduled-tasks
+    runtime: python
+    schedule: '*/5 * * * *'
+    buildCommand: pip install -r requirements.txt
+    startCommand: python cron_runner.py
+    envVars:
+      - key: DASHLE_CRON_URL
+        value: https://dashle.onrender.com/internal/cron/run
+      - key: CRON_SECRET
+        fromService:
+          type: web
+          name: dashle
+          envVarKey: CRON_SECRET
 databases:
   - name: dashle-db
     databaseName: dashle

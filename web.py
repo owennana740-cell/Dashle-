@@ -40,6 +40,7 @@ from config import MAX_MESSAGES_CONTEXTE, MODELE_GEMINI
 from database import (
     AdminAuditLog, Conversation, LibraryItem, Message, MessageFeedback, ShareLink, SubscriptionPayment, User,
     UserMemory, UserPreference, StatisticalAnalysisUsage, Project, ProjectFile, Reminder, UserPlugin,
+    ScheduledTask, ScheduledTaskRun, UserNotification,
     initialiser_base, session_base,
 )
 from statistiques import analyser_fichier
@@ -175,7 +176,7 @@ _ROUTES_PUBLIQUES = {
     "confirmer_message", "nouvelle_conv", "conditions_utilisation",
     "health", "robots_txt", "sitemap_xml", "tarifs", "paiement_retour",
     "cinetpay_notification", "paydunya_callback", "stripe_webhook", "temps_reel", "api_temps_reel",
-    "telecharger_pdf_temps_reel", "admin",
+    "telecharger_pdf_temps_reel", "admin", "executer_taches_cron",
 }
 
 
@@ -1514,11 +1515,13 @@ if ('serviceWorker' in navigator) {
   {% endif %}
   {% if utilisateur %}
     <a href="{{ url_for('planification') }}">&#128197; Planification</a>
+    <a href="{{ url_for('taches_planifiees') }}">&#9200; Tâches planifiées</a>
     <a href="{{ url_for('plugins') }}">&#128268; Plugins</a>
     <a href="{{ url_for('projets') }}">&#128193; Projets</a>
     <a href="{{ url_for('bibliotheque') }}">&#128218; Biblioth&egrave;que</a>
   {% else %}
     <a href="{{ url_for('connexion') }}">&#128197; Planification</a>
+    <a href="{{ url_for('connexion') }}">&#9200; Tâches planifiées</a>
     <a href="{{ url_for('connexion') }}">&#128268; Plugins</a>
     <a href="{{ url_for('connexion') }}">&#128193; Projets</a>
   {% endif %}
@@ -4915,6 +4918,208 @@ def telecharger_pdf_temps_reel():
         as_attachment=True,
         download_name="dashle-temps-maintenant.pdf",
     )
+
+
+TASK_PLAN_LIMITS = {"pro": {"tasks": 3, "daily_runs": 5}, "prime": {"tasks": 10, "daily_runs": 20}}
+
+
+def _prochaine_execution(frequence, heure, fuseau, weekday=None, depuis=None):
+    zone = ZoneInfo(fuseau)
+    maintenant = depuis or datetime.now(timezone.utc)
+    if maintenant.tzinfo is None:
+        maintenant = maintenant.replace(tzinfo=timezone.utc)
+    local = maintenant.astimezone(zone)
+    heure_locale = datetime.strptime(heure, "%H:%M").time()
+    date_cible = local.date()
+    if frequence == "hebdomadaire":
+        if weekday is None or not 0 <= int(weekday) <= 6:
+            raise ValueError("Choisis le jour de la semaine.")
+        date_cible += timedelta(days=(int(weekday) - date_cible.weekday()) % 7)
+    candidat = datetime.combine(date_cible, heure_locale, tzinfo=zone)
+    if candidat <= local:
+        date_cible += timedelta(days=7 if frequence == "hebdomadaire" else 1)
+        candidat = datetime.combine(date_cible, heure_locale, tzinfo=zone)
+    return candidat.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _notification_tache(db, user_id, task_id, titre, texte):
+    db.add(UserNotification(user_id=user_id, task_id=task_id, title=titre, body=texte))
+
+
+@app.route("/taches-planifiees", methods=["GET", "POST"])
+def taches_planifiees():
+    user_id = session.get("user_id")
+    if not user_id:
+        return redirect(url_for("connexion"))
+    erreur = request.args.get("erreur")
+    succes = request.args.get("succes")
+    with session_base() as db:
+        user = db.get(User, user_id)
+        niveau = niveau_abonnement(user)
+        limites = TASK_PLAN_LIMITS.get(niveau)
+        if request.method == "POST":
+            if not limites:
+                erreur = "Les tâches planifiées sont réservées aux offres Pro et Prime."
+            else:
+                consigne = request.form.get("instruction", "").strip()[:2000]
+                frequence = request.form.get("frequency", "")
+                heure = request.form.get("run_time", "")
+                fuseau = request.form.get("timezone", "UTC").strip()[:80]
+                jour = request.form.get("weekday", "")
+                try:
+                    weekday = int(jour) if frequence == "hebdomadaire" else None
+                    prochaine = _prochaine_execution(frequence, heure, fuseau, weekday)
+                    if not consigne:
+                        raise ValueError("La consigne est obligatoire.")
+                except (ValueError, TypeError, ZoneInfoNotFoundError):
+                    erreur = "Vérifie la consigne, l’heure, le fuseau et le jour choisi."
+                else:
+                    nombre = db.query(func.count(ScheduledTask.id)).filter_by(
+                        user_id=user_id, active=True
+                    ).scalar() or 0
+                    if nombre >= limites["tasks"]:
+                        erreur = f"Ton offre autorise au maximum {limites['tasks']} tâches actives."
+                    else:
+                        db.add(ScheduledTask(
+                            user_id=user_id, instruction=consigne, frequency=frequence,
+                            run_time=heure, timezone=fuseau, weekday=weekday,
+                            next_run_at=prochaine,
+                        ))
+                        succes = "Tâche planifiée."
+        tasks = db.query(ScheduledTask).filter_by(user_id=user_id).order_by(
+            ScheduledTask.created_at.desc()
+        ).all()
+        notifications = db.query(UserNotification).filter_by(user_id=user_id).order_by(
+            UserNotification.created_at.desc()
+        ).limit(20).all()
+        vues = [{"id": task.id, "instruction": task.instruction, "frequency": task.frequency,
+                 "run_time": task.run_time, "timezone": task.timezone, "weekday": task.weekday,
+                 "active": task.active, "failures": task.consecutive_failures,
+                 "next_run_at": task.next_run_at, "last_run_at": task.last_run_at}
+                for task in tasks]
+        alertes = [{"id": item.id, "title": item.title, "body": item.body,
+                    "read": item.read, "created_at": item.created_at}
+                   for item in notifications]
+    return render_template(
+        "taches_planifiees.html", tasks=vues, notifications=alertes,
+        niveau=niveau, limites=limites, erreur=erreur, succes=succes,
+        csrf_token=jeton_csrf(),
+    )
+
+
+@app.route("/taches-planifiees/<int:task_id>/basculer", methods=["POST"])
+def basculer_tache_planifiee(task_id):
+    user_id = session.get("user_id")
+    with session_base() as db:
+        task = db.query(ScheduledTask).filter_by(id=task_id, user_id=user_id).one_or_none()
+        if task is None:
+            return "Tâche introuvable.", 404
+        task.active = not task.active
+        if task.active:
+            task.consecutive_failures = 0
+            task.next_run_at = _prochaine_execution(
+                task.frequency, task.run_time, task.timezone, task.weekday
+            )
+    return redirect(url_for("taches_planifiees"))
+
+
+@app.route("/taches-planifiees/<int:task_id>/supprimer", methods=["POST"])
+def supprimer_tache_planifiee(task_id):
+    user_id = session.get("user_id")
+    with session_base() as db:
+        task = db.query(ScheduledTask).filter_by(id=task_id, user_id=user_id).one_or_none()
+        if task is None:
+            return "Tâche introuvable.", 404
+        db.delete(task)
+    return redirect(url_for("taches_planifiees"))
+
+
+@app.route("/taches-planifiees/notifications/<int:notification_id>/lue", methods=["POST"])
+def lire_notification_tache(notification_id):
+    user_id = session.get("user_id")
+    with session_base() as db:
+        notification = db.query(UserNotification).filter_by(
+            id=notification_id, user_id=user_id
+        ).one_or_none()
+        if notification is None:
+            return "Notification introuvable.", 404
+        notification.read = True
+    return redirect(url_for("taches_planifiees"))
+
+
+@app.route("/internal/cron/run", methods=["POST"])
+def executer_taches_cron():
+    secret = os.environ.get("CRON_SECRET", "")
+    fourni = request.headers.get("X-Cron-Secret", "")
+    if not secret or not fourni or not hmac.compare_digest(secret, fourni):
+        return jsonify({"erreur": "Non autorisé."}), 403
+
+    maintenant = datetime.now(timezone.utc).replace(tzinfo=None)
+    avec = 0
+    with session_base() as db:
+        ids = [row[0] for row in db.query(ScheduledTask.id).filter(
+            ScheduledTask.active.is_(True), ScheduledTask.next_run_at <= maintenant
+        ).order_by(ScheduledTask.next_run_at).limit(50).all()]
+        for task_id in ids:
+            task = db.query(ScheduledTask).filter_by(id=task_id).with_for_update(skip_locked=True).one_or_none()
+            if task is None or not task.active or task.next_run_at > maintenant:
+                continue
+            user = db.query(User).filter_by(id=task.user_id).with_for_update().one_or_none()
+            limites = TASK_PLAN_LIMITS.get(niveau_abonnement(user)) if user else None
+            if not limites:
+                task.active = False
+                if user:
+                    _notification_tache(db, user.id, task.id, "Tâche mise en pause",
+                                        "Cette fonction nécessite une offre Pro ou Prime.")
+                continue
+            try:
+                zone = ZoneInfo(task.timezone)
+                local_now = datetime.now(timezone.utc).astimezone(zone)
+                debut_local = datetime.combine(local_now.date(), datetime.min.time(), tzinfo=zone)
+                debut_utc = debut_local.astimezone(timezone.utc).replace(tzinfo=None)
+                count = db.query(func.count(ScheduledTaskRun.id)).filter(
+                    ScheduledTaskRun.user_id == user.id,
+                    ScheduledTaskRun.executed_at >= debut_utc,
+                    ScheduledTaskRun.executed_at <= maintenant,
+                ).scalar() or 0
+                if count >= limites["daily_runs"]:
+                    task.next_run_at = _prochaine_execution(
+                        task.frequency, task.run_time, task.timezone, task.weekday
+                    )
+                    continue
+                task.last_run_at = maintenant
+                task.next_run_at = _prochaine_execution(
+                    task.frequency, task.run_time, task.timezone, task.weekday
+                )
+                total = int(db.query(func.coalesce(func.sum(LibraryItem.size_bytes), 0))
+                            .filter_by(user_id=user.id).scalar() or 0)
+                limite_stockage = LIBRARY_PLAN_LIMITS.get(niveau_abonnement(user), LIBRARY_PLAN_LIMITS["free"])
+                if total >= limite_stockage:
+                    raise RuntimeError("library_quota")
+                resultat = str(traiter_message(task.instruction, [], user.id, "") or "").strip()
+                if not resultat:
+                    raise RuntimeError("empty_response")
+                contenu = resultat.encode("utf-8")[:MAX_LIBRARY_ITEM_BYTES]
+                db.add(LibraryItem(
+                    user_id=user.id, type="analyse", title=("Tâche — " + task.instruction)[:200],
+                    mime_type="text/plain", content=contenu, size_bytes=len(contenu),
+                ))
+                task.consecutive_failures = 0
+                db.add(ScheduledTaskRun(task_id=task.id, user_id=user.id, success=True,
+                                        executed_at=maintenant))
+                _notification_tache(db, user.id, task.id, "Tâche terminée",
+                                    "Le résultat a été enregistré dans ta bibliothèque.")
+            except Exception as exc:
+                task.consecutive_failures += 1
+                db.add(ScheduledTaskRun(task_id=task.id, user_id=user.id, success=False,
+                                        executed_at=maintenant, error=type(exc).__name__[:300]))
+                if task.consecutive_failures >= 3:
+                    task.active = False
+                    _notification_tache(db, user.id, task.id, "Tâche désactivée après 3 échecs",
+                                        "La tâche a échoué trois fois de suite. Vérifie sa consigne ou ton accès à DASHLE.")
+            avec += 1
+            break
+    return jsonify({"traite": avec})
 
 
 @app.route("/planification", methods=["GET", "POST"])
