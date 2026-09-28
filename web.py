@@ -6237,10 +6237,17 @@ def inscription():
         email    = request.form.get("email", "").strip().lower()
         nom      = request.form.get("nom", "").strip()
         password = request.form.get("password", "")
+        pays     = request.form.get("pays", "").strip().upper()
+        telephone_saisi = request.form.get("telephone", "").strip()
+        telephone, telephone_national = _normaliser_telephone(pays, telephone_saisi)
         if not nom or len(nom) > 160:
             erreur = "Indique ton nom (160 caractères maximum)."
         elif "@" not in email or len(email) > 254:
             erreur = "Indique une adresse e-mail valide."
+        elif pays not in PAYS_CODES:
+            erreur = "Sélectionne ton pays."
+        elif not telephone:
+            erreur = "Indique un numéro de téléphone valide pour le pays sélectionné."
         elif len(password) < 8:
             erreur = "Le mot de passe doit contenir au moins 8 caractères."
         else:
@@ -6249,6 +6256,9 @@ def inscription():
                     user = User(
                         email=email,
                         nom=nom,
+                        pays=pays,
+                        telephone=telephone,
+                        telephone_national=telephone_national,
                         password_hash=generate_password_hash(password),
                     )
                     db.add(user)
@@ -6275,6 +6285,8 @@ def inscription():
         libelle_lien="Se connecter",
         autocomplete="new-password",
         afficher_nom=True,
+        afficher_pays=True,
+        pays_profil=PAYS_PROFIL,
         csrf_token=jeton_csrf(),
     )
 
