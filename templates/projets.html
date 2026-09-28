@@ -1,0 +1,107 @@
+<style>
+  .project-usage,.project-card{border:1px solid #dce9e4;border-radius:16px;background:#fff;padding:20px;margin:16px 0;box-shadow:0 10px 28px #173a2b0c}
+  .project-usage{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:18px;align-items:center}
+  .quota-track{height:8px;background:#e8f0ed;border-radius:99px;overflow:hidden;margin-top:8px}
+  .quota-track span{display:block;height:100%;background:linear-gradient(100deg,#25bd80,#3b82f6);border-radius:inherit}
+  .project-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,390px),1fr));gap:16px}
+  .project-card{margin:0;min-width:0}.project-card h2{margin:0;font-size:21px}
+  .project-card label{display:block;font-weight:600;margin-top:12px}
+  .project-card input,.project-card textarea{display:block;width:100%;margin:5px 0;padding:10px;border:1px solid #d5e3dd;border-radius:9px;font:inherit}
+  .project-card textarea{min-height:84px;resize:vertical}
+  .project-card button{margin-top:8px}.project-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+  .project-actions form{margin:0}.project-files,.project-conversations{padding-left:20px}
+  .project-files li,.project-conversations li{margin:8px 0;overflow-wrap:anywhere}
+  .project-file-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .project-file-row form{margin:0}.project-file-row button{margin:0;padding:5px 8px;background:#edf5f1;color:#17654f}
+  .project-notice{border-radius:10px;padding:12px 15px;background:#e8f5ef;color:#27634e}
+  .project-error{background:#fff0ed;color:#9b3828}
+  .project-muted{color:#627970;font-size:13px;line-height:1.5}
+  .project-plain{border:0;background:transparent;color:#17654f;padding:0;margin:0;text-align:left}
+  @media(max-width:520px){.project-card,.project-usage{padding:15px}.project-grid{grid-template-columns:minmax(0,1fr)}}
+</style>
+
+{% if succes %}<p class="project-notice" role="status">{{ succes }}</p>{% endif %}
+{% if erreur %}<p class="project-notice project-error" role="alert">{{ erreur }}</p>{% endif %}
+
+<section class="project-usage" aria-label="Quotas des projets">
+  <div>
+    <strong>Projets</strong>
+    <div class="project-muted">{{ quota.projects_used }} / {% if quota.projects_limit is none %}illimités{% else %}{{ quota.projects_limit }}{% endif %}</div>
+  </div>
+  <div>
+    <strong>Fichiers</strong>
+    <div class="project-muted">{{ (quota.storage_used / 1048576)|round(1) }} / {{ (quota.storage_limit / 1048576)|int }} Mio · {{ (quota.file_limit / 1048576)|int }} Mio maximum par fichier</div>
+    <div class="quota-track" role="meter" aria-label="Stockage utilisé" aria-valuemin="0" aria-valuemax="{{ quota.storage_limit }}" aria-valuenow="{{ quota.storage_used }}"><span style="width:{{ [100, (quota.storage_used * 100 / quota.storage_limit)|round(1)]|min }}%"></span></div>
+  </div>
+</section>
+
+<form class="project-card" method="post" action="{{ url_for('creer_projet') }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <h2>Créer un projet</h2>
+  <label>Nom<input name="name" maxlength="100" required placeholder="Ex. Étude de marché"></label>
+  <label>Consignes pour Dashle<textarea name="instructions" maxlength="2000" placeholder="Contexte, objectifs et préférences propres à ce projet"></textarea></label>
+  <button type="submit">Créer le projet</button>
+</form>
+
+{% if projets %}<div class="project-grid">
+  {% for projet in projets %}
+  <article class="project-card">
+    <h2>{{ projet.name }}</h2>
+    <p class="project-muted">{{ projet.conversations|length }} conversation(s) · {{ projet.files|length }} fichier(s)</p>
+
+    <form method="post" action="{{ url_for('modifier_projet', project_id=projet.id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label>Nom<input name="name" value="{{ projet.name }}" maxlength="100" required></label>
+      <label>Consignes du projet<textarea name="instructions" maxlength="2000">{{ projet.instructions }}</textarea></label>
+      <button type="submit">Enregistrer</button>
+    </form>
+
+    <div class="project-actions">
+      <form method="post" action="{{ url_for('nouvelle_conversation_projet', project_id=projet.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit">Nouvelle conversation dans ce projet</button>
+      </form>
+      <form method="post" action="{{ url_for('supprimer_projet', project_id=projet.id) }}" onsubmit="return confirm('Supprimer ce projet et ses fichiers ? Les conversations seront conservées.');">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="project-plain">Supprimer le projet</button>
+      </form>
+    </div>
+
+    <form method="post" enctype="multipart/form-data" action="{{ url_for('ajouter_fichier_projet', project_id=projet.id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label>Ajouter un fichier<input type="file" name="file" accept=".csv,.pdf,.txt,.md" required></label>
+      <button type="submit">Joindre au projet</button>
+    </form>
+
+    {% if projet.files %}<h3>Fichiers du projet</h3><ul class="project-files">
+      {% for fichier in projet.files %}<li class="project-file-row">
+        <a href="{{ url_for('telecharger_fichier_projet', project_id=projet.id, file_id=fichier.id) }}">{{ fichier.filename }}</a>
+        <span class="project-muted">{{ (fichier.size_bytes / 1024)|round|int }} Ko</span>
+        <form method="post" action="{{ url_for('supprimer_fichier_projet', project_id=projet.id, file_id=fichier.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button type="submit" aria-label="Supprimer {{ fichier.filename }}">Supprimer</button>
+        </form>
+      </li>{% endfor %}
+    </ul>{% endif %}
+
+    {% if projet.conversations %}<h3>Conversations</h3><ul class="project-conversations">
+      {% for conv in projet.conversations %}<li><a href="{{ url_for('charger_conv', i=conv.id) }}">{{ conv.title }}</a></li>{% endfor %}
+    </ul>{% endif %}
+  </article>
+  {% endfor %}
+</div>{% else %}<section class="project-card"><p class="project-muted">Aucun projet pour le moment. Crée un projet pour regrouper ses consignes, fichiers et conversations.</p></section>{% endif %}
+
+{% if conversations %}<section class="project-card">
+  <h2>Classer une conversation existante</h2>
+  {% for conv in conversations %}
+  <form class="row" method="post" action="{{ url_for('affecter_conversation', conversation_id=conv.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <a href="{{ url_for('charger_conv', i=conv.id) }}">{{ conv.title }}</a>
+    <select name="project_id" aria-label="Projet pour {{ conv.title }}">
+      <option value="">Sans projet</option>
+      {% for option in projets %}<option value="{{ option.id }}">{{ option.name }}</option>{% endfor %}
+    </select>
+    <button type="submit">Classer</button>
+  </form>
+  {% endfor %}
+</section>{% endif %}
