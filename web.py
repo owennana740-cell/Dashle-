@@ -5447,6 +5447,8 @@ def initier_paiement():
 
     if provider == "paydunya":
         mode, master_key, private_key, api_token, base_url = _paydunya_config()
+        if mode != "test" and mode != "live":
+            return _rendre_tarifs("Mode PayDunya invalide."), 503
         if not all((master_key, private_key, api_token)):
             with session_base() as db:
                 payment = db.query(SubscriptionPayment).filter_by(reference=reference).one_or_none()
