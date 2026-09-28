@@ -153,8 +153,10 @@ def _normaliser_telephone(pays, telephone):
         e164 = "+" + indicatif + national[1:]
     else:
         e164 = "+" + indicatif + national
-    # Contrôle générique sûr : 6 à 14 chiffres nationaux, sans inventer une
-    # longueur unique pour tous les pays.
+    longueurs = {"BF": 8, "SN": 9, "CI": 10, "BJ": 10, "TG": 8, "ML": 8}
+    longueur_attendue = longueurs.get(pays)
+    if longueur_attendue is not None and len(national) != longueur_attendue:
+        return None, None
     if not 6 <= len(national) <= 14:
         return None, None
     return e164, national
@@ -6130,6 +6132,7 @@ def initier_paiement():
         with session_base() as db:
             user = db.get(User, user_id)
             email = user.email
+            telephone = user.telephone
         payload = {
             "apikey": api_key,
             "site_id": site_id,
@@ -6139,11 +6142,12 @@ def initier_paiement():
             "description": f"Abonnement {offre['nom']} {cadence}",
             "return_url": url_for("paiement_retour", _external=True) + "?retour=1",
             "notify_url": url_for("cinetpay_notification", _external=True),
-            "channels": "MOBILE_MONEY",
+            "channels": "ALL",
             "lang": "fr",
             "customer_id": str(user_id),
             "customer_email": email,
-            "metadata": f"{user_id}:{tier}:{cadence}",
+            "customer_phone_number": telephone,
+            "metadata": f"{user_id}:{tier}:{cadence}:{pays_client}:{provider}",
         }
         try:
             response = requests.post(
@@ -6181,10 +6185,13 @@ def initier_paiement():
             "metadata[dashle_reference]": reference,
             "metadata[dashle_tier]": tier,
             "metadata[dashle_cadence]": cadence,
+            "metadata[dashle_country]": pays_client,
+            "metadata[dashle_payment_method]": provider,
             "subscription_data[metadata][dashle_reference]": reference,
             "subscription_data[metadata][dashle_tier]": tier,
             "subscription_data[metadata][dashle_cadence]": cadence,
             "subscription_data[metadata][dashle_user_id]": str(user_id),
+            "subscription_data[metadata][dashle_country]": pays_client,
             "success_url": url_for("paiement_retour", _external=True) + "?retour=1&session_id={CHECKOUT_SESSION_ID}",
             "cancel_url": url_for("tarifs", _external=True),
         }
