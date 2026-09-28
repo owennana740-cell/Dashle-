@@ -5965,7 +5965,15 @@ def initier_paiement():
         return _rendre_tarifs("Choix d’offre invalide."), 400
     offre = OFFRES_ABONNEMENT[tier]
     amount = offre["mensuel"] if cadence == "monthly" else offre["annuel"]
-    currency = os.environ.get("CINETPAY_CURRENCY", os.environ.get("PAYDUNYA_CURRENCY", "XOF")).upper()
+    currency = "XOF"
+    with session_base() as db:
+        user = db.get(User, user_id)
+        if not user or user.pays not in PAYS_CODES or not user.telephone:
+            return _rendre_tarifs("Complète ton pays et ton numéro de téléphone dans Paramètres avant de payer."), 400
+        pays_client = user.pays
+        moyens_autorises = _moyens_paiement_pays(pays_client)
+    if provider not in moyens_autorises:
+        return _rendre_tarifs("Ce moyen de paiement n'est pas disponible pour ton pays."), 400
     if currency not in {"XOF", "XAF"}:
         return _rendre_tarifs("La devise de paiement doit être XOF ou XAF."), 503
     stripe_currency = os.environ.get("STRIPE_CURRENCY", "XOF").upper()
@@ -5980,8 +5988,8 @@ def initier_paiement():
             return redirect(url_for("connexion"))
         payment = SubscriptionPayment(
             user_id=user_id, reference=reference, provider=provider,
-            tier=tier, cadence=cadence, amount=amount,
-            currency=(stripe_currency if provider == "stripe" else currency),
+            tier=tier, cadence=cadence, amount=amount, currency="XOF",
+            pays=pays_client, moyen_paiement=provider,
         )
         db.add(payment)
 
@@ -6005,8 +6013,8 @@ def initier_paiement():
             "invoice": {
                 "total_amount": amount,
                 "description": f"Abonnement {offre['nom']} {cadence}",
-                "customer": {"name": nom, "email": email},
-                "channels": ["orange-money-burkina", "moov-burkina-faso"],
+                "customer": {"name": nom, "email": email, "phone": user.telephone},
+                "channels": ["card"],
             },
             "store": {
                 "name": os.environ.get("PAYDUNYA_STORE_NAME", "Dashle"),
@@ -6017,6 +6025,8 @@ def initier_paiement():
                 "dashle_user_id": str(user_id),
                 "dashle_tier": tier,
                 "dashle_cadence": cadence,
+                "dashle_country": pays_client,
+                "dashle_payment_method": provider,
             },
             "actions": {
                 "cancel_url": url_for("tarifs", _external=True),
