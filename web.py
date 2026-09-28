@@ -130,7 +130,7 @@ PAYS_PROFIL = [
 PAYDUNYA_MOBILE_COUNTRIES = {"SN","CI","BJ","BF","TG","ML"}
 # CinetPay est proposé séparément lorsque le pays est dans la couverture
 # commerciale configurée pour Dashle; la liste peut évoluer sans toucher aux profils.
-CINETPAY_COUNTRIES = {"SN","CI","BJ","BF","TG","ML"}
+CINETPAY_COUNTRIES = {"SN","CI","BJ","BF","TG","ML","CM","GN","CD","CG","FR"}
 PAYS_CODES = {code for code, _, _ in PAYS_PROFIL}
 INDICATIFS = {code: indicatif for code, _, indicatif in PAYS_PROFIL}
 
