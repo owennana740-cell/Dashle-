@@ -78,6 +78,11 @@ MAX_HISTORIQUE_VISITEUR = 30
 
 # Profil international et règles de paiement. Le pays choisi par l'utilisateur
 # est la source de vérité : aucune déduction par adresse IP n'est utilisée.
+# Architecture de langue : le français est actif aujourd'hui; l'anglais peut
+# être ajouté progressivement sans changer les données ni les routes métier.
+LANGUES_INTERFACE = {"fr": "Français", "en": "English"}
+LANGUE_INTERFACE_DEFAUT = "fr"
+
 PAYS_PROFIL = [
     ("AF","Afghanistan","93"),("ZA","Afrique du Sud","27"),("AL","Albanie","355"),("DZ","Algérie","213"),
     ("DE","Allemagne","49"),("AD","Andorre","376"),("AO","Angola","244"),("AI","Anguilla","1264"),
@@ -126,7 +131,7 @@ PAYS_PROFIL = [
 PAYDUNYA_MOBILE_COUNTRIES = {"SN","CI","BJ","BF","TG","ML"}
 # CinetPay est proposé séparément lorsque le pays est dans la couverture
 # commerciale configurée pour Dashle; la liste peut évoluer sans toucher aux profils.
-CINETPAY_COUNTRIES = {"SN","CI","BJ","BF","TG","ML"}
+CINETPAY_COUNTRIES = {"SN","CI","BJ","BF","TG","ML","CM","GN","CD","CG","FR"}
 PAYS_CODES = {code for code, _, _ in PAYS_PROFIL}
 INDICATIFS = {code: indicatif for code, _, indicatif in PAYS_PROFIL}
 
