@@ -18,11 +18,17 @@ services:
         generateValue: true
       - key: SESSION_COOKIE_SECURE
         value: "1"
-      - key: CINETPAY_API_KEY
+      - key: PAYDUNYA_MODE
+        value: test
+      - key: PAYDUNYA_MASTER_KEY
         sync: false
-      - key: CINETPAY_SITE_ID
+      - key: PAYDUNYA_PRIVATE_KEY
         sync: false
-      - key: CINETPAY_CURRENCY
+      - key: PAYDUNYA_TOKEN
+        sync: false
+      - key: PAYDUNYA_STORE_NAME
+        value: Dashle
+      - key: PAYDUNYA_CURRENCY
         value: XOF
       - key: STRIPE_SECRET_KEY
         sync: false
