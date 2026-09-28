@@ -18,6 +18,12 @@ services:
         generateValue: true
       - key: SESSION_COOKIE_SECURE
         value: "1"
+      - key: CINETPAY_API_KEY
+        sync: false
+      - key: CINETPAY_SITE_ID
+        sync: false
+      - key: CINETPAY_CURRENCY
+        value: XOF
       - key: PAYDUNYA_MODE
         value: test
       - key: PAYDUNYA_MASTER_KEY
