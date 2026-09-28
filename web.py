@@ -5628,6 +5628,37 @@ def tarifs():
     return _rendre_tarifs()
 
 
+FACTURES_PAGE = """
+<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Factures — Dashle</title><style>
+body{font:15px/1.5 Segoe UI,sans-serif;color:#18352c;background:#f3f8f6;margin:0}.page{max-width:980px;margin:auto;padding:28px 16px 50px}
+a{color:#187a60;text-decoration:none;font-weight:600}.card{background:#fff;border:1px solid #dce9e4;border-radius:16px;padding:18px;margin:14px 0;overflow:auto}
+table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:11px 8px;border-bottom:1px solid #edf2f0;white-space:nowrap}.note{color:#71837b;font-size:13px}
+</style></head><body><main class="page"><a href="{{ url_for('tarifs') }}">← Tarifs</a><h1>Factures</h1>
+<p class="note">Historique des paiements et factures Dashle. Tous les règlements sont enregistrés en XOF.</p>
+<section class="card">{% if paiements %}<table><thead><tr><th>Date</th><th>Référence</th><th>Offre</th><th>Montant</th><th>Statut</th><th>Pays</th><th>Moyen</th></tr></thead><tbody>
+{% for p in paiements %}<tr><td>{{ p.date }}</td><td>{{ p.reference }}</td><td>{{ p.tier }}</td><td>{{ '{:,}'.format(p.amount).replace(',', ' ') }} XOF</td><td>{{ p.status }}</td><td>{{ p.pays or '—' }}</td><td>{{ p.moyen }}</td></tr>{% endfor %}
+</tbody></table>{% else %}<p>Aucune transaction pour le moment.</p>{% endif %}</section></main></body></html>
+"""
+
+@app.route("/factures")
+def factures():
+    user_id = session.get("user_id")
+    if not user_id:
+        return redirect(url_for("connexion", next=url_for("factures")))
+    with session_base() as db:
+        paiements_db = db.query(SubscriptionPayment).filter_by(user_id=user_id).order_by(SubscriptionPayment.created_at.desc()).all()
+        paiements = [{
+            "date": p.created_at.strftime("%d/%m/%Y %H:%M") if p.created_at else "—",
+            "reference": p.reference,
+            "tier": p.tier,
+            "amount": p.amount,
+            "status": p.status,
+            "pays": p.pays,
+            "moyen": {"paydunya":"PayDunya","cinetpay":"CinetPay","stripe":"Carte bancaire"}.get(p.provider,p.provider),
+        } for p in paiements_db]
+    return render_template_string(FACTURES_PAGE, paiements=paiements)
+
 @app.route("/abonnement/retour")
 def paiement_retour():
     token = request.args.get("token", "").strip()
