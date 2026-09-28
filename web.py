@@ -5543,6 +5543,32 @@ def _date_apres_mois(date, nombre):
     return date.replace(year=annee, month=mois, day=jour)
 
 
+_TAUX_CACHE = {"at": None, "eur": 655.957, "usd": 0.90}
+
+def _taux_indicatifs():
+    maintenant = datetime.utcnow()
+    at = _TAUX_CACHE["at"]
+    if at and maintenant - at < timedelta(hours=6):
+        return {"eur": _TAUX_CACHE["eur"], "usd": _TAUX_CACHE["usd"]}
+    try:
+        response = requests.get(
+            "https://api.frankfurter.app/latest?from=EUR&to=USD,XOF",
+            timeout=5,
+            headers={"Accept": "application/json", "User-Agent": "DASHLE/1.0"},
+        )
+        data = response.json()
+        rates = data.get("rates", {})
+        eur_xof = float(rates.get("XOF", 655.957))
+        usd_per_eur = float(rates.get("USD", 0.90))
+        if eur_xof > 0 and usd_per_eur > 0:
+            _TAUX_CACHE.update({"at": maintenant, "eur": eur_xof, "usd": usd_per_eur})
+    except (requests.RequestException, ValueError, TypeError):
+        pass
+    return {"eur": _TAUX_CACHE["eur"], "usd": _TAUX_CACHE["usd"]}
+
+def _moyens_labels(moyens):
+    return {m: {"paydunya": "Mobile Money + carte · PayDunya", "cinetpay": "CinetPay", "stripe": "Carte bancaire"}[m] for m in moyens}
+
 def _rendre_tarifs(erreur=None):
     user_id = session.get("user_id")
     niveau = "free"
@@ -5555,11 +5581,23 @@ def _rendre_tarifs(erreur=None):
         (code, offre["nom"], offre["mensuel"], offre["annuel"], offre["avantages"])
         for code, offre in OFFRES_ABONNEMENT.items()
     ]
+    pays = None
+    moyens = ["stripe"]
+    if user_id:
+        with session_base() as db:
+            user = db.get(User, user_id)
+            pays = user.pays if user else None
+            moyens = _moyens_paiement_pays(pays)
+    taux = _taux_indicatifs()
     return render_template_string(
         TARIFS_PAGE,
         utilisateur=session.get("user_email"),
         niveau=niveau,
         offres=offres,
+        pays_utilisateur=pays,
+        moyens_paiement=moyens,
+        taux_eur=taux["eur"],
+        taux_usd=taux["usd"],
         csrf_token=jeton_csrf() if user_id else "",
         erreur=erreur or request.args.get("erreur"),
     )
