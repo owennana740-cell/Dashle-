@@ -45,6 +45,9 @@ from database import (
 )
 from statistiques import analyser_fichier
 from temps_reel import actualites_recentes, meteo_du_jour
+from artifact_tools import (detecter_demande_pdf, detecter_demande_image,
+                            demande_illustration_pedagogique, extraire_contenu_fourni,
+                            structurer_document, rendre_pdf, generer_image, extraire_texte_structure)
 
 try:
     from PIL import Image
@@ -4506,47 +4509,35 @@ def securite():
 
 @app.route("/repondre", methods=["POST"])
 def repondre():
-    """Endpoint JSON synchrone (non-streaming)."""
+    """Endpoint JSON synchrone, avec génération de fichiers et d'images."""
     user_id = session.get("user_id")
     message = request.form.get("message", "").strip()
     if not message:
         return jsonify({"reponse": ""})
-
-    if user_id:
-        if not _conserver_historique(user_id):
-            conversation_id = _conversation_selectionnee(user_id)
-            historique = _contexte_chat_temporaire(
-                user_id, conversation_id, request.form.get("historique"), message
-            )
-            resume = _resume_conversation(user_id, conversation_id) if conversation_id else ""
-            reponse = traiter_message(
-                message, historique, user_id, resume,
-                **_arguments_contexte_projet(user_id, conversation_id),
-            )
-            return jsonify({"reponse": reponse, "message_id": None})
-        conversation_id = _conv_courante(user_id)
-        historique = _messages_conversation(
-            user_id, conversation_id, limite=MAX_MESSAGES_CONTEXTE
-        )
-        resume = _resume_conversation(user_id, conversation_id)
-        ajouter_message(user_id, conversation_id, message, "user")
-        reponse = traiter_message(
-            message, historique + [{"auteur": "user", "texte": message}], user_id, resume,
-            **_arguments_contexte_projet(user_id, conversation_id),
-        )
-        mid = ajouter_message(user_id, conversation_id, reponse, "bot")
-        _actualiser_resume(user_id, conversation_id)
-        return jsonify({"reponse": reponse, "message_id": mid})
-    else:
-        # Visiteur
-        historique = _historique_visiteur()
-        resume = _resume_visiteur()
-        _ajouter_message_visiteur(message, "user")
-        reponse = traiter_message(
-            message, historique + [{"auteur": "user", "texte": message}], None, resume
-        )
-        _ajouter_message_visiteur(reponse, "bot")
-        return jsonify({"reponse": reponse, "message_id": None})
+    if user_id and detecter_demande_image(message):
+        try:
+            conversation_id = session.get("conversation_id")
+            historique = _messages_conversation(user_id, conversation_id, limite=MAX_MESSAGES_CONTEXTE) if conversation_id else []
+            contexte = "\n".join(str(x.get("texte", "")) for x in historique[-12:])
+            raw, mime = generer_image(message, contexte)
+            saved = _enregistrer_element_bibliotheque(user_id, "image", "image-dashle", mime, raw, conversation_id)
+            return jsonify({"reponse": "Image générée par DASHLE.", "artifact": {"type": "image", "mime_type": mime, "data": base64.b64encode(raw).decode("ascii"), "saved": saved}})
+        except Exception as exc:
+            app.logger.exception("Échec de génération d'image")
+            return jsonify({"reponse": "Je n’ai pas pu générer l’image pour le moment.", "artifact_error": type(exc).__name__}), 502
+    if user_id and detecter_demande_pdf(message):
+        try:
+            conversation_id = session.get("conversation_id")
+            historique = _messages_conversation(user_id, conversation_id, limite=MAX_MESSAGES_CONTEXTE) if conversation_id else []
+            contexte = "\n".join(str(x.get("texte", "")) for x in historique[-12:])
+            structure = structurer_document(message, contexte, extraire_contenu_fourni(message))
+            raw = rendre_pdf(structure)
+            titre = structure["title"] or "dashle-document"
+            saved = _enregistrer_element_bibliotheque(user_id, "pdf", titre, "application/pdf", raw, conversation_id)
+            return jsonify({"reponse": "Voici le document PDF demandé.", "artifact": {"type": "pdf", "mime_type": "application/pdf", "filename": secure_filename(titre)[:120] + ".pdf", "data": base64.b64encode(raw).decode("ascii"), "saved": saved}})
+        except Exception as exc:
+            app.logger.exception("Échec de génération de PDF")
+            return jsonify({"reponse": "Je n’ai pas pu générer le PDF pour le moment.", "artifact_error": type(exc).__name__}), 502
 
 
 @app.route("/repondre_flux", methods=["POST"])
@@ -4717,6 +4708,53 @@ def confirmer_message():
 
     session.modified = True
     return jsonify({"ok": True})
+
+
+@app.route("/generer-image", methods=["POST"])
+def generer_image_endpoint():
+    user_id = session.get("user_id")
+    if not user_id:
+        return jsonify({"erreur": "Connexion requise pour générer une image."}), 401
+    donnees = request.get_json(silent=True) or request.form
+    prompt = str(donnees.get("prompt", "")).strip()[:24000]
+    if not prompt:
+        return jsonify({"erreur": "Décris l’image à générer."}), 400
+    try:
+        conversation_id = session.get("conversation_id")
+        historique = _messages_conversation(user_id, conversation_id, limite=MAX_MESSAGES_CONTEXTE) if conversation_id else []
+        contexte = "\n".join(str(x.get("texte", "")) for x in historique[-12:])
+        raw, mime = generer_image(prompt, contexte)
+        saved = _enregistrer_element_bibliotheque(user_id, "image", "image-dashle", mime, raw, conversation_id)
+        return jsonify({"ok": True, "mime_type": mime, "filename": "image-dashle.png", "data": base64.b64encode(raw).decode("ascii"), "saved": saved})
+    except Exception as exc:
+        app.logger.exception("Échec endpoint génération image")
+        return jsonify({"ok": False, "erreur": "La génération d’image a échoué.", "code": type(exc).__name__}), 502
+
+
+@app.route("/generer-pdf", methods=["POST"])
+def generer_pdf_endpoint():
+    user_id = session.get("user_id")
+    if not user_id:
+        return jsonify({"erreur": "Connexion requise pour générer un document."}), 401
+    donnees = request.get_json(silent=True) or request.form
+    demande = str(donnees.get("demande", "")).strip()[:24000]
+    if not demande:
+        return jsonify({"erreur": "Décris le document à produire."}), 400
+    try:
+        conversation_id = session.get("conversation_id")
+        historique = _messages_conversation(user_id, conversation_id, limite=MAX_MESSAGES_CONTEXTE) if conversation_id else []
+        contexte = "\n".join(str(x.get("texte", "")) for x in historique[-12:])
+        structure = structurer_document(demande, contexte, extraire_contenu_fourni(demande))
+        image_bytes = None
+        if str(donnees.get("illustration", "")).lower() in {"1", "true", "oui"}:
+            image_bytes, _ = generer_image(demande, contexte)
+        raw = rendre_pdf(structure, image_bytes)
+        titre = secure_filename(structure["title"])[:120] or "dashle-document"
+        saved = _enregistrer_element_bibliotheque(user_id, "pdf", structure["title"], "application/pdf", raw, conversation_id)
+        return jsonify({"ok": True, "mime_type": "application/pdf", "filename": titre + ".pdf", "data": base64.b64encode(raw).decode("ascii"), "saved": saved})
+    except Exception as exc:
+        app.logger.exception("Échec endpoint génération PDF")
+        return jsonify({"ok": False, "erreur": "La génération du PDF a échoué.", "code": type(exc).__name__}), 502
 
 
 @app.route("/repondre_image", methods=["POST"])
