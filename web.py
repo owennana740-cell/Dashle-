@@ -37,10 +37,10 @@ from sqlalchemy import func, text
 from sqlalchemy.exc import IntegrityError
 from app import streamer_message, traiter_message, traiter_message_image
 from brain import emails_owner, niveau_abonnement, resumer_conversation
-from config import MAX_MESSAGES_CONTEXTE, MODELE_GEMINI
+from config import CLE_API, MAX_MESSAGES_CONTEXTE, MODELE_GEMINI
 from connectors.web import bp as connectors_bp
 from database import (
-    AdminAuditLog, Conversation, ImageGenerationUsage, LibraryItem, Message, MessageFeedback, ShareLink, SubscriptionPayment, User,
+    AdminAuditLog, Conversation, ImageGenerationUsage, VoiceTranscriptionUsage, LibraryItem, Message, MessageFeedback, ShareLink, SubscriptionPayment, User,
     UserMemory, UserPreference, StatisticalAnalysisUsage, Project, ProjectFile, Reminder, UserPlugin,
     ScheduledTask, ScheduledTaskRun, UserNotification,
     initialiser_base, session_base,
@@ -4487,6 +4487,109 @@ def _rendre_page(messages, utilisateur=None, conversations=None, conversation_id
 # ---------------------------------------------------------------------------
 # Routes — chat principal
 # ---------------------------------------------------------------------------
+
+VOICE_TRANSCRIPTION_LIMITS = {
+    "visitor": int(os.environ.get("DASHLE_VOICE_TRANSCRIPTION_DAILY_LIMIT_VISITOR", "3")),
+    "free": int(os.environ.get("DASHLE_VOICE_TRANSCRIPTION_DAILY_LIMIT_FREE", "10")),
+    "pro": int(os.environ.get("DASHLE_VOICE_TRANSCRIPTION_DAILY_LIMIT_PRO", "30")),
+    "prime": int(os.environ.get("DASHLE_VOICE_TRANSCRIPTION_DAILY_LIMIT_PRIME", "60")),
+}
+VOICE_TRANSCRIPTION_MAX_BYTES = 5 * 1024 * 1024
+VOICE_TRANSCRIPTION_MAX_SECONDS = 20
+VOICE_TRANSCRIPTION_MIMES = {"audio/webm", "audio/ogg", "audio/wav", "audio/x-wav", "audio/mpeg", "audio/mp4", "audio/aac"}
+
+def _cle_visiteur_voix():
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    ip = (forwarded.split(",")[0].strip() if forwarded else request.remote_addr) or "inconnu"
+    return hashlib.sha256((str(app.config.get("SECRET_KEY", "dashle")) + "|voice-quota|" + ip).encode("utf-8")).hexdigest()
+
+def _quota_transcription_voix(user_id=None):
+    today = datetime.utcnow().date()
+    if user_id:
+        with session_base() as db:
+            user = db.get(User, user_id)
+            niveau = niveau_abonnement(user) if user else "free"
+            limite = VOICE_TRANSCRIPTION_LIMITS.get(niveau, VOICE_TRANSCRIPTION_LIMITS["free"])
+            usage = db.query(VoiceTranscriptionUsage).filter_by(user_id=user_id, usage_date=today).one_or_none()
+            return niveau, limite, usage.count if usage else 0
+    with session_base() as db:
+        usage = db.query(VoiceTranscriptionUsage).filter_by(visitor_key=_cle_visiteur_voix(), usage_date=today).one_or_none()
+        return "visitor", VOICE_TRANSCRIPTION_LIMITS["visitor"], usage.count if usage else 0
+
+def _consommer_quota_transcription_voix(user_id=None):
+    today = datetime.utcnow().date()
+    with session_base() as db:
+        if user_id:
+            user = db.get(User, user_id)
+            niveau = niveau_abonnement(user) if user else "free"
+            limite = VOICE_TRANSCRIPTION_LIMITS.get(niveau, VOICE_TRANSCRIPTION_LIMITS["free"])
+            usage = db.query(VoiceTranscriptionUsage).filter_by(user_id=user_id, usage_date=today).one_or_none()
+            if usage is None:
+                usage = VoiceTranscriptionUsage(user_id=user_id, usage_date=today, count=0)
+                db.add(usage); db.flush()
+        else:
+            cle = _cle_visiteur_voix()
+            limite = VOICE_TRANSCRIPTION_LIMITS["visitor"]
+            usage = db.query(VoiceTranscriptionUsage).filter_by(visitor_key=cle, usage_date=today).one_or_none()
+            if usage is None:
+                usage = VoiceTranscriptionUsage(visitor_key=cle, usage_date=today, count=0)
+                db.add(usage); db.flush()
+        if usage.count >= limite:
+            return False
+        usage.count += 1
+        return True
+
+@app.post("/api/transcrire")
+def transcrire_audio():
+    fichier = request.files.get("audio")
+    if not fichier:
+        return jsonify({"erreur": "Aucun enregistrement audio reçu."}), 400
+    mime = (fichier.mimetype or "").lower().split(";")[0]
+    if mime not in VOICE_TRANSCRIPTION_MIMES:
+        return jsonify({"erreur": "Format audio non pris en charge."}), 415
+    audio = fichier.read(VOICE_TRANSCRIPTION_MAX_BYTES + 1)
+    if len(audio) > VOICE_TRANSCRIPTION_MAX_BYTES:
+        return jsonify({"erreur": "L'enregistrement est trop volumineux (5 Mo maximum)."}), 413
+    try:
+        duree_ms = int(request.headers.get("X-Dashle-Audio-Duration-Ms", "0") or 0)
+    except (TypeError, ValueError):
+        duree_ms = 0
+    if duree_ms and duree_ms > VOICE_TRANSCRIPTION_MAX_SECONDS * 1000:
+        return jsonify({"erreur": "L'enregistrement est trop long (20 secondes maximum)."}), 413
+
+    user_id = session.get("user_id")
+    niveau, limite, utilise = _quota_transcription_voix(user_id)
+    if utilise >= limite:
+        return jsonify({"erreur": "Le quota de transcription vocale du jour est atteint.", "niveau": niveau}), 429
+    if not CLE_API:
+        return jsonify({"erreur": "La transcription vocale de secours est momentanément indisponible."}), 503
+
+    payload = {
+        "contents": [{"parts": [
+            {"text": "Transcris cet audio en français. Retourne uniquement le texte prononcé, sans commentaire ni balise."},
+            {"inline_data": {"mime_type": mime, "data": base64.b64encode(audio).decode("ascii")}},
+        ]}],
+        "generationConfig": {"temperature": 0, "maxOutputTokens": 512},
+    }
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODELE_GEMINI}:generateContent?key={CLE_API}"
+    try:
+        rep = requests.post(url, json=payload, timeout=20)
+        if rep.status_code >= 400:
+            return jsonify({"erreur": "Le service de transcription a refusé l'enregistrement."}), 502
+        data = rep.json()
+        texte = ""
+        for candidat in data.get("candidates", []):
+            for part in candidat.get("content", {}).get("parts", []):
+                if isinstance(part.get("text"), str):
+                    texte += part["text"]
+        texte = texte.strip()[:4000]
+        if not texte:
+            return jsonify({"erreur": "Aucune parole détectée dans l'enregistrement."}), 422
+        if not _consommer_quota_transcription_voix(user_id):
+            return jsonify({"erreur": "Le quota de transcription vocale du jour est atteint."}), 429
+        return jsonify({"texte": texte, "quota": {"niveau": niveau, "utilise": utilise + 1, "limite": limite}})
+    except requests.RequestException:
+        return jsonify({"erreur": "Le service de transcription est temporairement indisponible."}), 502
 
 @app.route("/")
 def accueil():
