@@ -4869,12 +4869,18 @@ def repondre():
     if not message:
         return jsonify({"reponse": ""})
     if detecter_demande_image(message):
+        bloque, quota = _quota_image_bloque(user_id)
+        if bloque:
+            return jsonify({"reponse": quota["message"], "quota": quota}), 429
         try:
             conversation_id = session.get("conversation_id")
             historique = _messages_conversation(user_id, conversation_id, limite=MAX_MESSAGES_CONTEXTE) if conversation_id else []
             contexte = "\n".join(str(x.get("texte", "")) for x in historique[-12:])
             raw, mime = generer_image(message, contexte)
-            saved = _enregistrer_element_bibliotheque(user_id, "image", "image-dashle", mime, raw, conversation_id) if user_id else False if user_id else False
+            if not _consommer_quota_image(user_id):
+                bloque, quota = _quota_image_bloque(user_id)
+                return jsonify({"reponse": quota["message"], "quota": quota}), 429
+            saved = _enregistrer_element_bibliotheque(user_id, "image", "image-dashle", mime, raw, conversation_id) if user_id else False
             return jsonify({"reponse": "Image générée par DASHLE.", "artifact": {"type": "image", "mime_type": mime, "data": base64.b64encode(raw).decode("ascii"), "saved": saved}})
         except Exception as exc:
             app.logger.exception("Échec de génération d'image")
@@ -4987,8 +4993,16 @@ def repondre_flux():
             if action_type:
                 yield _evenement_action(
                     "action_started", action_id, action_type, "preparation",
-                    "Préparation de l'image…" if action_type == "image" else "Préparation du document…",
+                    "Ton idée prend forme…" if action_type == "image" else "Préparation du document…",
                 )
+                if action_type == "image":
+                    bloque, quota = _quota_image_bloque(user_id)
+                    if bloque:
+                        yield _evenement_action(
+                            "action_failed", action_id, "image", "quota", quota["message"],
+                            resultats={"quota": quota}, erreur=quota["message"]
+                        )
+                        return
                 conversation_id_action = conversation_id
                 historique_action = (
                     _messages_conversation(user_id, conversation_id_action, limite=MAX_MESSAGES_CONTEXTE)
@@ -4998,13 +5012,20 @@ def repondre_flux():
                 if action_type == "image":
                     yield _evenement_action(
                         "action_progress", action_id, "image", "generation",
-                        "Génération de l'image…",
+                        "Création d'une première ébauche…",
                     )
                     raw, mime = generer_image(message, contexte_action)
                     yield _evenement_action(
                         "action_progress", action_id, "image", "finalisation",
-                        "Finalisation de l'image…",
+                        "Finitions…",
                     )
+                    if not _consommer_quota_image(user_id):
+                        bloque, quota = _quota_image_bloque(user_id)
+                        yield _evenement_action(
+                            "action_failed", action_id, "image", "quota", quota["message"],
+                            resultats={"quota": quota}, erreur=quota["message"]
+                        )
+                        return
                     saved = _enregistrer_element_bibliotheque(
                         user_id, "image", "image-dashle", mime, raw, conversation_id_action
                     ) if user_id else False
@@ -5207,11 +5228,17 @@ def generer_image_endpoint():
     prompt = str(donnees.get("prompt", "")).strip()[:24000]
     if not prompt:
         return jsonify({"erreur": "Décris l’image à générer."}), 400
+    bloque, quota = _quota_image_bloque(user_id)
+    if bloque:
+        return jsonify({"ok": False, "erreur": quota["message"], "quota": quota}), 429
     try:
         conversation_id = session.get("conversation_id")
         historique = _messages_conversation(user_id, conversation_id, limite=MAX_MESSAGES_CONTEXTE) if conversation_id else []
         contexte = "\n".join(str(x.get("texte", "")) for x in historique[-12:])
         raw, mime = generer_image(prompt, contexte)
+        if not _consommer_quota_image(user_id):
+            bloque, quota = _quota_image_bloque(user_id)
+            return jsonify({"ok": False, "erreur": quota["message"], "quota": quota}), 429
         saved = _enregistrer_element_bibliotheque(user_id, "image", "image-dashle", mime, raw, conversation_id)
         return jsonify({"ok": True, "mime_type": mime, "filename": "image-dashle.png", "data": base64.b64encode(raw).decode("ascii"), "saved": saved})
     except Exception as exc:
