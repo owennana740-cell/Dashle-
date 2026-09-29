@@ -2,6 +2,8 @@ import re
 from pathlib import Path
 import unittest
 
+SW = Path(__file__).resolve().parents[1] / "static" / "service-worker.js"
+
 WEB = Path(__file__).resolve().parents[1] / "web.py"
 
 
@@ -44,6 +46,18 @@ class TestVoiceStability(unittest.TestCase):
         self.assertIn("e && e.message", block)
         self.assertIn("planifierRelanceReco();", block)
 
+    def test_no_legacy_immediate_finish_symbols_remain(self):
+        self.assertNotIn("nbFinsImmediatesVocal", self.source)
+        self.assertNotIn("DUREE_FIN_IMMEDIATE_VOCAL_MS", self.source)
+        self.assertNotIn("MAX_FINS_IMMEDIATES_VOCAL", self.source)
+
+    def test_visible_diagnostic_handlers_and_version(self):
+        for event in ("onaudiostart", "onsoundstart", "onspeechstart", "onspeechend", "onsoundend", "onaudioend", "onnomatch"):
+            self.assertIn("reco." + event, self.source)
+        self.assertIn("DASHLE_VOCAL_DIAG_KEY", self.source)
+        self.assertIn("build_commit_short", self.source)
+        self.assertIn("build_date", self.source)
+
     def test_retry_backoff_and_three_immediate_failures_exist(self):
         self.assertIn("const DELAI_RELANCE_RECO_INITIAL = 300;", self.source)
         self.assertIn("const DELAI_RELANCE_RECO_MAX = 2000;", self.source)
@@ -52,6 +66,9 @@ class TestVoiceStability(unittest.TestCase):
         self.assertIn("fin sans transcription", self.source)
         self.assertIn("error: e && e.error", self.source)
 
+    def test_service_worker_cache_is_versioned(self):
+        sw = SW.read_text(encoding="utf-8")
+        self.assertIn("dashle-static-v4", sw)
 
 if __name__ == "__main__":
     unittest.main()
