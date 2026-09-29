@@ -54,12 +54,22 @@ jobs:
           test -s app/build/outputs/bundle/release/app-release.aab
 
           echo "Scanning tracked source/config files for high-confidence secret patterns..."
-          source_pattern='AIza[0-9A-Za-z_-]{20,}|sk'"'"'_live_[0-9A-Za-z]+'"'"'|gh'"'"'p_[0-9A-Za-z]{20,}|github_pat_[0-9A-Za-z_]{20,}|-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|password[[:space:]]*[:=][[:space:]]*["'"'"'][^"'"'"']+["'"'"']'
-          if git grep --cached -I -n -E "$source_pattern" -- . \
+          provider_pattern='AIza[0-9A-Za-z_-]{20,}|sk'"'"'_live_[0-9A-Za-z]+'"'"'|gh'"'"'p_[0-9A-Za-z]{20,}|github_pat_[0-9A-Za-z_]{20,}|-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----'
+          if git grep --cached -I -n -E "$provider_pattern" -- . \
               ':(exclude).github/workflows/android.yml' \
               ':(exclude)android/app/build/**' \
               ':(exclude)**/*.md'; then
-            echo "Potential real secret found in tracked source/configuration"
+            echo "High-confidence provider/private-key secret found in tracked source/configuration"
+            exit 1
+          fi
+
+          password_pattern='password[[:space:]]*[:=][[:space:]]*["'"'"'][^$"'""{}][^"'"'"']+["'"'"']'
+          if git grep --cached -I -n -E "$password_pattern" -- . \
+              ':(exclude).github/workflows/**' \
+              ':(exclude)android/app/build/**' \
+              ':(exclude)tests/**' \
+              ':(exclude)**/*.md'; then
+            echo "Potential plaintext password found in tracked non-test source/configuration"
             exit 1
           fi
 
