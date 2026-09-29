@@ -58,6 +58,10 @@ except Exception:
     PIL_DISPONIBLE = False
 
 
+BUILD_COMMIT = (os.environ.get("RENDER_GIT_COMMIT") or os.environ.get("GIT_COMMIT") or "dev").strip()[:40]
+BUILD_COMMIT_SHORT = BUILD_COMMIT[:7]
+BUILD_DATE = (os.environ.get("DASHLE_BUILD_DATE") or datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"))
+
 app = Flask(__name__)
 app.config.update(
     SECRET_KEY=os.environ.get("FLASK_SECRET_KEY") or os.urandom(32),
@@ -2864,6 +2868,28 @@ function interrompreDashle() {
   setTimeout(function() { relancerRecoApresInterruption(0); }, reconnaissanceEnCoursAvantInterruption ? 120 : 0);
 }
 
+// Diagnostic vocal visible sans console. Les données restent dans le navigateur.
+const DASHLE_VOCAL_DIAG_KEY = 'dashle_vocal_diagnostic_v1';
+function enregistrerDiagnosticVocal(type, details) {
+  const entree = Object.assign({
+    type: type,
+    time: new Date().toISOString(),
+    mode: modeActuel,
+    lang: reco ? (reco.lang || 'fr-FR') : 'fr-FR'
+  }, details || {});
+  try {
+    const actuel = JSON.parse(localStorage.getItem(DASHLE_VOCAL_DIAG_KEY) || '[]');
+    actuel.push(entree);
+    localStorage.setItem(DASHLE_VOCAL_DIAG_KEY, JSON.stringify(actuel.slice(-40)));
+  } catch(e) {}
+}
+function diagnosticPermissionMicro() {
+  if (!navigator.permissions || !navigator.permissions.query) return Promise.resolve('indisponible');
+  return navigator.permissions.query({name:'microphone'}).then(function(p) {
+    return p.state || 'inconnu';
+  }).catch(function(){ return 'indisponible'; });
+}
+
 // =====================================================================
 // SpeechRecognition
 // =====================================================================
@@ -2941,6 +2967,9 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
     if (vocalActif) return;
     modeActuel = 'dictee';
     dernierModeReconnaissance = 'dictee';
+    dernierTranscriptDictee = '';
+    recoEnCours = false;
+    recoResultatsAutorises = false;
     reco.interimResults = false;
     reco.continuous = false;
     btnMicro.classList.add('actif');
@@ -2973,8 +3002,17 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
     }
   };
 
+  reco.onaudiostart = function() { enregistrerDiagnosticVocal('onaudiostart'); };
+  reco.onsoundstart = function() { enregistrerDiagnosticVocal('onsoundstart'); };
+  reco.onspeechstart = function() { enregistrerDiagnosticVocal('onspeechstart'); };
+  reco.onspeechend = function() { enregistrerDiagnosticVocal('onspeechend'); };
+  reco.onsoundend = function() { enregistrerDiagnosticVocal('onsoundend'); };
+  reco.onaudioend = function() { enregistrerDiagnosticVocal('onaudioend'); };
+  reco.onnomatch = function(e) { enregistrerDiagnosticVocal('onnomatch', { message: e && e.message || '' }); };
+
   reco.onstart = function() {
     recoDebutEcouteMs = performance.now();
+    enregistrerDiagnosticVocal('onstart');
     dernierModeReconnaissance = modeActuel;
     if (modeActuel === 'vocal') journaliserEtatAudioReconnaissance();
     console.log('[DASHLE][SpeechRecognition] onstart', { mode: modeActuel, vocalActif: vocalActif });
@@ -2995,6 +3033,7 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
       console.log('[DASHLE][SpeechRecognition][resultat]', {
         index: index, transcript: transcript, confidence: confidence, isFinal: Boolean(r && r.isFinal)
       });
+      enregistrerDiagnosticVocal('onresult', { transcript: transcript, confidence: confidence, isFinal: Boolean(r && r.isFinal) });
       return { transcript: transcript, confidence: confidence, isFinal: Boolean(r && r.isFinal) };
     });
     desarmerWatchdog();
@@ -3057,6 +3096,7 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
   reco.onend = function() {
     const dureeEcouteMs = recoDebutEcouteMs ? Math.max(0, Math.round(performance.now() - recoDebutEcouteMs)) : null;
     desarmerWatchdog();
+    enregistrerDiagnosticVocal('onend', { dureeMs: recoDebutEcouteMs ? Math.max(0, Math.round(performance.now() - recoDebutEcouteMs)) : null, hasTranscription: Boolean(String((dernierModeReconnaissance === 'dictee' ? dernierTranscriptDictee : transcriptionFinaleVocale) || '').trim()) });
     const transcriptionLog = dernierModeReconnaissance === 'dictee' ? dernierTranscriptDictee : transcriptionFinaleVocale;
     const aUneTranscription = Boolean(String(transcriptionLog || '').trim());
     if (dernierModeReconnaissance === 'vocal') {
@@ -3111,24 +3151,6 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
       return;
     }
     const synthActive = ('speechSynthesis' in window) && window.speechSynthesis.speaking;
-    const finImmediate = modeActuel === 'vocal'
-      && !transcriptionFinaleVocale.trim()
-      && typeof dureeEcouteMs === 'number'
-      && dureeEcouteMs < DUREE_FIN_IMMEDIATE_VOCAL_MS;
-    if (finImmediate) {
-      nbFinsImmediatesVocal += 1;
-      console.warn('[DASHLE][SpeechRecognition] fin immédiate', {
-        compteur: nbFinsImmediatesVocal, dureeEcouteMs: dureeEcouteMs
-      });
-      if (nbFinsImmediatesVocal >= MAX_FINS_IMMEDIATES_VOCAL) {
-        nbFinsImmediatesVocal = 0;
-        vocalActif = false;
-        btnVocal.classList.remove('vocal-on', 'ecoute', 'parle');
-        afficherEtatVocal('erreur', "Je n'arrive pas à t'entendre, réessaie");
-        afficherStatutVocal("Je n'arrive pas à t'entendre, réessaie");
-        return;
-      }
-    }
     if (!interruptionDemandee && !reponseEnCours && !syntheseEnCours && !synthActive) {
       planifierRelanceReco();
     }
@@ -3136,6 +3158,7 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
 
   reco.onerror = function(e) {
     desarmerWatchdog();
+    enregistrerDiagnosticVocal('onerror', { error: e && e.error || '', message: e && e.message || '' });
     console.log('[DASHLE][SpeechRecognition][error-detail]', { error: e && e.error, message: e && e.message, name: e && e.name, type: e && e.type });
     console.log('[DASHLE][SpeechRecognition] onerror', {
       error: e && e.error, message: e && e.message, mode: modeActuel, vocalActif: vocalActif
@@ -4292,7 +4315,7 @@ body.theme-sombre label{border-color:#294238}
     </label>
   </section>
   <section class="carte"><h2>À propos de Dashle</h2>
-    <p class="note"><strong>Version :</strong> version du projet non déclarée</p>
+    <p class="note"><strong>Version :</strong> <code>{{ build_commit_short }}</code> · <strong>build :</strong> {{ build_date }}</p>
     <p class="note"><strong>Modèle IA :</strong> {{ modele_gemini }} (Google AI)</p>
     <p class="note">Dashle est un assistant personnel conçu par Owen. Il mémorise le contexte de tes conversations et s'améliore avec le temps.</p>
     <p><a href="{{ url_for('conditions_utilisation') }}">Conditions d'utilisation</a></p>
@@ -4302,6 +4325,14 @@ body.theme-sombre label{border-color:#294238}
 <form method="post" action="{{ url_for('nouvelle_conv') }}">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <button type="submit" class="secondaire">Commencer une nouvelle conversation</button>
+<section class="carte" id="diagnostic-vocal" hidden>
+  <h2>Diagnostic vocal</h2>
+  <p class="note">Diagnostic local au navigateur. Aucun transcript de ce panneau n'est envoyé au serveur.</p>
+  <p><strong>Micro :</strong> <span id="diag-permission">Vérification…</span> · <strong>Langue :</strong> <span id="diag-lang">fr-FR</span></p>
+  <pre id="diag-evenements" style="max-height:320px;overflow:auto;white-space:pre-wrap;font-size:12px;background:#f7faf8;padding:10px;border-radius:10px"></pre>
+  <button type="button" id="diag-copier">Copier le diagnostic</button>
+  <button type="button" id="diag-effacer" class="secondaire">Effacer</button>
+</section>
 </form>
 <script>
 const sv = document.getElementById('voix-select');
@@ -4385,6 +4416,35 @@ if (largeurSelect) largeurSelect.addEventListener('change', function() {
 if (animationsSelect) animationsSelect.addEventListener('change', function() {
   try { localStorage.setItem('dashle_animations', this.value); } catch(e) {}
 });
+
+// Diagnostic vocal : 5 appuis sur le titre Paramètres.
+(function(){
+  var titre=document.querySelector('.bar h1');
+  var panneau=document.getElementById('diagnostic-vocal');
+  var sortie=document.getElementById('diag-evenements');
+  var permission=document.getElementById('diag-permission');
+  var langue=document.getElementById('diag-lang');
+  var compte=0, dernier=0;
+  function lire(){
+    var data=[]; try{data=JSON.parse(localStorage.getItem('dashle_vocal_diagnostic_v1')||'[]');}catch(e){}
+    sortie.textContent=data.length ? data.map(function(x){return JSON.stringify(x);}).join('\n') : 'Aucun événement enregistré.';
+    langue.textContent=data.length && data[data.length-1].lang ? data[data.length-1].lang : 'fr-FR';
+  }
+  function perm(){
+    if(!navigator.permissions||!navigator.permissions.query){permission.textContent='indisponible';return;}
+    navigator.permissions.query({name:'microphone'}).then(function(p){permission.textContent=p.state;}).catch(function(){permission.textContent='indisponible';});
+  }
+  if(titre) titre.addEventListener('click',function(){
+    var now=Date.now(); if(now-dernier>1600) compte=0; dernier=now; compte++;
+    if(compte>=5){compte=0;panneau.hidden=false;lire();perm();}
+  });
+  if(document.getElementById('diag-copier')) document.getElementById('diag-copier').onclick=function(){
+    var texte=sortie.textContent;
+    navigator.clipboard&&navigator.clipboard.writeText ? navigator.clipboard.writeText(texte) : (function(){var ta=document.createElement('textarea');ta.value=texte;document.body.appendChild(ta);ta.select();document.execCommand('copy');ta.remove();})();
+  };
+  if(document.getElementById('diag-effacer')) document.getElementById('diag-effacer').onclick=function(){localStorage.removeItem('dashle_vocal_diagnostic_v1');lire();};
+  lire(); perm();
+})();
 </script>
 </main></body></html>
 """
@@ -5188,6 +5248,8 @@ def parametres():
         telephone_utilisateur=(user.telephone_national if user else ""),
         preferences=_preferences(user_id),
         modele_gemini=MODELE_GEMINI,
+        build_commit_short=BUILD_COMMIT_SHORT,
+        build_date=BUILD_DATE,
         consignes_personnalisees=reglages.get(cle_consignes, ""),
         longueur_reponse=reglages.get(cle_longueur, "standard"),
         memoires=memoires,
