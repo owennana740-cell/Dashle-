@@ -2928,6 +2928,7 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
     reco.interimResults = false;
     reco.continuous = false;
     btnMicro.classList.add('actif');
+    journaliserEtatAudioReconnaissance();
     try { reco.start(); } catch(e) {}
   };
 
