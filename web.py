@@ -1915,7 +1915,7 @@ const WATCHDOG_MS = 9000;
 function armerWatchdog() {
   desarmerWatchdog();
   watchdogEcoute = setTimeout(function() {
-    if (!vocalActif || reponseEnCours || syntheseEnCours) return;
+    if (!vocalActif || reponseEnCours || syntheseEnCours || transcriptionFinaleVocale.trim()) return;
     console.warn('[DASHLE] Watchdog écoute déclenché — relance reco');
     recoEnCours = false;
     try { reco && reco.abort(); } catch(e) {}
@@ -2097,7 +2097,7 @@ function ajouterReponse(texte, messageId) {
 
   let actionsHtml = '<div class="actions-reponse">'
     + '<button type="button" class="action-copier" title="Copier" aria-label="Copier">' + iconeAction('copier') + '</button>'
-    + '<button type="button" class="action-pdf" title="Générer en PDF" aria-label="Générer en PDF">PDF</button>';
+    + '';
   if (estConnecte && preferencesVocales.conserver_historique) {
     actionsHtml += '<button type="button" class="action-feedback" data-valeur="positif" title="J\'aime" aria-label="J\'aime">' + iconeAction('positif') + '</button>'
       + '<button type="button" class="action-feedback" data-valeur="negatif" title="Je n\'aime pas" aria-label="Je n\'aime pas">' + iconeAction('negatif') + '</button>'
@@ -2567,7 +2567,7 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
     if (minuteurRelanceReco !== null || minuteurFinPhraseVocale !== null) return;
     const parleEncore = ('speechSynthesis' in window) && window.speechSynthesis.speaking;
     if (!vocalActif || interruptionDemandee || recoMutePendantTTS || syntheseEnCours
-        || reponseEnCours || parleEncore) {
+        || reponseEnCours || parleEncore || transcriptionFinaleVocale.trim()) {
       return;
     }
 
@@ -2623,7 +2623,7 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
 
   reco.onstart = function() {
     console.log('[DASHLE][SpeechRecognition] onstart', { mode: modeActuel, vocalActif: vocalActif });
-    dernierIndexFinalVocal = 0;
+    if (!transcriptionFinaleVocale.trim()) dernierIndexFinalVocal = 0;
     recoResultatsAutorises = !recoMutePendantTTS && !syntheseEnCours && !reponseEnCours;
     if (vocalActif && modeActuel === 'vocal') {
       afficherEtatVocal('ecoute', 'Dashle écoute...');
@@ -2706,6 +2706,10 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
     if (recoMutePendantTTS) {
       return;  // TTS prend la main, onend le relancera
     }
+    if (transcriptionFinaleVocale.trim()) {
+      planifierEnvoiFinPhraseVocale();
+      return;
+    }
     const synthActive = ('speechSynthesis' in window) && window.speechSynthesis.speaking;
     if (!interruptionDemandee && !reponseEnCours && !syntheseEnCours && !synthActive) {
       planifierRelanceReco();
@@ -2722,6 +2726,10 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
       return;
     }
     if (vocalActif && e.error !== 'aborted') {
+      if (transcriptionFinaleVocale.trim()) {
+        planifierEnvoiFinPhraseVocale();
+        return;
+      }
       if (!recoMutePendantTTS && !syntheseEnCours && !reponseEnCours) {
         afficherEtatVocal('attente', 'En attente du micro...');
         afficherStatutVocal(e.error === 'network'
@@ -3389,6 +3397,41 @@ form.addEventListener('submit', async function(e) {
     let reponseTexte = '';
     let messageId   = null;
 
+    let suiviActionSse = null;
+    let actionArtifactSse = false;
+    function traiterEvenementAction(ev) {
+      if (!ev || !ev.event || !ev.action) return false;
+      if (ev.event === 'action_started') {
+        actionArtifactSse = true;
+        if (reponseElement) { reponseElement.remove(); reponseElement = null; messageElement = null; }
+        retirerReflexion();
+        suiviActionSse = creerSuiviAction(ev.action);
+        mettreAJourSuiviAction(suiviActionSse, ev.action);
+        return true;
+      }
+      if (ev.event === 'action_progress') {
+        actionArtifactSse = true;
+        if (!suiviActionSse) { retirerReflexion(); suiviActionSse = creerSuiviAction(ev.action); }
+        mettreAJourSuiviAction(suiviActionSse, ev.action);
+        return true;
+      }
+      if (ev.event === 'action_completed') {
+        actionArtifactSse = true;
+        if (!suiviActionSse) { retirerReflexion(); suiviActionSse = creerSuiviAction(ev.action); }
+        mettreAJourSuiviAction(suiviActionSse, ev.action);
+        finaliserSuiviAction(suiviActionSse, ev.action.result || {});
+        return true;
+      }
+      if (ev.event === 'action_failed' || ev.event === 'action_cancelled') {
+        actionArtifactSse = true;
+        if (!suiviActionSse) { retirerReflexion(); suiviActionSse = creerSuiviAction(ev.action); }
+        mettreAJourSuiviAction(suiviActionSse, ev.action);
+        if (ev.event === 'action_failed') ajouterMessage(ev.action.error || 'La génération a échoué. Réessaie.', 'bot');
+        return true;
+      }
+      return false;
+    }
+
     while (true) {
       const { done, value } = await lecteur.read();
       if (controller.signal.aborted || requeteActiveController !== controller) {
@@ -3408,6 +3451,10 @@ form.addEventListener('submit', async function(e) {
         if (!ligne.startsWith('data:')) continue;
         let ev;
         try { ev = JSON.parse(ligne.slice(5).trim()); } catch(ex) { continue; }
+        if (traiterEvenementAction(ev)) {
+          if (ev.termine) messageId = ev.message_id;
+          continue;
+        }
         if (ev.erreur) {
           throw new Error(ev.erreur);
         }
@@ -3450,15 +3497,17 @@ form.addEventListener('submit', async function(e) {
       }
     }
 
-    const quotaVisuel = reponseTexte.replace(/^QUOTA:\d+:/, '');
-    afficherMarkdown(messageElement, quotaVisuel);
-    messageElement.dataset.messageId = messageId || '';
+    if (!actionArtifactSse && messageElement) {
+      const quotaVisuel = reponseTexte.replace(/^QUOTA:\d+:/, '');
+      afficherMarkdown(messageElement, quotaVisuel);
+      messageElement.dataset.messageId = messageId || '';
+    }
     reponseEnCours = false;
     requeteActiveController = null;
 
     // Lecture vocale si le mode vocal est actif
     const vocal = window._dashleVocal;
-    if (vocal && vocal.estActif() && reponseTexte) {
+    if (!actionArtifactSse && vocal && vocal.estActif() && reponseTexte) {
       vocal.marquerParle();
       lireReponse(reponseElement.querySelector('.action-lire'));
       // L'écoute reprendra via utteranceActuelle.onend (après la synthèse)
