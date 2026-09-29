@@ -161,3 +161,11 @@ def confirm():
         with session_base() as db:db.add(ConnectorAuditLog(user_id=uid,plugin=provider,action=action,target=json.dumps(params)[:500],result="success"))
         return jsonify({"resultat":result})
     except Exception:return jsonify({"erreur":"L'action externe a échoué."}),502
+
+
+@bp.get("/.well-known/assetlinks.json")
+def assetlinks():
+    fingerprint=os.environ.get("ANDROID_RELEASE_CERT_SHA256","").replace(":","").upper()
+    if not fingerprint:
+        return jsonify([])
+    return jsonify([{"relation":["delegate_permission/common.handle_all_urls"],"target":{"namespace":"android_app","package_name":"com.dashle.app","sha256_cert_fingerprints":[fingerprint]}}])
