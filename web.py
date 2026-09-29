@@ -1927,6 +1927,7 @@ let recoEnCours = false;
 let recoResultatsAutorises = false;
 let recoDebutEcouteMs = 0;
 let dernierTranscriptDictee = '';
+let dernierModeReconnaissance = 'texte';
 
 // États vocaux
 let vocalActif          = false;
@@ -2875,10 +2876,16 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
     if (recoEnCours) {
       return false;
     }
+    // SpeechRecognition doit être le seul accès micro actif pendant l'écoute.
+    // Le VAD/AnalyserNode n'est jamais lancé en parallèle.
+    arreterVAD();
     journaliserEtatAudioReconnaissance();
-    reco.interimResults = true;
-    reco.continuous = true;
+    // Android Chrome est nettement plus fiable en session phrase par phrase,
+    // comme le mode dictée. On relance nous-mêmes après onend avec backoff.
+    reco.interimResults = false;
+    reco.continuous = false;
     modeActuel = 'vocal';
+    dernierModeReconnaissance = 'vocal';
     ouvrirModeVocal();
     afficherEtatVocal('ecoute', 'Dashle écoute...');
     btnVocal.classList.add('ecoute');
@@ -2888,8 +2895,8 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
     recoResultatsAutorises = false;
     try {
       recoDebutEcouteMs = performance.now();
-      recoDebutEcouteMs = performance.now();
       reco.start();
+      armerWatchdog();
       return true;
     } catch(e) {
       recoEnCours = false;
@@ -2925,6 +2932,7 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
   btnMicro.onclick = function() {
     if (vocalActif) return;
     modeActuel = 'dictee';
+    dernierModeReconnaissance = 'dictee';
     reco.interimResults = false;
     reco.continuous = false;
     btnMicro.classList.add('actif');
@@ -2959,6 +2967,7 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
 
   reco.onstart = function() {
     recoDebutEcouteMs = performance.now();
+    dernierModeReconnaissance = modeActuel;
     if (modeActuel === 'vocal') journaliserEtatAudioReconnaissance();
     console.log('[DASHLE][SpeechRecognition] onstart', { mode: modeActuel, vocalActif: vocalActif });
     if (!transcriptionFinaleVocale.trim()) dernierIndexFinalVocal = 0;
@@ -2980,6 +2989,7 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
       });
       return { transcript: transcript, confidence: confidence, isFinal: Boolean(r && r.isFinal) };
     });
+    desarmerWatchdog();
     console.log('[DASHLE][SpeechRecognition] onresult', {
       mode: modeActuel, resultIndex: e.resultIndex, results: resultatsJournal,
       resultatsAutorises: recoResultatsAutorises
@@ -3036,7 +3046,8 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
 
   reco.onend = function() {
     const dureeEcouteMs = recoDebutEcouteMs ? Math.max(0, Math.round(performance.now() - recoDebutEcouteMs)) : null;
-    const transcriptionLog = modeActuel === 'dictee' ? dernierTranscriptDictee : transcriptionFinaleVocale;
+    desarmerWatchdog();
+    const transcriptionLog = dernierModeReconnaissance === 'dictee' ? dernierTranscriptDictee : transcriptionFinaleVocale;
     console.log('[DASHLE][SpeechRecognition] onend', {
       mode: modeActuel, vocalActif: vocalActif, dureeEcouteMs: dureeEcouteMs,
       hasTranscription: Boolean(String(transcriptionLog || '').trim()),
@@ -3051,6 +3062,16 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
     // ou synthèse encore active.
     if (recoMutePendantTTS) {
       return;  // TTS prend la main, onend le relancera
+    }
+    if (dernierModeReconnaissance === 'dictee') {
+      // Le texte peut déjà être dans la zone de saisie alors que onend arrive
+      // après un changement d'état. Le compteur lit le snapshot du résultat,
+      // jamais une variable remise à zéro par un autre mode.
+      console.log('[DASHLE][SpeechRecognition][dictee]', {
+        hasTranscription: Boolean(String(dernierTranscriptDictee || '').trim()),
+        transcriptionLength: String(dernierTranscriptDictee || '').trim().length
+      });
+      return;
     }
     if (transcriptionFinaleVocale.trim()) {
       planifierEnvoiFinPhraseVocale();
@@ -3082,6 +3103,7 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
   };
 
   reco.onerror = function(e) {
+    desarmerWatchdog();
     console.log('[DASHLE][SpeechRecognition] onerror', {
       error: e && e.error, message: e && e.message, mode: modeActuel, vocalActif: vocalActif
     });
