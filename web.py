@@ -38,6 +38,7 @@ from sqlalchemy.exc import IntegrityError
 from app import streamer_message, traiter_message, traiter_message_image
 from brain import emails_owner, niveau_abonnement, resumer_conversation
 from config import MAX_MESSAGES_CONTEXTE, MODELE_GEMINI
+from connectors.web import bp as connectors_bp
 from database import (
     AdminAuditLog, Conversation, ImageGenerationUsage, LibraryItem, Message, MessageFeedback, ShareLink, SubscriptionPayment, User,
     UserMemory, UserPreference, StatisticalAnalysisUsage, Project, ProjectFile, Reminder, UserPlugin,
@@ -68,6 +69,7 @@ app.config.update(
     PERMANENT_SESSION_LIFETIME=timedelta(days=3650),
 )
 initialiser_base()
+app.register_blueprint(connectors_bp)
 
 
 @app.after_request
@@ -1988,7 +1990,7 @@ function planifierEnvoiFinPhraseVocale() {
   minuteurFinPhraseVocale = setTimeout(function() {
     minuteurFinPhraseVocale = null;
     if (!vocalActif || reponseEnCours || syntheseEnCours || recoMutePendantTTS) return;
-    const texteComplet = transcriptionFinaleVocale.trim();
+    const texteComplet = transcriptionFinaleVocale.trim()  // resultIndex repart à zéro ; ne pas dupliquer les finals;
     if (!texteComplet) return;
 
     transcriptionFinaleVocale = '';
@@ -5171,6 +5173,19 @@ def repondre_flux():
                 if not morceau:
                     continue
                 morceau = str(morceau)
+                if morceau.startswith("__DASHLE_CONNECTOR_CONFIRMATION__"):
+                    try:
+                        confirmation = json.loads(morceau.split("__DASHLE_CONNECTOR_CONFIRMATION__", 1)[1])
+                        yield "data: " + json.dumps(
+                            {"connector_confirmation": confirmation}, ensure_ascii=False
+                        ) + "\n\n"
+                    except (ValueError, TypeError):
+                        yield "data: " + json.dumps(
+                            {"morceau": "Je dois obtenir ta confirmation avant d'exécuter cette action externe."},
+                            ensure_ascii=False
+                        ) + "\n\n"
+                    yield "data: " + json.dumps({"termine": True}, ensure_ascii=False) + "\n\n"
+                    return
                 morceaux.append(morceau)
                 yield "data: " + json.dumps(
                     {"morceau": morceau}, ensure_ascii=False
