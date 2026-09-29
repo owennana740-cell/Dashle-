@@ -290,6 +290,72 @@ class ArtifactToolsTests(unittest.TestCase):
         self.assertIn('"conversation_id": null', event)
 
 
+    def test_image_quota_limits_visitor_free_and_owner(self):
+        with patch.object(web, "generer_image", return_value=(PNG_1X1, "image/png")):
+            with self.client.session_transaction() as state:
+                state.pop("user_id", None)
+            for _ in range(2):
+                response = self.client.post("/repondre", data={"message": "Crée une image d'une ville."})
+                self.assertEqual(response.status_code, 200)
+            response = self.client.post("/repondre", data={"message": "Crée une image d'une ville."})
+            self.assertEqual(response.status_code, 429)
+            self.assertEqual(response.json["quota"]["limite"], 2)
+
+        with self.client.session_transaction() as state:
+            state["user_id"] = self.user_id
+        with patch.object(web, "generer_image", return_value=(PNG_1X1, "image/png")):
+            for _ in range(web.IMAGE_DAILY_LIMITS["free"]):
+                response = self.client.post("/repondre", data={"message": "Crée une image d'une ville."},
+                                            headers={"X-CSRF-Token": "artifact-token"})
+                self.assertEqual(response.status_code, 200)
+            response = self.client.post("/repondre", data={"message": "Crée une image d'une ville."},
+                                        headers={"X-CSRF-Token": "artifact-token"})
+            self.assertEqual(response.status_code, 429)
+            self.assertEqual(response.json["quota"]["niveau"], "free")
+
+        original = os.environ.get("OWNER_EMAILS")
+        os.environ["OWNER_EMAILS"] = "owner-artifact@example.invalid"
+        try:
+            with session_base() as db:
+                user = db.get(User, self.user_id)
+                user.email = "owner-artifact@example.invalid"
+            with patch.object(web, "generer_image", return_value=(PNG_1X1, "image/png")):
+                for _ in range(web.IMAGE_DAILY_LIMITS["prime"] + 2):
+                    response = self.client.post("/repondre", data={"message": "Crée une image d'une ville."},
+                                                headers={"X-CSRF-Token": "artifact-token"})
+                    self.assertEqual(response.status_code, 200)
+        finally:
+            if original is None:
+                os.environ.pop("OWNER_EMAILS", None)
+            else:
+                os.environ["OWNER_EMAILS"] = original
+
+    def test_image_quota_does_not_consume_failed_generation(self):
+        with patch.object(web, "generer_image", side_effect=RuntimeError("provider failure")):
+            response = self.client.post("/repondre", data={"message": "Crée une image d'une ville."},
+                                        headers={"X-CSRF-Token": "artifact-token"})
+        self.assertEqual(response.status_code, 502)
+        from database import ImageGenerationUsage
+        with session_base() as db:
+            usage = db.query(ImageGenerationUsage).filter_by(user_id=self.user_id).one_or_none()
+            self.assertTrue(usage is None or usage.count == 0)
+
+    def test_image_progress_and_viewer_contract(self):
+        with patch.object(web, "generer_image", return_value=(PNG_1X1, "image/png")):
+            response = self.client.post("/repondre_flux",
+                data={"message": "Crée une image d'une ville futuriste."},
+                headers={"X-CSRF-Token": "artifact-token"})
+        body = response.get_data(as_text=True)
+        self.assertIn("Ton idée prend forme", body)
+        self.assertIn("Création d'une première ébauche", body)
+        self.assertIn("Finitions", body)
+        self.assertIn('"event": "action_completed"', body)
+        source = open("web.py", encoding="utf-8").read()
+        self.assertIn("ouvrirVisionneuseImage", source)
+        self.assertIn("navigator.share", source)
+        self.assertIn("Télécharger", source)
+        self.assertIn("Régénérer", source)
+
 
 if __name__ == "__main__":
     unittest.main()
