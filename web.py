@@ -1990,7 +1990,7 @@ function planifierEnvoiFinPhraseVocale() {
   minuteurFinPhraseVocale = setTimeout(function() {
     minuteurFinPhraseVocale = null;
     if (!vocalActif || reponseEnCours || syntheseEnCours || recoMutePendantTTS) return;
-    const texteComplet = transcriptionFinaleVocale.trim();
+    const texteComplet = transcriptionFinaleVocale.trim()  // resultIndex repart à zéro ; ne pas dupliquer les finals;
     if (!texteComplet) return;
 
     transcriptionFinaleVocale = '';
