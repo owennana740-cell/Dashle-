@@ -4612,6 +4612,34 @@ def repondre():
             return jsonify({"reponse": "Je n’ai pas pu générer le PDF pour le moment.", "artifact_error": type(exc).__name__}), 502
 
 
+def _evenement_action(nom_evenement, action_id, action_type, etape, message,
+                         resultats=None, erreur=None):
+    """Construit un événement SSE générique de suivi d'action."""
+    payload = {
+        "event": nom_evenement,
+        "action": {
+            "id": action_id,
+            "type": action_type,
+            "step": etape,
+            "message": message,
+        },
+    }
+    if resultats is not None:
+        payload["action"]["result"] = resultats
+    if erreur is not None:
+        payload["action"]["error"] = erreur
+    return "data: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
+
+
+def _demande_action_longue(message):
+    """Retourne le type d'action multimédia gérée directement par le flux SSE."""
+    if detecter_demande_image(message):
+        return "image"
+    if detecter_demande_pdf(message):
+        return "pdf"
+    return None
+
+
 @app.route("/repondre_flux", methods=["POST"])
 def repondre_flux():
     """Diffuse une réponse SSE. Gère visiteur et utilisateur connecté.
@@ -4670,7 +4698,85 @@ def repondre_flux():
     @stream_with_context
     def generer():
         morceaux = []
+        action_id = secrets.token_hex(12)
+        action_type = _demande_action_longue(message)
         try:
+            if action_type:
+                yield _evenement_action(
+                    "action_started", action_id, action_type, "preparation",
+                    "Préparation de l'image…" if action_type == "image" else "Préparation du document…",
+                )
+                conversation_id_action = conversation_id
+                historique_action = (
+                    _messages_conversation(user_id, conversation_id_action, limite=MAX_MESSAGES_CONTEXTE)
+                    if user_id and conversation_id_action else []
+                )
+                contexte_action = "\n".join(str(x.get("texte", "")) for x in historique_action[-12:])
+                if action_type == "image":
+                    yield _evenement_action(
+                        "action_progress", action_id, "image", "generation",
+                        "Génération de l'image…",
+                    )
+                    raw, mime = generer_image(message, contexte_action)
+                    yield _evenement_action(
+                        "action_progress", action_id, "image", "finalisation",
+                        "Finalisation de l'image…",
+                    )
+                    saved = _enregistrer_element_bibliotheque(
+                        user_id, "image", "image-dashle", mime, raw, conversation_id_action
+                    ) if user_id else False
+                    artifact = {
+                        "type": "image",
+                        "mime_type": mime,
+                        "filename": "image-dashle.png",
+                        "data": base64.b64encode(raw).decode("ascii"),
+                        "saved": saved,
+                    }
+                else:
+                    yield _evenement_action(
+                        "action_progress", action_id, "pdf", "contenu",
+                        "Génération du contenu…",
+                    )
+                    structure = structurer_document(
+                        message, contexte_action, extraire_contenu_fourni(message)
+                    )
+                    yield _evenement_action(
+                        "action_progress", action_id, "pdf", "mise_en_page",
+                        "Mise en page du PDF…",
+                    )
+                    raw = rendre_pdf(structure)
+                    yield _evenement_action(
+                        "action_progress", action_id, "pdf", "generation",
+                        "Génération du PDF…",
+                    )
+                    titre = secure_filename(structure["title"])[:120] or "dashle-document"
+                    yield _evenement_action(
+                        "action_progress", action_id, "pdf", "finalisation",
+                        "Finalisation du document…",
+                    )
+                    saved = _enregistrer_element_bibliotheque(
+                        user_id, "pdf", structure["title"], "application/pdf",
+                        raw, conversation_id_action
+                    ) if user_id else False
+                    artifact = {
+                        "type": "pdf",
+                        "mime_type": "application/pdf",
+                        "filename": titre + ".pdf",
+                        "data": base64.b64encode(raw).decode("ascii"),
+                        "saved": saved,
+                    }
+
+                yield _evenement_action(
+                    "action_completed", action_id, action_type, "termine",
+                    "Image générée." if action_type == "image" else "PDF généré.",
+                    resultats={"artifact": artifact},
+                )
+                yield "data: " + json.dumps(
+                    {"termine": True, "message_id": None, "action_id": action_id},
+                    ensure_ascii=False,
+                ) + "\n\n"
+                return
+
             for morceau in streamer_message(
                 message, contexte_historique, user_id, resume, **contexte_projet
             ):
@@ -4713,10 +4819,21 @@ def repondre_flux():
             return
         except Exception as err:
             print("ERREUR /repondre_flux :", repr(err))
-            yield "data: " + json.dumps(
-                {"erreur": "Erreur pendant la génération. Réessaie."},
-                ensure_ascii=False,
-            ) + "\n\n"
+            if action_type:
+                yield _evenement_action(
+                    "action_failed", action_id, action_type, "echec",
+                    "Échec de la génération",
+                    erreur="La génération a échoué. Réessaie.",
+                )
+                yield "data: " + json.dumps(
+                    {"termine": True, "message_id": None, "action_id": action_id},
+                    ensure_ascii=False,
+                ) + "\n\n"
+            else:
+                yield "data: " + json.dumps(
+                    {"erreur": "Erreur pendant la génération. Réessaie."},
+                    ensure_ascii=False,
+                ) + "\n\n"
 
     return Response(
         generer(),
