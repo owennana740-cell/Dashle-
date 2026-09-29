@@ -244,7 +244,7 @@ class ArtifactToolsTests(unittest.TestCase):
         with patch.object(web.requests, "post", return_value=FakeResponse()) as appel:
             response = self.client.post(
                 "/api/transcrire",
-                data={"audio": (io.BytesIO(b"fake-audio"), "test.webm")},
+                data={"audio": (io.BytesIO(b"fake-audio"), "test.webm", "audio/webm")},
                 headers={"X-CSRF-Token": "artifact-token", "X-Dashle-Audio-Duration-Ms": "1000"},
                 content_type="multipart/form-data",
             )
@@ -258,7 +258,7 @@ class ArtifactToolsTests(unittest.TestCase):
     def test_transcription_audio_rejette_un_fichier_trop_gros(self):
         response = self.client.post(
             "/api/transcrire",
-            data={"audio": (io.BytesIO(b"x" * (5 * 1024 * 1024 + 1)), "test.webm")},
+            data={"audio": (io.BytesIO(b"x" * (5 * 1024 * 1024 + 1)), "test.webm", "audio/webm")},
             headers={"X-CSRF-Token": "artifact-token"},
             content_type="multipart/form-data",
         )
