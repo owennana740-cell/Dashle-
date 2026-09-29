@@ -30,12 +30,35 @@ jobs:
         run: chmod +x gradlew
       - name: Build debug APK
         run: ./gradlew :app:assembleDebug --no-daemon
+      - name: Build release APK
+        env:
+          DASHLE_RELEASE_STORE_FILE: ${{ secrets.DASHLE_RELEASE_STORE_FILE }}
+          DASHLE_RELEASE_STORE_PASSWORD: ${{ secrets.DASHLE_RELEASE_STORE_PASSWORD }}
+          DASHLE_RELEASE_KEY_ALIAS: ${{ secrets.DASHLE_RELEASE_KEY_ALIAS }}
+          DASHLE_RELEASE_KEY_PASSWORD: ${{ secrets.DASHLE_RELEASE_KEY_PASSWORD }}
+        run: ./gradlew :app:assembleRelease --no-daemon
       - name: Build release bundle
+        env:
+          DASHLE_RELEASE_STORE_FILE: ${{ secrets.DASHLE_RELEASE_STORE_FILE }}
+          DASHLE_RELEASE_STORE_PASSWORD: ${{ secrets.DASHLE_RELEASE_STORE_PASSWORD }}
+          DASHLE_RELEASE_KEY_ALIAS: ${{ secrets.DASHLE_RELEASE_KEY_ALIAS }}
+          DASHLE_RELEASE_KEY_PASSWORD: ${{ secrets.DASHLE_RELEASE_KEY_PASSWORD }}
         run: ./gradlew :app:bundleRelease --no-daemon
+      - name: Verify release outputs and reject secrets
+        shell: bash
+        run: |
+          test -s app/build/outputs/apk/debug/app-debug.apk
+          test -s app/build/outputs/apk/release/app-release.apk
+          test -s app/build/outputs/bundle/release/app-release.aab
+          if grep -R -n -E 'AIza[0-9A-Za-z_-]{20,}|sk_live_[0-9A-Za-z]+|password[[:space:]]*=' app/build/outputs 2>/dev/null; then
+            echo 'Potential secret found in Android outputs'
+            exit 1
+          fi
       - name: Upload Android artifacts
         uses: actions/upload-artifact@v4
         with:
           name: dashle-android-build
           path: |
             android/app/build/outputs/apk/debug/app-debug.apk
+            android/app/build/outputs/apk/release/app-release.apk
             android/app/build/outputs/bundle/release/app-release.aab
