@@ -1925,6 +1925,8 @@ const conversationId   = __CONV_ID__;
 let reco = null;
 let recoEnCours = false;
 let recoResultatsAutorises = false;
+let recoDebutEcouteMs = 0;
+let dernierTranscriptDictee = '';
 
 // États vocaux
 let vocalActif          = false;
@@ -1969,6 +1971,9 @@ let minuteurRelanceReco = null;
 const DELAI_RELANCE_RECO_INITIAL = 300;
 const DELAI_RELANCE_RECO_MAX = 5000;
 const MAX_PALIERS_RELANCE_RECO = 6;
+let nbFinsImmediatesVocal = 0;
+const DUREE_FIN_IMMEDIATE_VOCAL_MS = 1200;
+const MAX_FINS_IMMEDIATES_VOCAL = 3;
 
 // Attendre que les résultats finaux se stabilisent avant d'envoyer le tour vocal.
 let transcriptionFinaleVocale = '';
@@ -2062,6 +2067,33 @@ function reinitialiserEtatVocal() {
 // =====================================================================
 // Helpers UI
 // =====================================================================
+function journaliserEtatAudioReconnaissance() {
+  let gum = 'indisponible';
+  try {
+    const tracks = vadStream && typeof vadStream.getAudioTracks === 'function'
+      ? vadStream.getAudioTracks() : [];
+    gum = tracks.length ? tracks.map(function(t) { return t.readyState; }) : 'aucun flux actif';
+  } catch (e) { gum = 'erreur'; }
+  let audioContext = vadAudioContext ? vadAudioContext.state : 'aucun';
+  let mediaRecorder = typeof window.MediaRecorder === 'function';
+  let tts = 'indisponible';
+  let audioElement = null;
+  try {
+    tts = ('speechSynthesis' in window)
+      ? { speaking: window.speechSynthesis.speaking, pending: window.speechSynthesis.pending }
+      : 'indisponible';
+    audioElement = document.querySelector('audio');
+    audioElement = audioElement ? {
+      paused: audioElement.paused, readyState: audioElement.readyState,
+      currentTime: audioElement.currentTime
+    } : 'aucun élément audio';
+  } catch (e) { audioElement = 'erreur'; }
+  console.log('[DASHLE][AudioState]', {
+    getUserMedia: gum, AudioContext: audioContext, MediaRecorder: mediaRecorder,
+    speechSynthesis: tts, audioTTS: audioElement
+  });
+}
+
 function afficherEtatVocal(etat, libelle) {
   modeVocalEl.dataset.etat = etat;
   etatVocalEl.textContent  = libelle;
@@ -2710,6 +2742,7 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
     if (recoEnCours) {
       return false;
     }
+    journaliserEtatAudioReconnaissance();
     reco.interimResults = true;
     reco.continuous = true;
     modeActuel = 'vocal';
@@ -2721,6 +2754,7 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
     recoEnCours = true;
     recoResultatsAutorises = false;
     try {
+      recoDebutEcouteMs = performance.now();
       reco.start();
       return true;
     } catch(e) {
@@ -2801,12 +2835,16 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
   };
 
   reco.onresult = function(e) {
+    const resultatsJournal = Array.from(e.results || []).map(function(r, index) {
+      const transcript = r && r[0] ? String(r[0].transcript || '').trim() : '';
+      const confidence = r && r[0] && typeof r[0].confidence === 'number' ? r[0].confidence : null;
+      console.log('[DASHLE][SpeechRecognition][resultat]', {
+        index: index, transcript: transcript, confidence: confidence, isFinal: Boolean(r && r.isFinal)
+      });
+      return { transcript: transcript, confidence: confidence, isFinal: Boolean(r && r.isFinal) };
+    });
     console.log('[DASHLE][SpeechRecognition] onresult', {
-      mode: modeActuel,
-      resultIndex: e.resultIndex,
-      results: Array.from(e.results || []).map(function(r) {
-        return { hasTranscript: Boolean(r[0] && String(r[0].transcript || '').trim()), isFinal: r.isFinal };
-      }),
+      mode: modeActuel, resultIndex: e.resultIndex, results: resultatsJournal,
       resultatsAutorises: recoResultatsAutorises
     });
     if (!recoResultatsAutorises || recoMutePendantTTS || syntheseEnCours
@@ -2818,6 +2856,7 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
       const resultat = resultats[e.resultIndex || 0];
       const transcript = (resultat && resultat[0] && resultat[0].transcript || '').trim();
       if (!transcript) return;
+      dernierTranscriptDictee = transcript;
       champ.value = transcript;
       champ.style.height = 'auto';
       return;
@@ -2858,10 +2897,12 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
   };
 
   reco.onend = function() {
+    const dureeEcouteMs = recoDebutEcouteMs ? Math.max(0, Math.round(performance.now() - recoDebutEcouteMs)) : null;
+    const transcriptionLog = modeActuel === 'dictee' ? dernierTranscriptDictee : transcriptionFinaleVocale;
     console.log('[DASHLE][SpeechRecognition] onend', {
-      mode: modeActuel, vocalActif: vocalActif,
-      hasTranscription: Boolean(transcriptionFinaleVocale),
-      transcriptionLength: transcriptionFinaleVocale.length
+      mode: modeActuel, vocalActif: vocalActif, dureeEcouteMs: dureeEcouteMs,
+      hasTranscription: Boolean(String(transcriptionLog || '').trim()),
+      transcriptionLength: String(transcriptionLog || '').trim().length
     });
     btnMicro.classList.remove('actif');
     recoEnCours = false;  // reco s'est arrêté, le guard est libéré
@@ -2884,7 +2925,9 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
   };
 
   reco.onerror = function(e) {
-    console.log('[DASHLE][SpeechRecognition] onerror', { error: e.error, message: e.message, mode: modeActuel });
+    console.log('[DASHLE][SpeechRecognition] onerror', {
+      error: e && e.error, message: e && e.message, mode: modeActuel, vocalActif: vocalActif
+    });
     btnMicro.classList.remove('actif');
     recoResultatsAutorises = false;
     if (vocalActif && (e.error === 'not-allowed' || e.error === 'service-not-allowed')) {
