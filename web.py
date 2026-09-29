@@ -4514,18 +4514,18 @@ def repondre():
     message = request.form.get("message", "").strip()
     if not message:
         return jsonify({"reponse": ""})
-    if user_id and detecter_demande_image(message):
+    if detecter_demande_image(message):
         try:
             conversation_id = session.get("conversation_id")
             historique = _messages_conversation(user_id, conversation_id, limite=MAX_MESSAGES_CONTEXTE) if conversation_id else []
             contexte = "\n".join(str(x.get("texte", "")) for x in historique[-12:])
             raw, mime = generer_image(message, contexte)
-            saved = _enregistrer_element_bibliotheque(user_id, "image", "image-dashle", mime, raw, conversation_id)
+            saved = _enregistrer_element_bibliotheque(user_id, "image", "image-dashle", mime, raw, conversation_id) if user_id else False
             return jsonify({"reponse": "Image générée par DASHLE.", "artifact": {"type": "image", "mime_type": mime, "data": base64.b64encode(raw).decode("ascii"), "saved": saved}})
         except Exception as exc:
             app.logger.exception("Échec de génération d'image")
             return jsonify({"reponse": "Je n’ai pas pu générer l’image pour le moment.", "artifact_error": type(exc).__name__}), 502
-    if user_id and detecter_demande_pdf(message):
+    if detecter_demande_pdf(message):
         try:
             conversation_id = session.get("conversation_id")
             historique = _messages_conversation(user_id, conversation_id, limite=MAX_MESSAGES_CONTEXTE) if conversation_id else []
@@ -4533,7 +4533,7 @@ def repondre():
             structure = structurer_document(message, contexte, extraire_contenu_fourni(message))
             raw = rendre_pdf(structure)
             titre = structure["title"] or "dashle-document"
-            saved = _enregistrer_element_bibliotheque(user_id, "pdf", titre, "application/pdf", raw, conversation_id)
+            saved = _enregistrer_element_bibliotheque(user_id, "pdf", titre, "application/pdf", raw, conversation_id) if user_id else False
             return jsonify({"reponse": "Voici le document PDF demandé.", "artifact": {"type": "pdf", "mime_type": "application/pdf", "filename": secure_filename(titre)[:120] + ".pdf", "data": base64.b64encode(raw).decode("ascii"), "saved": saved}})
         except Exception as exc:
             app.logger.exception("Échec de génération de PDF")
