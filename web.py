@@ -2131,7 +2131,12 @@ function bloquerEnvoi(secondes) {
 function estDemandePdf(texte) {
   const normalise = String(texte || '').toLocaleLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
   return /\bpdf\b/.test(normalise)
-    && /\b(genere|generer|creer|cree|fais|faire|fabrique|telecharger|telecharge|produis|produire)\b/.test(normalise);
+    && /\b(genere|generer|creer|cree|fais|faire|fabrique|exporte|exporter|transforme|transformer|prepare|preparer|produis|produire|telecharger|telecharge)\b/.test(normalise);
+}
+
+function demandePdfSansSujet(texte) {
+  const normalise = String(texte || '').toLocaleLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  return /^(peux[- ]tu|pourrais[- ]tu|est[- ]ce que tu peux|tu peux|peut[- ]tu)\s+(me\s+)?(genere|generer|creer|cree|fais|faire|fabriquer|produire|produis)\s+(un|une)?\s*pdf(?:\s+(s'il te plait|stp))?\s*\??$/.test(normalise);
 }
 
 function demandeIllustrationPedagogique(texte) {
@@ -3175,6 +3180,10 @@ form.addEventListener('submit', async function(e) {
   }
 
   if (!vocalActif && estDemandePdf(texte)) {
+    if (demandePdfSansSujet(texte)) {
+      ajouterMessage('Oui. Je peux générer un PDF. Sur quel sujet veux-tu que je le prépare ?', 'bot');
+      return;
+    }
     await genererArtifactDansChat(texte, 'pdf');
     return;
   }
