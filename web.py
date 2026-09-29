@@ -39,7 +39,7 @@ from app import streamer_message, traiter_message, traiter_message_image
 from brain import emails_owner, niveau_abonnement, resumer_conversation
 from config import MAX_MESSAGES_CONTEXTE, MODELE_GEMINI
 from database import (
-    AdminAuditLog, Conversation, LibraryItem, Message, MessageFeedback, ShareLink, SubscriptionPayment, User,
+    AdminAuditLog, Conversation, ImageGenerationUsage, LibraryItem, Message, MessageFeedback, ShareLink, SubscriptionPayment, User,
     UserMemory, UserPreference, StatisticalAnalysisUsage, Project, ProjectFile, Reminder, UserPlugin,
     ScheduledTask, ScheduledTaskRun, UserNotification,
     initialiser_base, session_base,
@@ -79,6 +79,82 @@ def definir_charset_json_utf8(response):
 
 # Nombre maximal de messages conservés en session pour les visiteurs anonymes.
 MAX_HISTORIQUE_VISITEUR = 30
+
+# Quotas de génération d'images : compteurs exclusivement côté serveur.
+IMAGE_DAILY_LIMITS = {
+    "visitor": int(os.environ.get("DASHLE_IMAGE_DAILY_LIMIT_VISITOR", "2")),
+    "free": int(os.environ.get("DASHLE_IMAGE_DAILY_LIMIT_FREE", "5")),
+    "pro": int(os.environ.get("DASHLE_IMAGE_DAILY_LIMIT_PRO", "20")),
+    "prime": int(os.environ.get("DASHLE_IMAGE_DAILY_LIMIT_PRIME", "50")),
+}
+
+def _debut_jour_suivant_utc():
+    maintenant = datetime.now(timezone.utc)
+    return maintenant.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+
+def _cle_visiteur_image():
+    ip = request.remote_addr or "inconnu"
+    secret = app.config.get("SECRET_KEY", "dashle")
+    return hashlib.sha256((str(secret) + "|image-quota|" + ip).encode("utf-8")).hexdigest()
+
+def _quota_image_info(user_id=None):
+    aujourd_hui = datetime.utcnow().date()
+    if user_id:
+        with session_base() as db:
+            user = db.get(User, user_id)
+            if user and user.email.strip().lower() in emails_owner():
+                return {"niveau": "prime", "limite": None, "utilise": 0, "illimite": True,
+                        "reset_at": _debut_jour_suivant_utc().isoformat()}
+            niveau = niveau_abonnement(user) if user else "free"
+            limite = IMAGE_DAILY_LIMITS.get(niveau, IMAGE_DAILY_LIMITS["free"])
+            usage = db.query(ImageGenerationUsage).filter_by(user_id=user_id, usage_date=aujourd_hui).one_or_none()
+            return {"niveau": niveau, "limite": limite, "utilise": usage.count if usage else 0, "illimite": False,
+                    "reset_at": _debut_jour_suivant_utc().isoformat()}
+    with session_base() as db:
+        usage = db.query(ImageGenerationUsage).filter_by(visitor_key=_cle_visiteur_image(), usage_date=aujourd_hui).one_or_none()
+        utilise = usage.count if usage else 0
+    return {"niveau": "visitor", "limite": IMAGE_DAILY_LIMITS["visitor"], "utilise": utilise, "illimite": False,
+            "reset_at": _debut_jour_suivant_utc().isoformat()}
+
+def _quota_image_bloque(user_id=None):
+    info = _quota_image_info(user_id)
+    return (not info["illimite"] and info["utilise"] >= info["limite"], info)
+
+def _consommer_quota_image(user_id=None):
+    if user_id:
+        with session_base() as db:
+            user = db.get(User, user_id)
+            if user and user.email.strip().lower() in emails_owner():
+                return True
+            niveau = niveau_abonnement(user) if user else "free"
+            limite = IMAGE_DAILY_LIMITS.get(niveau, IMAGE_DAILY_LIMITS["free"])
+            aujourd_hui = datetime.utcnow().date()
+            usage = db.query(ImageGenerationUsage).filter_by(user_id=user_id, usage_date=aujourd_hui).one_or_none()
+            if usage is None:
+                usage = ImageGenerationUsage(user_id=user_id, usage_date=aujourd_hui, count=0)
+                db.add(usage); db.flush()
+            if usage.count >= limite:
+                return False
+            usage.count += 1
+            return True
+    with session_base() as db:
+        aujourd_hui = datetime.utcnow().date()
+        cle = _cle_visiteur_image()
+        usage = db.query(ImageGenerationUsage).filter_by(visitor_key=cle, usage_date=aujourd_hui).one_or_none()
+        if usage is None:
+            usage = ImageGenerationUsage(visitor_key=cle, usage_date=aujourd_hui, count=0)
+            db.add(usage); db.flush()
+        if usage.count >= IMAGE_DAILY_LIMITS["visitor"]:
+            return False
+        usage.count += 1
+        return True
+
+def _reponse_quota_image(user_id=None):
+    info = _quota_image_info(user_id)
+    return {"quota": True, "niveau": info["niveau"], "utilise": info["utilise"], "limite": info["limite"],
+            "reset_at": info["reset_at"],
+            "message": "Tu as utilisé tes images du jour. Elles reviennent à HH:MM",
+            "action": "creer_compte" if info["niveau"] == "visitor" else "voir_forfaits"}
 
 # Profil international et règles de paiement. Le pays choisi par l'utilisateur
 # est la source de vérité : aucune déduction par adresse IP n'est utilisée.
