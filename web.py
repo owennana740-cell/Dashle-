@@ -5173,6 +5173,19 @@ def repondre_flux():
                 if not morceau:
                     continue
                 morceau = str(morceau)
+                if morceau.startswith("__DASHLE_CONNECTOR_CONFIRMATION__"):
+                    try:
+                        confirmation = json.loads(morceau.split("__DASHLE_CONNECTOR_CONFIRMATION__", 1)[1])
+                        yield "data: " + json.dumps(
+                            {"connector_confirmation": confirmation}, ensure_ascii=False
+                        ) + "\n\n"
+                    except (ValueError, TypeError):
+                        yield "data: " + json.dumps(
+                            {"morceau": "Je dois obtenir ta confirmation avant d'exécuter cette action externe."},
+                            ensure_ascii=False
+                        ) + "\n\n"
+                    yield "data: " + json.dumps({"termine": True}, ensure_ascii=False) + "\n\n"
+                    return
                 morceaux.append(morceau)
                 yield "data: " + json.dumps(
                     {"morceau": morceau}, ensure_ascii=False
