@@ -1814,7 +1814,7 @@ if ('serviceWorker' in navigator) {
   {% endfor %}
 </div>
 
-<section id="mode-vocal" data-etat="attente" aria-label="Conversation vocale" aria-hidden="true">
+<section id="mode-vocal" data-etat="attente" aria-label="Conversation vocale" inert>
   <div class="vocal-entete">
     <strong>Conversation vocale</strong>
     <div class="vocal-commandes">
@@ -2101,12 +2101,15 @@ function afficherEtatVocal(etat, libelle) {
 
 function ouvrirModeVocal() {
   modeVocalEl.classList.add('visible');
-  modeVocalEl.setAttribute('aria-hidden', 'false');
+  modeVocalEl.removeAttribute('inert');
 }
 
 function fermerModeVocal() {
+  if (modeVocalEl.contains(document.activeElement)) {
+    try { document.activeElement.blur(); } catch(e) {}
+  }
+  modeVocalEl.setAttribute('inert', '');
   modeVocalEl.classList.remove('visible');
-  modeVocalEl.setAttribute('aria-hidden', 'true');
 }
 
 function afficherStatutVocal(texte) {
