@@ -23,6 +23,23 @@ from database import User, UserPlugin, session_base
 from datetime import datetime
 from temps_reel import contexte_temps_reel
 
+
+# Source unique des prix et avantages utilisés par le prompt et la page Tarifs.
+OFFRES_DASHLE = {
+    "free": {
+        "nom": "Dashle Free", "mensuel": 0, "annuel": 0,
+        "avantages": ["Chat conversationnel", "Quota Gemini standard"],
+    },
+    "pro": {
+        "nom": "Dashle Pro", "mensuel": 15000, "annuel": 150000,
+        "avantages": ["Assistant professionnel", "Analyses statistiques d’entreprise", "Import de fichiers de données"],
+    },
+    "prime": {
+        "nom": "Dashle Prime", "mensuel": 25000, "annuel": 250000,
+        "avantages": ["Discussion professionnelle avancée", "Analyses statistiques complètes", "Import de fichiers de données", "Priorité aux outils d’analyse"],
+    },
+}
+
 # ---------------------------------------------------------------------------
 # Cache RAM pour charger_connaissances()
 # ---------------------------------------------------------------------------
@@ -181,6 +198,7 @@ def _instruction_systeme(
     resume: str = "", consignes: str = "", niveau: str = "free",
     contexte_live: str = "", nom_utilisateur: str | None = None,
     instructions_projet: str = "", fichiers_projet: str = "",
+    est_visiteur: bool = False,
 ) -> str:
     instruction = (
         "Tu es Dashle, une IA personnelle. "
@@ -194,6 +212,23 @@ def _instruction_systeme(
         "peut pas produire ni joindre une nouvelle image tant qu'aucun outil de génération "
         "d'images n'est disponible dans cette interface. "
         "Dans une conversation déjà commencée, réponds directement sans répéter une salutation."
+    )
+    niveau_actuel = "visiteur" if est_visiteur else niveau if niveau in OFFRES_DASHLE else "free"
+    instruction += (
+        "\nOffres Dashle (source officielle des tarifs) : "
+        + "; ".join(
+            f"{offre['nom']} : " + (
+                "gratuit" if code == "free" else
+                (f"{offre['mensuel']:,}".replace(",", " ") + " FCFA/mois, "
+                 + f"{offre['annuel']:,}".replace(",", " ") + " FCFA/an ("
+                 + str(round((offre['mensuel'] * 12 - offre['annuel']) / offre['mensuel']))
+                 + " mois offerts sur l’annuel)")
+            )
+            for code, offre in OFFRES_DASHLE.items()
+        )
+        + ". Paiement : Mobile Money via PayDunya ou carte bancaire via Stripe. "
+        + f"Statut de ce chat : {'visiteur' if est_visiteur else 'compte connecté, niveau Dashle ' + niveau_actuel.capitalize()}. "
+        + "Si une personne demande les forfaits, abonnements, prix ou tarifs, ne dis jamais que Dashle n’en a pas : indique clairement les offres, oriente vers la page Tarifs, et invite le visiteur à Créer un compte pour souscrire."
     )
     if nom_utilisateur and nom_utilisateur.strip():
         instruction += (
@@ -310,6 +345,7 @@ def demander_a_lia(message: str, historique=None, resume: str = "",
         "system_instruction": {"parts": [{"text": _instruction_systeme(
             resume, consignes, niveau, contexte_live, _nom_utilisateur(user_id),
             instructions_projet, fichiers_projet,
+            est_visiteur=user_id is None,
         )}]},
         "contents": _construire_contents(message, historique),
         "generationConfig": _gen_config(longueur),
@@ -357,6 +393,7 @@ def streamer_a_lia(
         "system_instruction": {"parts": [{"text": _instruction_systeme(
             resume, consignes, niveau, contexte_live, nom_utilisateur,
             instructions_projet, fichiers_projet,
+            est_visiteur=user_id is None,
         )}]},
         "contents": _construire_contents(message, historique),
         "generationConfig": _gen_config(longueur),
@@ -444,6 +481,7 @@ def demander_a_lia_image(
         "system_instruction": {"parts": [{"text": _instruction_systeme(
             resume, consignes, niveau, contexte_live, nom_utilisateur,
             instructions_projet, fichiers_projet,
+            est_visiteur=user_id is None,
         )}]},
         "contents": contents,
         "generationConfig": _gen_config(),
@@ -516,6 +554,7 @@ def resumer_conversation(
                     resume_existant, consignes, niveau, nom_utilisateur=nom_utilisateur,
                     instructions_projet=instructions_projet,
                     fichiers_projet=fichiers_projet,
+                    est_visiteur=user_id is None,
                 )}]},
                 "contents": [{"role": "user", "parts": [{"text": prompt}]}],
                 "generationConfig": {"temperature": 0.3, "maxOutputTokens": 512},

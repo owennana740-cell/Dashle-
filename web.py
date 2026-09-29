@@ -35,7 +35,7 @@ from werkzeug.utils import secure_filename
 from sqlalchemy import func, text
 from sqlalchemy.exc import IntegrityError
 from app import streamer_message, traiter_message, traiter_message_image
-from brain import emails_owner, niveau_abonnement, resumer_conversation
+from brain import OFFRES_DASHLE, emails_owner, niveau_abonnement, resumer_conversation
 from config import MAX_MESSAGES_CONTEXTE, MODELE_GEMINI
 from database import (
     AdminAuditLog, Conversation, LibraryItem, Message, MessageFeedback, ShareLink, SubscriptionPayment, User,
@@ -3844,7 +3844,7 @@ button,.button{display:block;width:100%;margin-top:9px;padding:11px;border:0;bor
 <p class="indicatif">Pour les clients hors zone FCFA : équivalent EUR et USD affiché à titre indicatif, selon un taux mis à jour régulièrement. <strong>Prix indicatif</strong>.</p>
 {% if erreur %}<p class="error">{{ erreur }}</p>{% endif %}{% if request.args.get('retour') %}<p class="notice">Le paiement a été transmis. Ton offre sera activée après confirmation du prestataire.</p>{% endif %}
 <div class="plans">
-<article class="plan"><h2>Dashle Free</h2><div class="price">0 FCFA <small>/ toujours</small></div><ul class="features"><li>Chat conversationnel</li><li>Quota Gemini standard</li></ul><a class="button secondary" href="{{ url_for('accueil') }}">Commencer gratuitement</a></article>
+<article class="plan"><h2>{{ offre_free.nom }}</h2><div class="price">{{ '{:,}'.format(offre_free.mensuel).replace(',', ' ') }} FCFA <small>/ toujours</small></div><ul class="features">{% for avantage in offre_free.avantages %}<li>{{ avantage }}</li>{% endfor %}</ul><a class="button secondary" href="{{ url_for('accueil') }}">Commencer gratuitement</a></article>
 {% for code, nom, mensuel, annuel, avantages in offres %}
 <article class="plan {{ 'featured' if code == 'prime' else '' }}"><h2>{{ nom }}</h2>
 <div class="price"><span data-month="{{ mensuel }}" data-year="{{ annuel }}">{{ '{:,}'.format(mensuel).replace(',', ' ') }}</span> FCFA <small class="period">/ mois</small></div>
@@ -5753,16 +5753,7 @@ def statistiques():
     ), (403 if request.method == "POST" and (not autorise or not plugin_active) else 200)
 
 
-OFFRES_ABONNEMENT = {
-    "pro": {
-        "nom": "Dashle Pro", "mensuel": 15000, "annuel": 150000,
-        "avantages": ["Assistant professionnel", "Analyses statistiques d’entreprise", "Import de fichiers de données"],
-    },
-    "prime": {
-        "nom": "Dashle Prime", "mensuel": 25000, "annuel": 250000,
-        "avantages": ["Discussion professionnelle avancée", "Analyses statistiques complètes", "Import de fichiers de données", "Priorité aux outils d’analyse"],
-    },
-}
+OFFRES_ABONNEMENT = {code: offre for code, offre in OFFRES_DASHLE.items() if code != "free"}
 
 
 def _date_apres_mois(date, nombre):
@@ -5824,6 +5815,7 @@ def _rendre_tarifs(erreur=None):
         utilisateur=session.get("user_email"),
         niveau=niveau,
         offres=offres,
+        offre_free=OFFRES_DASHLE["free"],
         pays_utilisateur=pays,
         moyens_paiement=moyens,
         taux_eur=taux["eur"],
