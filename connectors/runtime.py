@@ -5,7 +5,6 @@ from connectors.config import CONNECTOR_MAX_BY_TIER
 from connectors.registry import get_connector
 from connectors.security import load_credential,sanitize_external_content
 from database import ConnectorActionConfirmation,ConnectorAuditLog,ConnectorPermission,User,session_base
-from brain import niveau_abonnement
 
 def _perm(uid,p):
     with session_base() as db:return db.query(ConnectorPermission).filter_by(user_id=uid,provider=p).one_or_none()
@@ -13,7 +12,7 @@ def _allowed(uid,p,a,args):
     with session_base() as db:
         u=db.get(User,uid)
         if not u:return False,"Compte introuvable."
-        tier=niveau_abonnement(u);limit=CONNECTOR_MAX_BY_TIER.get(tier,0)
+        from brain import niveau_abonnement\n        tier=niveau_abonnement(u);limit=CONNECTOR_MAX_BY_TIER.get(tier,0)
         count=db.query(ConnectorPermission).filter_by(user_id=uid).count()
     if limit==0:return False,"Les connecteurs externes ne sont pas disponibles avec ton forfait."
     if tier!="prime" and count>limit:return False,"Limite de connecteurs atteinte."
