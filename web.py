@@ -21,6 +21,7 @@ import hmac
 import re
 import requests
 import threading
+import unicodedata
 from datetime import datetime, timedelta, timezone
 import calendar
 from html import escape as html_escape
@@ -2177,17 +2178,26 @@ function mettreAJourSuiviAction(bloc, action) {
 }
 
 function finaliserSuiviAction(bloc, result) {
-  if (!bloc || !result) return;
-  if (result.artifact && result.artifact.data) {
-    const artifact = result.artifact;
-    const bytes = Uint8Array.from(atob(artifact.data), function(c){ return c.charCodeAt(0); });
-    const blob = new Blob([bytes], { type: artifact.mime_type || 'application/octet-stream' });
+  if (!bloc || !result || !result.artifact || !result.artifact.data) return;
+  const artifact = result.artifact;
+  try {
+    const bytes = Uint8Array.from(atob(String(artifact.data)), function(c){ return c.charCodeAt(0); });
+    const mime = String(artifact.mime_type || 'application/octet-stream').toLowerCase();
+    if (artifact.type === 'image' && !mime.startsWith('image/')) throw new Error('MIME image invalide');
+    const blob = new Blob([bytes], { type: mime });
     const url = URL.createObjectURL(blob);
     const contenu = document.createElement('div');
     contenu.className = 'suivi-action-resultat';
+    contenu.dataset.artifactType = artifact.type || '';
     if (artifact.type === 'image') {
-      const lien = document.createElement('a'); lien.href = url; lien.target = '_blank'; lien.rel = 'noopener noreferrer';
-      const image = document.createElement('img'); image.className = 'image-message'; image.src = url; image.alt = 'Image générée par DASHLE';
+      const lien = document.createElement('a');
+      lien.className = 'image-message-lien';
+      lien.href = url; lien.target = '_blank'; lien.rel = 'noopener noreferrer';
+      const image = document.createElement('img');
+      image.className = 'image-message'; image.src = url;
+      image.alt = 'Image générée par DASHLE';
+      image.onload = function(){ chat.scrollTop = chat.scrollHeight; };
+      image.onerror = function(){ contenu.dataset.imageError = 'true'; image.alt = 'Image générée indisponible'; };
       lien.appendChild(image); contenu.appendChild(lien);
     } else {
       const lien = document.createElement('a'); lien.href = url; lien.download = artifact.filename || 'dashle-document.pdf';
@@ -2195,6 +2205,13 @@ function finaliserSuiviAction(bloc, result) {
       contenu.appendChild(lien);
     }
     bloc.appendChild(contenu);
+    chat.scrollTop = chat.scrollHeight;
+  } catch (erreur) {
+    console.error('[DASHLE] Artefact reçu mais rendu impossible', erreur);
+    const erreurEl = document.createElement('div');
+    erreurEl.className = 'suivi-action-etape echec';
+    erreurEl.textContent = '✕ L’image générée n’a pas pu être affichée.';
+    bloc.appendChild(erreurEl);
   }
 }
 
@@ -2229,6 +2246,12 @@ function bloquerEnvoi(secondes) {
       champ.placeholder = 'Patiente ' + n + 's...';
     }
   }, 1000);
+}
+
+function estDemandeImage(texte) {
+  const normalise = String(texte || '').toLocaleLowerCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g, '');
+  return /\\b(?:gener(?:e|es|ez|er|ee|ees|es)|cre(?:e|es|ez|er|ee|ees|es)|fais|faire|dessin(?:e|es|ez|er)?|illustr(?:e|es|ez|er)?|montre|represent(?:e|es|ez|er)?)\\b/.test(normalise)
+    && /\\b(?:image|illustration|logo|affiche|schema|diagramme|infographie|visuel|dessin)\\b/.test(normalise);
 }
 
 function estDemandePdf(texte) {
@@ -3316,8 +3339,7 @@ form.addEventListener('submit', async function(e) {
 
   if (!texte) return;
 
-  if (!vocalActif && /\b(image|illustration|logo|affiche|schéma|diagramme|infographie|visuel|dessin)\b/i.test(texte)
-      && /\b(génère|genere|crée|cree|fais|faire|dessine|montre|représente|represente)\b/i.test(texte)) {
+  if (!vocalActif && estDemandeImage(texte)) {
     await genererArtifactDansChat(texte, 'image');
     return;
   }
@@ -4964,7 +4986,11 @@ def repondre_flux():
                 yield _evenement_action(
                     "action_completed", action_id, action_type, "termine",
                     message_action,
-                    resultats={"artifact": artifact},
+                    resultats={
+                        "artifact": artifact,
+                        "message_id": message_id_action,
+                        "conversation_id": conversation_id_action,
+                    },
                 )
                 payload_fin = {
                     "termine": True,

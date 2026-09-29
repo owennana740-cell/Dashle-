@@ -70,6 +70,8 @@ class ArtifactToolsTests(unittest.TestCase):
         self.assertFalse(demande_pdf_sans_sujet("fais-moi un PDF de 5 conseils pour apprendre Python"))
         self.assertTrue(detecter_demande_image("Crée une image d'une ville futuriste"))
         self.assertTrue(detecter_demande_image("Fais un schéma du fonctionnement d'un moteur"))
+        self.assertTrue(detecter_demande_image("Je veux que tu me génères. L'image d'une ville futuriste avec des voitures volantes."))
+        self.assertTrue(detecter_demande_image("Peux-tu me créer une image d'une ville futuriste ?"))
         self.assertFalse(demande_illustration_pedagogique("Quelle est la définition de HTTP ?"))
         self.assertTrue(demande_illustration_pedagogique(
             "Explique-moi comment fonctionne le système solaire et son organisation."
@@ -243,6 +245,37 @@ class ArtifactToolsTests(unittest.TestCase):
         source = open("web.py", encoding="utf-8").read()
         self.assertNotIn('class="action-pdf" title="Générer en PDF"', source)
 
+    def test_sse_image_contract_contains_renderable_artifact_and_frontend_consumer(self):
+        with patch.object(web, "generer_image", return_value=(PNG_1X1, "image/png")):
+            response = self.client.post(
+                "/repondre_flux",
+                data={"message": "Je veux que tu me génères. L'image d'une ville futuriste avec des voitures volantes."},
+                headers={"X-CSRF-Token": "artifact-token"},
+            )
+        events = []
+        for line in response.get_data(as_text=True).splitlines():
+            if line.startswith("data: "):
+                try:
+                    events.append(json.loads(line[6:]))
+                except Exception:
+                    pass
+        completed = next(event for event in events if event.get("event") == "action_completed")
+        action = completed["action"]
+        artifact = action["result"]["artifact"]
+        self.assertEqual(action["type"], "image")
+        self.assertEqual(artifact["type"], "image")
+        self.assertEqual(artifact["mime_type"], "image/png")
+        self.assertTrue(artifact["data"])
+        self.assertIn("message_id", action["result"])
+        self.assertIn("conversation_id", action["result"])
+        source = open("web.py", encoding="utf-8").read()
+        self.assertIn("function finaliserSuiviAction", source)
+        self.assertIn("artifact.data", source)
+        self.assertIn("new Blob([bytes]", source)
+        self.assertIn("image.src = url", source)
+        self.assertIn("contenu.appendChild(lien)", source)
+
+
     def test_action_event_contains_real_artifact(self):
         event = web._evenement_action(
             "action_completed", "abc123", "image", "termine",
@@ -253,6 +286,8 @@ class ArtifactToolsTests(unittest.TestCase):
         )
         self.assertIn('"artifact"', event)
         self.assertIn('"mime_type": "image/png"', event)
+        self.assertIn('"message_id": null', event)
+        self.assertIn('"conversation_id": null', event)
 
 
 

@@ -11,6 +11,7 @@ import io
 import json
 import os
 import re
+import unicodedata
 from html import escape as html_escape
 from typing import Any
 
@@ -63,11 +64,20 @@ def demande_pdf_sans_sujet(message: str) -> bool:
 
 
 def detecter_demande_image(message: str) -> bool:
+    """Détecte une demande de génération d'image, y compris les formes conjuguées."""
     t = _normaliser(message)
-    return bool(re.search(
-        r"\b(g[eé]n[eé]re?r?|cr[eé]e?r?|fais|faire|dessine?r?|illustrer?|montre|repr[eé]sente?r?|sch[eé]ma|infographie)\b",
-        t,
-    ) and re.search(r"\b(image|illustration|logo|affiche|sch[eé]ma|diagramme|infographie|visuel|dessin)\b", t))
+    t_sans_accents = re.sub(r"[\\u0300-\\u036f]", "", unicodedata.normalize("NFD", t))
+    verbe_image = re.search(
+        r"\\b(?:gener(?:e|es|ez|er|ee|ees|es)|cre(?:e|es|ez|er|ee|ees|es)|"
+        r"fais|faire|dessin(?:e|es|ez|er)?|illustr(?:e|es|ez|er)?|"
+        r"montre|represent(?:e|es|ez|er)?)\\b",
+        t_sans_accents,
+    )
+    objet_image = re.search(
+        r"\\b(?:image|illustration|logo|affiche|schema|diagramme|infographie|visuel|dessin)\\b",
+        t_sans_accents,
+    )
+    return bool(verbe_image and objet_image)
 
 
 def demande_illustration_pedagogique(message: str) -> bool:
