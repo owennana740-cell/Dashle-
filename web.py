@@ -112,12 +112,16 @@ def _quota_image_info(user_id=None):
             limite = IMAGE_DAILY_LIMITS.get(niveau, IMAGE_DAILY_LIMITS["free"])
             usage = db.query(ImageGenerationUsage).filter_by(user_id=user_id, usage_date=aujourd_hui).one_or_none()
             return {"niveau": niveau, "limite": limite, "utilise": usage.count if usage else 0, "illimite": False,
-                    "reset_at": _debut_jour_suivant_utc().isoformat()}
+                    "reset_at": _debut_jour_suivant_utc().isoformat(),
+                    "message": "Tu as utilisé tes images du jour. Elles reviennent à HH:MM",
+                    "action": "voir_forfaits"}
     with session_base() as db:
         usage = db.query(ImageGenerationUsage).filter_by(visitor_key=_cle_visiteur_image(), usage_date=aujourd_hui).one_or_none()
         utilise = usage.count if usage else 0
     return {"niveau": "visitor", "limite": IMAGE_DAILY_LIMITS["visitor"], "utilise": utilise, "illimite": False,
-            "reset_at": _debut_jour_suivant_utc().isoformat()}
+            "reset_at": _debut_jour_suivant_utc().isoformat(),
+            "message": "Tu as utilisé tes images du jour. Elles reviennent à HH:MM",
+            "action": "creer_compte"}
 
 def _quota_image_bloque(user_id=None):
     info = _quota_image_info(user_id)

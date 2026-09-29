@@ -38,7 +38,7 @@ def detecter_demande_pdf(message: str) -> bool:
     if not re.search(r"\bpdf\b", t):
         return False
     return bool(re.search(
-        r"\b(g[eé]n[eè]re?r?|cr[eé]e?r?|fais(?:-moi)?|faire|fabriquer|"
+        r"\b(g[eé]n[eéè]re?r?|cr[eé]e?r?|fais(?:-moi)?|faire|fabriquer|"
         r"transforme?r?|exporte?r?|pr[eé]pare?r?|mets?|mettre|produis|"
         r"produire|convertis?|convertir|t[eé]l[eé]charge?r?|rapport|"
         r"facture|cours|lettre|cv)\b",
@@ -56,7 +56,7 @@ def demande_pdf_sans_sujet(message: str) -> bool:
     # le sujet, au lieu de fabriquer un document arbitraire.
     return bool(re.fullmatch(
         r"(?:peux[- ]tu|pourrais[- ]tu|est[- ]ce que tu peux|"
-        r"tu peux|peut[- ]tu)\s+(?:me\s+)?(?:g[eé]n[eè]re?r?|"
+        r"tu peux|peut[- ]tu)\s+(?:me\s+)?(?:g[eé]n[eéè]re?r?|"
         r"cr[eé]e?r?|fais(?:-moi)?|faire|fabriquer|produire|produis)\s+"
         r"(?:un|une)?\s*pdf(?:\s+s.?il te plait|\s+stp)?\s*\??",
         t,
@@ -66,15 +66,15 @@ def demande_pdf_sans_sujet(message: str) -> bool:
 def detecter_demande_image(message: str) -> bool:
     """Détecte une demande de génération d'image, y compris les formes conjuguées."""
     t = _normaliser(message)
-    t_sans_accents = re.sub(r"[\\u0300-\\u036f]", "", unicodedata.normalize("NFD", t))
+    t_sans_accents = re.sub(r"[\u0300-\u036f]", "", unicodedata.normalize("NFD", t))
     verbe_image = re.search(
-        r"\\b(?:gener(?:e|es|ez|er|ee|ees|es)|cre(?:e|es|ez|er|ee|ees|es)|"
+        r"\b(?:gener(?:e|es|ez|er|ee|ees|es)|cre(?:e|es|ez|er|ee|ees|es)|"
         r"fais|faire|dessin(?:e|es|ez|er)?|illustr(?:e|es|ez|er)?|"
-        r"montre|represent(?:e|es|ez|er)?)\\b",
+        r"montre|represent(?:e|es|ez|er)?)\b",
         t_sans_accents,
     )
     objet_image = re.search(
-        r"\\b(?:image|illustration|logo|affiche|schema|diagramme|infographie|visuel|dessin)\\b",
+        r"\b(?:image|illustration|logo|affiche|schema|diagramme|infographie|visuel|dessin)\b",
         t_sans_accents,
     )
     return bool(verbe_image and objet_image)

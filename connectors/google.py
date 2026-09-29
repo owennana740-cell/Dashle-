@@ -15,7 +15,7 @@ class GoogleConnector(ConnectorAdapter):
   r=requests.post("https://oauth2.googleapis.com/token",data={"code":code,"client_id":os.environ.get("GOOGLE_OAUTH_CLIENT_ID"),"client_secret":os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET"),"redirect_uri":redirect_uri,"grant_type":"authorization_code"},timeout=REQUEST_TIMEOUT_SECONDS);r.raise_for_status();d=r.json();return {"access_token":d["access_token"],"refresh_token":d.get("refresh_token"),"scopes":d.get("scope","").split(),"expiration":datetime.now(timezone.utc)+timedelta(seconds=int(d.get("expires_in",3600)))}
  def refresh(self,s):
   if not s.get("refresh_token"):return None
-  r=requests.post("https://oauth2.googleapis.com/token",data={"client_id":os.environ.get("GOOGLE_OAUTH_CLIENT_ID"),"client_secret":os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET"),"refresh_token":s["refresh_token"],"grant_type":"refresh_token"},timeout=REQUEST_TIMEOUT_SECONDS);r.raise_for_status();d=r.json();s["access_token"]=d["access_token"];return s
+  r=requests.post("https://oauth2.googleapis.com/token",data={"client_id":os.environ.get("GOOGLE_OAUTH_CLIENT_ID"),"client_secret":os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET"),"refresh_token":s["refresh_token"],"grant_type":"refresh_token"},timeout=REQUEST_TIMEOUT_SECONDS);r.raise_for_status();d=r.json();s["access_token"]=d["access_token"];s["expiration"]=datetime.now(timezone.utc)+timedelta(seconds=int(d.get("expires_in",3600)));return s
  def _h(self,t):return {"Authorization":f"Bearer {t}","Accept":"application/json"}
  def test_connection(self,s):r=requests.get("https://www.googleapis.com/oauth2/v3/userinfo",headers=self._h(s["access_token"]),timeout=REQUEST_TIMEOUT_SECONDS);r.raise_for_status();return {"email":r.json().get("email")}
  def revoke(self,s):

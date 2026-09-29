@@ -1,4 +1,5 @@
 name: Android build
+# LOT 3 bis: debug artifact always verified/uploaded; release signing remains optional until secrets exist.
 
 on:
   push:
@@ -30,7 +31,24 @@ jobs:
         run: chmod +x gradlew
       - name: Build debug APK
         run: ./gradlew :app:assembleDebug --no-daemon
+      - name: Detect release signing configuration
+        id: signing
+        shell: bash
+        env:
+          STORE_FILE: ${{ secrets.DASHLE_RELEASE_STORE_FILE }}
+          STORE_PASSWORD: ${{ secrets.DASHLE_RELEASE_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.DASHLE_RELEASE_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.DASHLE_RELEASE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -n "$STORE_FILE" ] && [ -n "$STORE_PASSWORD" ] && [ -n "$KEY_ALIAS" ] && [ -n "$KEY_PASSWORD" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Release signing secrets are incomplete; Release APK/AAB will be skipped."
+          fi
       - name: Build release APK
+        if: steps.signing.outputs.available == 'true'
         env:
           DASHLE_RELEASE_STORE_FILE: ${{ secrets.DASHLE_RELEASE_STORE_FILE }}
           DASHLE_RELEASE_STORE_PASSWORD: ${{ secrets.DASHLE_RELEASE_STORE_PASSWORD }}
@@ -38,86 +56,56 @@ jobs:
           DASHLE_RELEASE_KEY_PASSWORD: ${{ secrets.DASHLE_RELEASE_KEY_PASSWORD }}
         run: ./gradlew :app:assembleRelease --no-daemon
       - name: Build release bundle
+        if: steps.signing.outputs.available == 'true'
         env:
           DASHLE_RELEASE_STORE_FILE: ${{ secrets.DASHLE_RELEASE_STORE_FILE }}
           DASHLE_RELEASE_STORE_PASSWORD: ${{ secrets.DASHLE_RELEASE_STORE_PASSWORD }}
           DASHLE_RELEASE_KEY_ALIAS: ${{ secrets.DASHLE_RELEASE_KEY_ALIAS }}
           DASHLE_RELEASE_KEY_PASSWORD: ${{ secrets.DASHLE_RELEASE_KEY_PASSWORD }}
         run: ./gradlew :app:bundleRelease --no-daemon
-      - name: Verify release outputs and reject secrets
+      - name: Verify source and generated artifacts for secrets
         shell: bash
         run: |
           set -euo pipefail
-
-          required_outputs=(
-            app/build/outputs/apk/debug/app-debug.apk
-            app/build/outputs/apk/release/app-release.apk
-            app/build/outputs/bundle/release/app-release.aab
-          )
-          for artifact in "${required_outputs[@]}"; do
-            if [ ! -s "$artifact" ]; then
-              echo "Missing or empty Android artifact: $artifact"
-              find app/build/outputs -maxdepth 4 -type f -printf '%p %s bytes\\n' 2>/dev/null || true
-              exit 1
-            fi
-          done
-
-          echo "Scanning tracked source/config files for high-confidence secret patterns..."
-
-          tracked_scan_files="$(
-            git ls-files | grep -Ev '^\\.github/workflows/|^android/app/build/|\\.md$' || true
-          )"
-
+          tracked_scan_files="$(git ls-files | grep -Ev '^\.github/workflows/|^android/app/build/|\.md$' || true)"
           provider_patterns=(
             'AIza[0-9A-Za-z_-]{20,}'
             'sk_live_[0-9A-Za-z]{16,}'
             'ghp_[0-9A-Za-z]{20,}'
+            'ghu_[0-9A-Za-z]{20,}'
+            'ghr_[0-9A-Za-z]{20,}'
             'github_pat_[0-9A-Za-z_]{20,}'
             '-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----'
           )
-
           if [ -n "$tracked_scan_files" ]; then
             for pattern in "${provider_patterns[@]}"; do
               if git grep --cached -I -n -E -- "$pattern" -- $tracked_scan_files; then
-                echo "High-confidence provider/private-key secret found in tracked source/configuration"
+                echo "High-confidence secret found in tracked source/configuration"
                 exit 1
               fi
             done
-
             password_literal_pattern='(^|[[:space:]])(password|passwd|secret|token)(_[A-Za-z0-9]+)?[[:space:]]*[:=][[:space:]]*["'\''"][^"'\''$\\x7B\\x7D]{8,}["'\''"]([[:space:]]*(#.*)?)$'
-            non_test_scan_files="$(printf '%s\\n' "$tracked_scan_files" | grep -Ev '^tests/' || true)"
+            non_test_scan_files="$(printf '%s\n' "$tracked_scan_files" | grep -Ev '^tests/' || true)"
             if [ -n "$non_test_scan_files" ] && git grep --cached -I -n -E -- "$password_literal_pattern" -- $non_test_scan_files; then
-              echo "Potential plaintext password/secret literal found in tracked non-test source/configuration"
+              echo "Potential plaintext secret literal found in tracked source/configuration"
               exit 1
             fi
           fi
-
-          echo "Inspecting generated APK/AAB artifacts separately from tracked source..."
-
-          for artifact in \
-            app/build/outputs/apk/debug/app-debug.apk \
-            app/build/outputs/apk/release/app-release.apk \
-            app/build/outputs/bundle/release/app-release.aab; do
-            if python3 -c 'import re,sys; d=open(sys.argv[1],"rb").read(); p=re.compile(rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----[A-Za-z0-9+/=\\\\r\\\\n]{32,}-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"); sys.exit(1 if p.search(d) else 0)' "$artifact"; then
-              echo "PEM private-key material detected in generated artifact: $artifact"
-              exit 1
+          for artifact in app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/release/app-release.apk app/build/outputs/bundle/release/app-release.aab; do
+            [ -s "$artifact" ] || continue
+            if ! python3 -c 'import re,sys; d=open(sys.argv[1],"rb").read(); p=re.compile(rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----[A-Za-z0-9+/=\\r\\n]{32,}-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"); sys.exit(1 if p.search(d) else 0)' "$artifact"; then
+              echo "PEM private-key material detected in generated artifact: $artifact"; exit 1
             fi
-
-            for label_and_pattern in \
-              'Google API key|AIza[0-9A-Za-z_-]{20,}' \
-              'Stripe live key|sk_live_[0-9A-Za-z]{16,}' \
-              'GitHub token|ghp_[0-9A-Za-z]{20,}' \
-              'GitHub fine-grained token|github_pat_[0-9A-Za-z_]{20,}'; do
-              label="${label_and_pattern%%|*}"
-              pattern="${label_and_pattern#*|}"
+            for label_and_pattern in 'Google API key|AIza[0-9A-Za-z_-]{20,}' 'Stripe live key|sk_live_[0-9A-Za-z]{16,}' 'GitHub token|gh[up]_[0-9A-Za-z]{20,}' 'GitHub refresh token|ghr_[0-9A-Za-z]{20,}' 'GitHub fine-grained token|github_pat_[0-9A-Za-z_]{20,}'; do
+              label="${label_and_pattern%%|*}"; pattern="${label_and_pattern#*|}"
               if strings -a "$artifact" | grep -E -q -- "$pattern"; then
-                echo "Observed $label-shaped text in generated binary: $artifact"
+                echo "::error::$label detected in generated artifact: $artifact"; exit 1
               fi
             done
           done
-
-          echo "Secret checks passed: tracked source/configuration is scanned for high-confidence secrets; generated binaries are inspected separately without treating binary strings as source secrets."
+          echo "Secret checks passed."
       - name: Verify release signatures
+        if: steps.signing.outputs.available == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -128,16 +116,26 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          stat -c '%n %s bytes' \
-            app/build/outputs/apk/debug/app-debug.apk \
-            app/build/outputs/apk/release/app-release.apk \
-            app/build/outputs/bundle/release/app-release.aab
-      - name: Upload Android artifacts
+          stat -c '%n %s bytes' app/build/outputs/apk/debug/app-debug.apk
+          if [ "${{ steps.signing.outputs.available }}" = "true" ]; then
+            stat -c '%n %s bytes' app/build/outputs/apk/release/app-release.apk
+            stat -c '%n %s bytes' app/build/outputs/bundle/release/app-release.aab
+          else
+            echo "Release APK: skipped (signing secrets unavailable)"
+            echo "Release AAB: skipped (signing secrets unavailable)"
+          fi
+      - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: dashle-android-build
+          name: dashle-android-debug
+          if-no-files-found: error
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+      - name: Upload Release APK and AAB
+        if: steps.signing.outputs.available == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dashle-android-release
           if-no-files-found: error
           path: |
-            android/app/build/outputs/apk/debug/app-debug.apk
             android/app/build/outputs/apk/release/app-release.apk
             android/app/build/outputs/bundle/release/app-release.aab

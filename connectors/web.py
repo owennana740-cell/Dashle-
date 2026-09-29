@@ -2,7 +2,7 @@ from __future__ import annotations
 import hashlib, json, os, secrets
 from datetime import datetime, timedelta
 from flask import Blueprint, jsonify, redirect, request, session, render_template
-from connectors.config import CONNECTOR_MAX_BY_TIER, WRITE_ACCESS_SECONDS
+from connectors.config import CONNECTOR_MAX_BY_TIER, WRITE_ACCESS_SECONDS, provider_configured
 from connectors.registry import get_connector, public_registry
 from connectors.security import consume_oauth_state, delete_credential, issue_oauth_state, load_credential, save_credential
 from database import ConnectorActionConfirmation, ConnectorAuditLog, ConnectorCredential, ConnectorPermission, MobileOAuthHandoff, OAuthState, session_base
@@ -50,6 +50,7 @@ def registry():
 def oauth_start(provider):
     uid=_uid()
     if not uid:return jsonify({"erreur":"Connexion requise."}),401
+    if not provider_configured(provider): return jsonify({"erreur":"Ce connecteur est désactivé ou non configuré."}),404
     c=get_connector(provider)
     if c.spec.auth_type!="oauth2":return jsonify({"erreur":"Ce fournisseur utilise une clé API personnelle."}),400
     if not _tier_ok(uid,provider):return jsonify({"erreur":"Ton forfait ne permet pas ce connecteur."}),403
@@ -58,6 +59,7 @@ def oauth_start(provider):
 
 @bp.get("/oauth/<provider>/callback")
 def oauth_callback(provider):
+    if not provider_configured(provider):return "Connecteur désactivé.",404
     state,code=request.args.get("state",""),request.args.get("code","")
     if not state or not code:return "OAuth invalide.",400
     with session_base() as db:
@@ -95,6 +97,7 @@ def mobile_consume():
 @bp.post("/api/connecteurs/<provider>/api-key")
 def api_key(provider):
     uid=_uid();data=request.get_json(silent=True) or {}
+    if not provider_configured(provider):return jsonify({"erreur":"Ce connecteur est désactivé ou non configuré."}),404
     if not uid or not _csrf():return jsonify({"erreur":"Requête non autorisée."}),403
     if get_connector(provider).spec.auth_type!="personal_api_key":return jsonify({"erreur":"Ce fournisseur utilise OAuth."}),400
     key=str(data.get("api_key","")).strip()
@@ -106,7 +109,9 @@ def api_key(provider):
 
 @bp.get("/api/connecteurs/<provider>/resources")
 def resources(provider):
-    uid=_uid();cred=load_credential(uid,provider) if uid else None
+    uid=_uid()
+    if not provider_configured(provider):return jsonify({"erreur":"Ce connecteur est désactivé ou non configuré."}),404
+    cred=load_credential(uid,provider) if uid else None
     if not cred:return jsonify({"erreur":"Connexion absente."}),404
     try:return jsonify({"resources":get_connector(provider).list_resources(cred["secret"])})
     except Exception:return jsonify({"erreur":"Impossible de lire les ressources."}),502
@@ -114,6 +119,7 @@ def resources(provider):
 @bp.post("/api/connecteurs/<provider>/permissions")
 def permissions(provider):
     uid=_uid();data=request.get_json(silent=True) or {}
+    if not provider_configured(provider):return jsonify({"erreur":"Ce connecteur est désactivé ou non configuré."}),404
     if not uid or not _csrf():return jsonify({"erreur":"Requête non autorisée."}),403
     level=data.get("access_level","read_only")
     if level not in {"read_only","actions_confirm"}:return jsonify({"erreur":"Niveau invalide."}),400
@@ -130,6 +136,7 @@ def permissions(provider):
 @bp.post("/api/connecteurs/<provider>/disconnect")
 def disconnect(provider):
     uid=_uid()
+    if not provider_configured(provider):return jsonify({"erreur":"Ce connecteur est désactivé ou non configuré."}),404
     if not uid or not _csrf():return jsonify({"erreur":"Requête non autorisée."}),403
     cred=load_credential(uid,provider)
     if cred:
@@ -141,6 +148,7 @@ def disconnect(provider):
 
 @bp.post("/api/connecteurs/<provider>/action")
 def action(provider):
+    if not provider_configured(provider):return jsonify({"erreur":"Ce connecteur est désactivé ou non configuré."}),404
     uid=_uid();data=request.get_json(silent=True) or {}
     if not uid or not _csrf():return jsonify({"erreur":"Requête non autorisée."}),403
     a=data.get("action","");params=data.get("parameters") or {};meta=next((x for x in get_connector(provider).spec.actions if x.id==a),None)

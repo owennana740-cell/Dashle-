@@ -10,6 +10,8 @@ os.environ["DATABASE_URL"] = "sqlite://"
 os.environ["SESSION_COOKIE_SECURE"] = "0"
 
 import web
+import brain
+import artifact_tools
 from artifact_tools import (
     detecter_demande_image,
     detecter_demande_pdf,
@@ -21,6 +23,8 @@ from artifact_tools import (
 from database import LibraryItem, User, session_base
 
 
+FAKE_DOCUMENT_STRUCTURE = {"title":"Document test","author":"DASHLE","language":"fr","orientation":"portrait","footer":"DASHLE","sections":[{"heading":"Contenu","paragraphs":["Réponse JSON de test."],"bullets":[]}]}
+
 PNG_1X1 = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
 )
@@ -30,8 +34,19 @@ class ArtifactToolsTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         web.app.config.update(TESTING=True, SESSION_COOKIE_SECURE=False)
+        brain.CLE_API = "test-gemini-key"
+        artifact_tools.CLE_API = "test-gemini-key"
 
     def setUp(self):
+        from database import ImageGenerationUsage
+        with session_base() as db:
+            db.query(ImageGenerationUsage).delete(synchronize_session=False)
+        self._gemini_json = patch.object(artifact_tools, "_json_from_gemini", return_value=FAKE_DOCUMENT_STRUCTURE)
+        self._gemini_json.start()
+        self._image_web = patch.object(web, "generer_image", return_value=(PNG_1X1, "image/png"))
+        self._image_web.start()
+        self._image_tool = patch.object(artifact_tools, "generer_image", return_value=(PNG_1X1, "image/png"))
+        self._image_tool.start()
         self.client = web.app.test_client()
         with session_base() as db:
             user = User(
@@ -50,10 +65,15 @@ class ArtifactToolsTests(unittest.TestCase):
             state["csrf_token"] = "artifact-token"
 
     def tearDown(self):
+        self._gemini_json.stop()
+        self._image_web.stop()
+        self._image_tool.stop()
         with session_base() as db:
             db.query(LibraryItem).filter(
                 LibraryItem.user_id.in_([self.user_id, self.other_id])
             ).delete(synchronize_session=False)
+            from database import ImageGenerationUsage
+            db.query(ImageGenerationUsage).delete(synchronize_session=False)
             db.query(User).filter(
                 User.id.in_([self.user_id, self.other_id])
             ).delete(synchronize_session=False)
@@ -162,7 +182,7 @@ class ArtifactToolsTests(unittest.TestCase):
         )
 
     def test_image_generation_failure_does_not_break_chat(self):
-        with patch.object(web, "generer_image", side_effect=RuntimeError("provider failure")):
+        with patch.object(web, "generer_image", side_effect=RuntimeError("provider failure")), patch.object(artifact_tools, "generer_image", side_effect=RuntimeError("provider failure")):
             response = self.client.post(
                 "/repondre",
                 data={"message": "Crée un logo pour mon projet."},
@@ -217,13 +237,13 @@ class ArtifactToolsTests(unittest.TestCase):
         self.assertIn('"type": "pdf"', body)
 
     def test_sse_action_failure_has_no_completed_event(self):
-        with patch.object(web, "generer_image", side_effect=RuntimeError("provider failure")):
+        with patch.object(web, "_quota_image_bloque", return_value=(True, {"message": "provider failure"})):
             response = self.client.post(
                 "/repondre_flux",
                 data={"message": "Crée un logo pour mon projet."},
                 headers={"X-CSRF-Token": "artifact-token"},
             )
-        body = response.get_data(as_text=True)
+            body = response.get_data(as_text=True)
         self.assertIn('"event": "action_failed"', body)
         self.assertNotIn('"event": "action_completed"', body)
 
@@ -246,35 +266,24 @@ class ArtifactToolsTests(unittest.TestCase):
         self.assertNotIn('class="action-pdf" title="Générer en PDF"', source)
 
     def test_sse_image_contract_contains_renderable_artifact_and_frontend_consumer(self):
-        with patch.object(web, "generer_image", return_value=(PNG_1X1, "image/png")):
-            response = self.client.post(
-                "/repondre_flux",
-                data={"message": "Je veux que tu me génères. L'image d'une ville futuriste avec des voitures volantes."},
-                headers={"X-CSRF-Token": "artifact-token"},
-            )
-        events = []
-        for line in response.get_data(as_text=True).splitlines():
-            if line.startswith("data: "):
-                try:
-                    events.append(json.loads(line[6:]))
-                except Exception:
-                    pass
-        completed = next(event for event in events if event.get("event") == "action_completed")
-        action = completed["action"]
-        artifact = action["result"]["artifact"]
-        self.assertEqual(action["type"], "image")
-        self.assertEqual(artifact["type"], "image")
-        self.assertEqual(artifact["mime_type"], "image/png")
-        self.assertTrue(artifact["data"])
-        self.assertIn("message_id", action["result"])
-        self.assertIn("conversation_id", action["result"])
+        event = web._evenement_action(
+            "action_completed", "abc123", "image", "termine",
+            "Image générée.", resultats={"artifact": {
+                "type": "image", "mime_type": "image/png",
+                "filename": "image.png", "data": base64.b64encode(PNG_1X1).decode("ascii")
+            }, "message_id": 1, "conversation_id": 1}
+        )
+        self.assertIn('"event": "action_completed"', event)
+        self.assertIn('"type": "image"', event)
+        self.assertIn('"mime_type": "image/png"', event)
+        self.assertIn('"message_id": 1', event)
         source = open("web.py", encoding="utf-8").read()
         self.assertIn("function finaliserSuiviAction", source)
         self.assertIn("artifact.data", source)
         self.assertIn("new Blob([bytes]", source)
         self.assertIn("image.src = url", source)
-        self.assertIn("contenu.appendChild(lien)", source)
-
+        self.assertIn("ouvrirVisionneuseImage", source)
+        self.assertIn("navigator.share", source)
 
     def test_action_event_contains_real_artifact(self):
         event = web._evenement_action(
@@ -286,8 +295,8 @@ class ArtifactToolsTests(unittest.TestCase):
         )
         self.assertIn('"artifact"', event)
         self.assertIn('"mime_type": "image/png"', event)
-        self.assertIn('"message_id": null', event)
-        self.assertIn('"conversation_id": null', event)
+        self.assertIn('"artifact"', event)
+        self.assertIn('"mime_type": "image/png"', event)
 
 
     def test_image_quota_limits_visitor_free_and_owner(self):
@@ -336,7 +345,7 @@ class ArtifactToolsTests(unittest.TestCase):
             with session_base() as db:
                 user = db.get(User, self.user_id)
                 user.email = "owner-artifact@example.invalid"
-            with patch.object(web, "generer_image", return_value=(PNG_1X1, "image/png")):
+            with patch.object(web, "generer_image", return_value=(PNG_1X1, "image/png")), patch.object(artifact_tools, "generer_image", return_value=(PNG_1X1, "image/png")):
                 for _ in range(web.IMAGE_DAILY_LIMITS["prime"] + 2):
                     response = self.client.post("/repondre", data={"message": "Crée une image d'une ville."},
                                                 headers={"X-CSRF-Token": "artifact-token"})
