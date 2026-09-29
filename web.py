@@ -93,7 +93,8 @@ def _debut_jour_suivant_utc():
     return maintenant.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
 
 def _cle_visiteur_image():
-    ip = request.remote_addr or "inconnu"
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    ip = (forwarded.split(",")[0].strip() if forwarded else request.remote_addr) or "inconnu"
     secret = app.config.get("SECRET_KEY", "dashle")
     return hashlib.sha256((str(secret) + "|image-quota|" + ip).encode("utf-8")).hexdigest()
 
