@@ -1969,7 +1969,7 @@ const VAD_DELAI_POST  = 350;   // ms de délai anti-écho après fin réelle de 
 let nbRelancesVocal = 0;
 let minuteurRelanceReco = null;
 const DELAI_RELANCE_RECO_INITIAL = 300;
-const DELAI_RELANCE_RECO_MAX = 5000;
+const DELAI_RELANCE_RECO_MAX = 2000;
 const MAX_PALIERS_RELANCE_RECO = 6;
 let nbFinsImmediatesVocal = 0;
 const DUREE_FIN_IMMEDIATE_VOCAL_MS = 1200;
@@ -2755,6 +2755,7 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
     recoResultatsAutorises = false;
     try {
       recoDebutEcouteMs = performance.now();
+      recoDebutEcouteMs = performance.now();
       reco.start();
       return true;
     } catch(e) {
@@ -2804,7 +2805,7 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
       btnVocal.classList.add('vocal-on');
       ouvrirModeVocal();
       interruptionDemandee = false;
-      await demarrerVAD();
+        // Aucun getUserMedia/AnalyserNode en parallèle de SpeechRecognition.
       recoResultatsAutorises = false;
       try { reco.stop(); } catch(e) {}
       setTimeout(demarrerEcouteVocale, 80);
@@ -2823,6 +2824,8 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
   };
 
   reco.onstart = function() {
+    recoDebutEcouteMs = performance.now();
+    if (modeActuel === 'vocal') journaliserEtatAudioReconnaissance();
     console.log('[DASHLE][SpeechRecognition] onstart', { mode: modeActuel, vocalActif: vocalActif });
     if (!transcriptionFinaleVocale.trim()) dernierIndexFinalVocal = 0;
     recoResultatsAutorises = !recoMutePendantTTS && !syntheseEnCours && !reponseEnCours;
@@ -2882,6 +2885,7 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
 
     if (resultatNonVide) {
       nbRelancesVocal = 0;
+      nbFinsImmediatesVocal = 0;
       if (minuteurRelanceReco !== null) {
         clearTimeout(minuteurRelanceReco);
         minuteurRelanceReco = null;
@@ -2919,6 +2923,23 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
       return;
     }
     const synthActive = ('speechSynthesis' in window) && window.speechSynthesis.speaking;
+    const finImmediate = modeActuel === 'vocal'
+      && !transcriptionFinaleVocale.trim()
+      && typeof dureeEcouteMs === 'number'
+      && dureeEcouteMs < DUREE_FIN_IMMEDIATE_VOCAL_MS;
+    if (finImmediate) {
+      nbFinsImmediatesVocal += 1;
+      console.warn('[DASHLE][SpeechRecognition] fin immédiate', {
+        compteur: nbFinsImmediatesVocal, dureeEcouteMs: dureeEcouteMs
+      });
+      if (nbFinsImmediatesVocal >= MAX_FINS_IMMEDIATES_VOCAL) {
+        vocalActif = false;
+        btnVocal.classList.remove('vocal-on', 'ecoute', 'parle');
+        afficherEtatVocal('erreur', "Je n'arrive pas à t'entendre, réessaie");
+        afficherStatutVocal("Je n'arrive pas à t'entendre, réessaie");
+        return;
+      }
+    }
     if (!interruptionDemandee && !reponseEnCours && !syntheseEnCours && !synthActive) {
       planifierRelanceReco();
     }
