@@ -2301,6 +2301,16 @@ function ouvrirVisionneuseImage(url, alt, prompt, filename) {
   viewer.hidden = false;
 }
 
+function afficherEchecImage(bloc, prompt, message) {
+  if (!bloc) return;
+  const zone=document.createElement('div'); zone.className='suivi-action-image-resultat';
+  const texte=document.createElement('div'); texte.textContent=message || 'La génération a échoué. Réessaie.'; zone.appendChild(texte);
+  const actions=document.createElement('div'); actions.className='suivi-action-image-actions';
+  const bouton=document.createElement('button'); bouton.className='primaire'; bouton.textContent='Réessayer';
+  bouton.onclick=function(){ genererArtifactDansChat(prompt || '', 'image'); };
+  actions.appendChild(bouton); zone.appendChild(actions); bloc.appendChild(zone);
+}
+
 function afficherQuotaImage(bloc, quota, prompt) {
   if (!bloc) return;
   const zone = document.createElement('div'); zone.className = 'suivi-action-image-resultat';
@@ -2438,7 +2448,7 @@ async function genererArtifactDansChat(texte, type) {
           if (!suivi) suivi = creerSuiviAction(ev.action);
           mettreAJourSuiviAction(suivi, ev.action);
           if (ev.action.result && ev.action.result.quota) afficherQuotaImage(suivi, ev.action.result.quota, texte);
-          else ajouterMessage(ev.action.error || 'La génération a échoué. Réessaie.', 'bot');
+          else afficherEchecImage(suivi, texte, ev.action.error);
         } else if (ev.event === 'action_cancelled') {
           if (!suivi) suivi = creerSuiviAction(ev.action);
           mettreAJourSuiviAction(suivi, ev.action);
@@ -3579,7 +3589,7 @@ form.addEventListener('submit', async function(e) {
         mettreAJourSuiviAction(suiviActionSse, ev.action);
         if (ev.event === 'action_failed') {
           if (ev.action.result && ev.action.result.quota) afficherQuotaImage(suiviActionSse, ev.action.result.quota, texte);
-          else ajouterMessage(ev.action.error || 'La génération a échoué. Réessaie.', 'bot');
+          else afficherEchecImage(suiviActionSse, texte, ev.action.error);
         }
         return true;
       }
