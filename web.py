@@ -38,6 +38,7 @@ from sqlalchemy.exc import IntegrityError
 from app import streamer_message, traiter_message, traiter_message_image
 from brain import emails_owner, niveau_abonnement, resumer_conversation
 from config import MAX_MESSAGES_CONTEXTE, MODELE_GEMINI
+from connectors.web import bp as connectors_bp
 from database import (
     AdminAuditLog, Conversation, ImageGenerationUsage, LibraryItem, Message, MessageFeedback, ShareLink, SubscriptionPayment, User,
     UserMemory, UserPreference, StatisticalAnalysisUsage, Project, ProjectFile, Reminder, UserPlugin,
@@ -68,6 +69,7 @@ app.config.update(
     PERMANENT_SESSION_LIFETIME=timedelta(days=3650),
 )
 initialiser_base()
+app.register_blueprint(connectors_bp)
 
 
 @app.after_request
