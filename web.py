@@ -2124,6 +2124,7 @@ function creerSuiviAction(action) {
   const titre = bloc.querySelector('.suivi-action-titre');
   titre.textContent = action.type === 'image' ? 'Génération d’image' : action.type === 'pdf' ? 'Génération de PDF' : 'Action Dashle';
   const annuler = bloc.querySelector('.suivi-action-annuler');
+  annuler.style.display = action.cancelable ? '' : 'none';
   annuler.addEventListener('click', function() {
     if (requeteActiveController) {
       try { requeteActiveController.abort(); } catch(e) {}
