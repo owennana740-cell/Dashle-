@@ -4889,15 +4889,29 @@ def repondre_flux():
                         "saved": saved,
                     }
 
+                message_action = (
+                    "Image générée par DASHLE."
+                    if action_type == "image"
+                    else "Voici le document PDF demandé."
+                )
+                message_id_action = None
+                if user_id and conserver and conversation_id:
+                    message_id_action = ajouter_message(
+                        user_id, conversation_id, message_action, "bot"
+                    )
                 yield _evenement_action(
                     "action_completed", action_id, action_type, "termine",
-                    "Image générée." if action_type == "image" else "PDF généré.",
+                    message_action,
                     resultats={"artifact": artifact},
                 )
-                yield "data: " + json.dumps(
-                    {"termine": True, "message_id": None, "action_id": action_id},
-                    ensure_ascii=False,
-                ) + "\n\n"
+                payload_fin = {
+                    "termine": True,
+                    "message_id": message_id_action,
+                    "action_id": action_id,
+                }
+                if not user_id:
+                    payload_fin["reponse"] = message_action
+                yield "data: " + json.dumps(payload_fin, ensure_ascii=False) + "\n\n"
                 return
 
             for morceau in streamer_message(
