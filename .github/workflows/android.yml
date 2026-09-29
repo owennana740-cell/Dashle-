@@ -98,20 +98,7 @@ jobs:
             app/build/outputs/apk/debug/app-debug.apk \
             app/build/outputs/apk/release/app-release.apk \
             app/build/outputs/bundle/release/app-release.aab; do
-            if python3 - "$artifact" <<'PY'
-import re
-import sys
-from pathlib import Path
-
-data = Path(sys.argv[1]).read_bytes()
-pem = re.compile(
-    rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"
-    rb"[A-Za-z0-9+/=\\r\\n]{32,}"
-    rb"-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"
-)
-raise SystemExit(1 if pem.search(data) else 0)
-PY
-            then
+            if python3 -c 'import re,sys; d=open(sys.argv[1],"rb").read(); p=re.compile(rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----[A-Za-z0-9+/=\\\\r\\\\n]{32,}-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"); sys.exit(1 if p.search(d) else 0)' "$artifact"; then
               echo "PEM private-key material detected in generated artifact: $artifact"
               exit 1
             fi
