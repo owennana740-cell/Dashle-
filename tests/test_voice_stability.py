@@ -47,8 +47,10 @@ class TestVoiceStability(unittest.TestCase):
     def test_retry_backoff_and_three_immediate_failures_exist(self):
         self.assertIn("const DELAI_RELANCE_RECO_INITIAL = 300;", self.source)
         self.assertIn("const DELAI_RELANCE_RECO_MAX = 2000;", self.source)
-        self.assertIn("const MAX_FINS_IMMEDIATES_VOCAL = 3;", self.source)
+        self.assertIn("const MAX_FINS_SANS_TRANSCRIPTION_VOCAL = 3;", self.source)
         self.assertIn("Je n'arrive pas à t'entendre, réessaie", self.source)
+        self.assertIn("fin sans transcription", self.source)
+        self.assertIn("error: e && e.error", self.source)
 
 
 if __name__ == "__main__":
