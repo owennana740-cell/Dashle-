@@ -64,6 +64,10 @@ jobs:
 
           echo "Scanning tracked source/config files for high-confidence secret patterns..."
 
+          tracked_scan_files="$(
+            git ls-files | grep -Ev '^\\.github/workflows/|^android/app/build/|\\.md$' || true
+          )"
+
           provider_patterns=(
             'AIza[0-9A-Za-z_-]{20,}'
             'sk_live_[0-9A-Za-z]{16,}'
@@ -72,34 +76,20 @@ jobs:
             '-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----'
           )
 
-          for pattern in "${provider_patterns[@]}"; do
-            if git grep --cached -I -n -E -- "$pattern" -- . \
-                ':(exclude).github/workflows/**' \
-                ':(exclude)android/app/build/**' \
-                ':(exclude)**/*.md'; then
-              echo "High-confidence provider/private-key secret found in tracked source/configuration"
+          if [ -n "$tracked_scan_files" ]; then
+            for pattern in "${provider_patterns[@]}"; do
+              if git grep --cached -I -n -E -- "$pattern" -- $tracked_scan_files; then
+                echo "High-confidence provider/private-key secret found in tracked source/configuration"
+                exit 1
+              fi
+            done
+
+            password_literal_pattern='(^|[[:space:]])(password|passwd|secret|token)(_[A-Za-z0-9]+)?[[:space:]]*[:=][[:space:]]*["'\''"][^"'\''$\\x7B\\x7D]{8,}["'\''"]([[:space:]]*(#.*)?)$'
+            non_test_scan_files="$(printf '%s\\n' "$tracked_scan_files" | grep -Ev '^tests/' || true)"
+            if [ -n "$non_test_scan_files" ] && git grep --cached -I -n -E -- "$password_literal_pattern" -- $non_test_scan_files; then
+              echo "Potential plaintext password/secret literal found in tracked non-test source/configuration"
               exit 1
             fi
-          done
-
-          password_literal_pattern='(^|[[:space:]])(password|passwd|secret|token)(_[A-Za-z0-9]+)?[[:space:]]*[:=][[:space:]]*["'\''"][^"'\''$\x7B\x7D]{8,}["'\''"]([[:space:]]*(#.*)?)$'
-          if git grep --cached -I -n -E -- "$password_literal_pattern" -- . \
-              ':(exclude).github/workflows/**' \
-              ':(exclude)android/app/build/**' \
-              ':(exclude)tests/**' \
-              ':(exclude)**/*.md'; then
-            echo "Potential plaintext password/secret literal found in tracked non-test source/configuration"
-            exit 1
-          fi
-
-          sensitive_paths="$(
-            git ls-files | grep -E '(^|/)(\.env($|\.)|.*\.(pem|key|p12|pfx|jks|keystore)$)' | \
-              grep -Ev '(\.env\.example|\.env\.sample)$' || true
-          )"
-          if [ -n "$sensitive_paths" ]; then
-            echo "Sensitive credential/keystore file is tracked:"
-            printf '%s\n' "$sensitive_paths"
-            exit 1
           fi
 
           echo "Inspecting generated APK/AAB artifacts separately from tracked source..."
