@@ -41,7 +41,8 @@ def plugins_page():
 @bp.get("/mes-connexions")
 def connections_page():
     return plugins_page()
-\n@bp.get("/api/connecteurs")
+
+@bp.get("/api/connecteurs")
 def registry():
     return jsonify({"connecteurs":public_registry()}) if _uid() else (jsonify({"erreur":"Connexion requise."}),401)
 
