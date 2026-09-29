@@ -22,6 +22,7 @@ from config import CLE_API, MODELE_GEMINI, MAX_MESSAGES_CONTEXTE
 from database import User, UserPlugin, session_base
 from datetime import datetime
 from temps_reel import contexte_temps_reel
+from connectors.gemini import preflight as preflight_connector
 
 # ---------------------------------------------------------------------------
 # Cache RAM pour charger_connaissances()
@@ -366,6 +367,11 @@ def streamer_a_lia(
     """
     if not CLE_API:
         yield "La clé Gemini n'est pas configurée. Ajoute GEMINI_API_KEY dans le fichier .env."
+        return
+
+    connector_result = preflight_connector(message, user_id)
+    if connector_result:
+        yield connector_result
         return
 
     consignes, longueur, niveau, nom_utilisateur = _reglages_reponse(user_id)
