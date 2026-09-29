@@ -2292,6 +2292,18 @@ async function genererArtifactDansChat(texte, type) {
           if (!suivi) suivi = creerSuiviAction(ev.action);
           mettreAJourSuiviAction(suivi, ev.action);
         }
+        if (ev.termine && ev.reponse && !estConnecte) {
+          try {
+            await fetch('/confirmer_message', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ reponse: ev.reponse }),
+              cache: 'no-store'
+            });
+          } catch (confirmationErreur) {
+            console.warn('[DASHLE] Résultat action non confirmé en session visiteur', confirmationErreur);
+          }
+        }
         if (ev.erreur) throw new Error(ev.erreur);
       }
     }
