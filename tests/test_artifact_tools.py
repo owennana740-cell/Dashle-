@@ -20,7 +20,7 @@ from artifact_tools import (
     rendre_pdf,
     structurer_document,
 )
-from database import LibraryItem, User, session_base
+from database import LibraryItem, User, VoiceTranscriptionUsage, session_base
 
 
 FAKE_DOCUMENT_STRUCTURE = {"title":"Document test","author":"DASHLE","language":"fr","orientation":"portrait","footer":"DASHLE","sections":[{"heading":"Contenu","paragraphs":["Réponse JSON de test."],"bullets":[]}]}
@@ -235,6 +235,34 @@ class ArtifactToolsTests(unittest.TestCase):
         self.assertIn('"message": "Génération du PDF…"', body)
         self.assertIn('"event": "action_completed"', body)
         self.assertIn('"type": "pdf"', body)
+
+    def test_transcription_audio_uses_mocked_gemini(self):
+        class FakeResponse:
+            status_code = 200
+            def json(self):
+                return {"candidates": [{"content": {"parts": [{"text": "Bonjour Dashle"}]}}]}
+        with patch.object(web.requests, "post", return_value=FakeResponse()) as appel:
+            response = self.client.post(
+                "/api/transcrire",
+                data={"audio": (io.BytesIO(b"fake-audio"), "test.webm")},
+                headers={"X-CSRF-Token": "artifact-token", "X-Dashle-Audio-Duration-Ms": "1000"},
+                content_type="multipart/form-data",
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["texte"], "Bonjour Dashle")
+        appel.assert_called_once()
+        with session_base() as db:
+            usage = db.query(VoiceTranscriptionUsage).filter_by(user_id=self.user_id).one()
+            self.assertEqual(usage.count, 1)
+
+    def test_transcription_audio_rejette_un_fichier_trop_gros(self):
+        response = self.client.post(
+            "/api/transcrire",
+            data={"audio": (io.BytesIO(b"x" * (5 * 1024 * 1024 + 1)), "test.webm")},
+            headers={"X-CSRF-Token": "artifact-token"},
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(response.status_code, 413)
 
     def test_sse_action_failure_has_no_completed_event(self):
         with patch.object(web, "_quota_image_bloque", return_value=(True, {"message": "provider failure"})):
