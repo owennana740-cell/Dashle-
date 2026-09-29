@@ -2,7 +2,7 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
 }
-val dashleBaseUrl = providers.gradleProperty("dashleBaseUrl").orElse("https://dashle.onrender.com/").get().replace("\\", "\\\\").replace(""", "\"")
+val dashleBaseUrl = providers.gradleProperty("dashleBaseUrl").orElse("https://dashle.onrender.com/").get().replace("\\", "\\\\").replace("\"", "\\\"")
 android {
     namespace = "com.dashle.app"
     compileSdk = 37
