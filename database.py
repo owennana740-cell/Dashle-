@@ -85,6 +85,21 @@ class StatisticalAnalysisUsage(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False, index=True)
 
+class VoiceTranscriptionUsage(Base):
+    __tablename__ = "voice_transcription_usage"
+    __table_args__ = (
+        UniqueConstraint("user_id", "usage_date", name="uq_voice_usage_user_day"),
+        UniqueConstraint("visitor_key", "usage_date", name="uq_voice_usage_visitor_day"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=True)
+    visitor_key: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    usage_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class ImageGenerationUsage(Base):
     __tablename__ = "image_generation_usage"
     __table_args__ = (
