@@ -233,5 +233,28 @@ class ArtifactToolsTests(unittest.TestCase):
         self.assertIn('"step": "annule"', event)
 
 
+    def test_web_contains_voice_deduplication_guards(self):
+        source = open("web.py", encoding="utf-8").read()
+        self.assertIn("transcriptionFinaleVocale.trim()", source)
+        self.assertIn("resultIndex repart à zéro", source)
+        self.assertIn("ne pas dupliquer les finals", source)
+
+    def test_web_does_not_add_pdf_button_to_normal_responses(self):
+        source = open("web.py", encoding="utf-8").read()
+        self.assertNotIn("class="action-pdf" title="Générer en PDF"", source)
+
+    def test_action_event_contains_real_artifact(self):
+        event = web._evenement_action(
+            "action_completed", "abc123", "image", "termine",
+            "Image générée.", resultats={"artifact": {
+                "type": "image", "mime_type": "image/png",
+                "filename": "image.png", "data": "AAAA"
+            }}
+        )
+        self.assertIn('"artifact"', event)
+        self.assertIn('"mime_type": "image/png"', event)
+
+
+
 if __name__ == "__main__":
     unittest.main()
