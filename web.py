@@ -2133,7 +2133,18 @@ function bloquerEnvoi(secondes) {
 function estDemandePdf(texte) {
   const normalise = String(texte || '').toLocaleLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
   return /\bpdf\b/.test(normalise)
-    && /\b(genere|generer|creer|cree|fais|faire|fabrique|telecharger|telecharge|produis|produire)\b/.test(normalise);
+    && /\b(genere|generer|creer|cree|fais|faire|fabrique|fabriquer|telecharger|telecharge|produis|produire|exporte|exporter|exportez|imprime|imprimer)\b/.test(normalise);
+}
+
+function extraireSujetPdf(texte) {
+  const normalise = String(texte || '').toLocaleLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const correspondance = normalise.match(/\bpdf\b([\s\S]*)$/);
+  if (!correspondance) return '';
+  return correspondance[1]
+    .replace(/^\s*(?:(?:au|en)\s+format\s+)?(?:(?:a\s+propos\s+(?:de|du|des|d')|concernant|sur|de|du|des|d'|le\s+sujet|sujet)\s*)?/, '')
+    .replace(/[?!.,;:\s]+$/g, '')
+    .replace(/\b(?:s'il\s+te\s+plait|svp|stp|merci)\b\s*$/g, '')
+    .trim();
 }
 
 function estPdfTempsReel(texte) {
@@ -2142,17 +2153,22 @@ function estPdfTempsReel(texte) {
 }
 
 async function genererPdfTempsReelDansChat(texte) {
+  const sujet = extraireSujetPdf(texte);
+  const pdfTempsReel = estPdfTempsReel(sujet);
   ajouterMessage(texte, 'user');
   champ.value = '';
   champ.style.height = 'auto';
+  if (!pdfTempsReel && !sujet) {
+    ajouterMessage('Oui, je peux générer un PDF. Sur quel sujet veux-tu que je le prépare ?', 'bot');
+    return;
+  }
   afficherReflexion();
 
   const donnees = new URLSearchParams({
     fuseau: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
     ville: '',
   });
-  const pdfTempsReel = estPdfTempsReel(texte);
-  if (!pdfTempsReel) donnees.set('sujet', texte);
+  if (!pdfTempsReel) donnees.set('sujet', sujet);
   const headers = { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' };
   if (estConnecte) headers['X-CSRF-Token'] = csrfToken;
 

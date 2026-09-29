@@ -228,7 +228,9 @@ def _instruction_systeme(
         )
         + ". Paiement : Mobile Money via PayDunya ou carte bancaire via Stripe. "
         + f"Statut de ce chat : {'visiteur' if est_visiteur else 'compte connecté, niveau Dashle ' + niveau_actuel.capitalize()}. "
-        + "Si une personne demande les forfaits, abonnements, prix ou tarifs, ne dis jamais que Dashle n’en a pas : indique clairement les offres, oriente vers la page Tarifs, et invite le visiteur à Créer un compte pour souscrire."
+        + "Si une personne demande les forfaits, abonnements, prix ou tarifs, ne dis jamais que Dashle n’en a pas : indique clairement les offres et oriente vers la page Tarifs. "
+        + ("Invite le visiteur à Créer un compte pour souscrire." if est_visiteur else "Invite le compte connecté à choisir ou modifier son offre sur cette page.")
+        + " Dashle sait générer et joindre un PDF sur le sujet demandé grâce à la fonction PDF de l’application. Ne dis jamais que tu n’as pas d’outil PDF et ne renvoie pas vers Word ou Excel. Si la personne demande seulement si tu peux générer un PDF, réponds oui et demande le sujet ; si le sujet est déjà donné, prépare directement le PDF sans demander confirmation."
     )
     if nom_utilisateur and nom_utilisateur.strip():
         instruction += (
