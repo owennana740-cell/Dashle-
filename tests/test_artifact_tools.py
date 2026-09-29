@@ -35,6 +35,7 @@ class ArtifactToolsTests(unittest.TestCase):
     def setUpClass(cls):
         web.app.config.update(TESTING=True, SESSION_COOKIE_SECURE=False)
         brain.CLE_API = "test-gemini-key"
+        web.CLE_API = "test-gemini-key"
         artifact_tools.CLE_API = "test-gemini-key"
 
     def setUp(self):
