@@ -793,6 +793,7 @@ header button.icon-btn:hover { background: rgba(255,255,255,0.18); }
 #banniere-visiteur a:hover { text-decoration: underline; }
 
 #banniere-visiteur .spacer { flex: 1; }
+#banniere-visiteur .visitor-actions { display:flex; align-items:center; gap:8px; margin-left:auto; }
 
 /* ---- Sidebar ---- */
 #voile {
@@ -1458,6 +1459,10 @@ button.envoyer,button.arreter { width:42px; height:42px; }
 @media (max-width: 600px) {
   .suggestions { grid-template-columns:1fr; }
   .message-wrap { max-width:92%; }
+  #banniere-visiteur { flex-wrap:wrap; align-items:center; }
+  #banniere-visiteur > span:first-child { flex:1 0 100%; min-width:0; }
+  #banniere-visiteur .visitor-actions { margin-left:0; }
+  #banniere-visiteur .spacer { display:none; }
 }
 """
 
@@ -1562,9 +1567,10 @@ if ('serviceWorker' in navigator) {
 <div id="banniere-visiteur" class="visible" role="complementary" aria-label="Mode visiteur">
   <span>💬 Tu discutes en mode visiteur. Ta conversation est temporaire.</span>
   <span class="spacer"></span>
-  <a href="{{ url_for('connexion') }}">Se connecter</a>
+  <span class="visitor-actions"><a href="{{ url_for('connexion') }}">Se connecter</a>
   <span style="margin:0 4px;">·</span>
   <a href="{{ url_for('inscription') }}">Créer un compte</a>
+</span>
 </div>
 {% elif not preferences.conserver_historique %}
 <div id="banniere-historique-temporaire" class="visible" role="status">
