@@ -1,7 +1,7 @@
 from __future__ import annotations
 import hashlib, json, os, secrets
 from datetime import datetime, timedelta
-from flask import Blueprint, jsonify, redirect, request, session
+from flask import Blueprint, jsonify, redirect, request, session, render_template
 from connectors.config import CONNECTOR_MAX_BY_TIER, WRITE_ACCESS_SECONDS
 from connectors.registry import get_connector, public_registry
 from connectors.security import consume_oauth_state, delete_credential, issue_oauth_state, load_credential, save_credential
@@ -29,7 +29,19 @@ def _perm(uid,provider):
         p=db.query(ConnectorPermission).filter_by(user_id=uid,provider=provider).one_or_none()
         return {"access_level":p.access_level if p else "read_only","resources":json.loads(p.resources or "[]") if p else [],"actions":json.loads(p.actions or "[]") if p else [],"write_until":p.write_until if p else None}
 
-@bp.get("/api/connecteurs")
+
+
+@bp.get("/plugins")
+def plugins_page():
+    uid=_uid()
+    if not uid:return redirect("/")
+    with session_base() as db: connected={x.provider for x in db.query(ConnectorCredential).filter_by(user_id=uid).all()}
+    return render_template("connecteurs.html",registry=public_registry(),connected=connected,csrf_token=session.get("csrf_token",""))
+
+@bp.get("/mes-connexions")
+def connections_page():
+    return plugins_page()
+\n@bp.get("/api/connecteurs")
 def registry():
     return jsonify({"connecteurs":public_registry()}) if _uid() else (jsonify({"erreur":"Connexion requise."}),401)
 
