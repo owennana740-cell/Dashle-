@@ -49,9 +49,18 @@ jobs:
         run: |
           set -euo pipefail
 
-          test -s app/build/outputs/apk/debug/app-debug.apk
-          test -s app/build/outputs/apk/release/app-release.apk
-          test -s app/build/outputs/bundle/release/app-release.aab
+          required_outputs=(
+            app/build/outputs/apk/debug/app-debug.apk
+            app/build/outputs/apk/release/app-release.apk
+            app/build/outputs/bundle/release/app-release.aab
+          )
+          for artifact in "${required_outputs[@]}"; do
+            if [ ! -s "$artifact" ]; then
+              echo "Missing or empty Android artifact: $artifact"
+              find app/build/outputs -maxdepth 4 -type f -printf '%p %s bytes\\n' 2>/dev/null || true
+              exit 1
+            fi
+          done
 
           echo "Scanning tracked source/config files for high-confidence secret patterns..."
 
