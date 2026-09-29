@@ -2075,7 +2075,8 @@ function ajouterReponse(texte, messageId) {
   afficherMarkdown(message, texte);
 
   let actionsHtml = '<div class="actions-reponse">'
-    + '<button type="button" class="action-copier" title="Copier" aria-label="Copier">' + iconeAction('copier') + '</button>';
+    + '<button type="button" class="action-copier" title="Copier" aria-label="Copier">' + iconeAction('copier') + '</button>'
+    + '<button type="button" class="action-pdf" title="Générer en PDF" aria-label="Générer en PDF">PDF</button>';
   if (estConnecte && preferencesVocales.conserver_historique) {
     actionsHtml += '<button type="button" class="action-feedback" data-valeur="positif" title="J\'aime" aria-label="J\'aime">' + iconeAction('positif') + '</button>'
       + '<button type="button" class="action-feedback" data-valeur="negatif" title="Je n\'aime pas" aria-label="Je n\'aime pas">' + iconeAction('negatif') + '</button>'
@@ -3070,6 +3071,10 @@ chat.addEventListener('click', async function(e) {
     await navigator.clipboard.writeText(code.textContent);
     bouton.textContent = 'Copié';
     setTimeout(function() { bouton.textContent = 'Copier le code'; }, 1200);
+
+  } else if (bouton.classList.contains('action-pdf')) {
+    const textePdf = (message.dataset.markdownSource || message.innerText || message.textContent || '').trim();
+    if (textePdf) await genererArtifactDansChat('Transforme ce contenu en PDF.\n\n' + textePdf, 'pdf');
 
   } else if (bouton.classList.contains('action-repondre')) {
     const texteCite = (message.dataset.markdownSource || message.innerText || message.textContent || '').trim();
