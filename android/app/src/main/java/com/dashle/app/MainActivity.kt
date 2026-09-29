@@ -30,11 +30,11 @@ private val OAUTH_HOSTS=setOf("github.com","accounts.google.com","api.notion.com
 class MainActivity : FragmentActivity() {
     private var webView:WebView?=null
     private var pendingHandoff:String?=null
-    private lateinit var mainExecutor:Executor
+    private lateinit var uiExecutor:Executor
 
     override fun onCreate(savedInstanceState:Bundle?) {
         super.onCreate(savedInstanceState)
-        mainExecutor=mainExecutor
+        uiExecutor=mainExecutor
         pendingHandoff=intent?.data?.getQueryParameter("handoff")
         setContent{Surface(modifier=Modifier.fillMaxSize()){DashleWebApp{webView=it}}}
         onBackPressedDispatcher.addCallback(this,object:OnBackPressedCallback(true){
@@ -90,7 +90,7 @@ class MainActivity : FragmentActivity() {
         @JavascriptInterface fun confirmAction(token:String){
             val current=webView?.url?.let{Uri.parse(it).host}
             if(current!=DASHLE_HOST)return
-            val prompt=BiometricPrompt(this@MainActivity,mainExecutor,object:BiometricPrompt.AuthenticationCallback(){
+            val prompt=BiometricPrompt(this@MainActivity,uiExecutor,object:BiometricPrompt.AuthenticationCallback(){
                 override fun onAuthenticationSucceeded(result:BiometricPrompt.AuthenticationResult){
                     super.onAuthenticationSucceeded(result)
                     webView?.post{webView?.evaluateJavascript("window.DashleAndroidBiometricResult && window.DashleAndroidBiometricResult(true,"+org.json.JSONObject.quote(token)+");",null)}
