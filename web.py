@@ -1964,6 +1964,136 @@ const VAD_SEUIL       = 0.06;  // RMS minimal pour "parole humaine"
 const VAD_DUREE_MIN   = 350;   // ms continus avant interruption (↑ anti-plosive)
 const VAD_COOLDOWN    = 1200;  // ms minimum entre deux interruptions
 const VAD_DELAI_POST  = 350;   // ms de délai anti-écho après fin réelle de synthèse
+const AUDIO_SECOURS_MAX_MS = 20000;
+const AUDIO_SECOURS_SILENCE_MS = 1200;
+let audioSecoursActif = false;
+let audioSecoursRecorder = null;
+let audioSecoursStream = null;
+let audioSecoursContext = null;
+let audioSecoursAnimation = null;
+let audioSecoursDebut = 0;
+let audioSecoursParoleDepuis = 0;
+
+function arreterSecoursAudio() {
+  if (audioSecoursAnimation) cancelAnimationFrame(audioSecoursAnimation);
+  audioSecoursAnimation = null;
+  if (audioSecoursRecorder && audioSecoursRecorder.state !== 'inactive') {
+    try { audioSecoursRecorder.stop(); } catch(e) {}
+  }
+  if (audioSecoursStream) audioSecoursStream.getTracks().forEach(function(t) { t.stop(); });
+  audioSecoursStream = null;
+  if (audioSecoursContext) { try { audioSecoursContext.close(); } catch(e) {} }
+  audioSecoursContext = null;
+  audioSecoursRecorder = null;
+  audioSecoursActif = false;
+}
+
+async function demarrerSecoursAudio() {
+  if (audioSecoursActif || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia
+      || typeof window.MediaRecorder !== 'function') {
+    return false;
+  }
+  try {
+    audioSecoursStream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 }
+    });
+    let mime = 'audio/webm';
+    if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+      mime = 'audio/webm;codecs=opus';
+    } else if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported('audio/ogg;codecs=opus')) {
+      mime = 'audio/ogg;codecs=opus';
+    }
+    const morceaux = [];
+    audioSecoursRecorder = new MediaRecorder(audioSecoursStream, { mimeType: mime });
+    audioSecoursActif = true;
+    audioSecoursDebut = performance.now();
+    audioSecoursParoleDepuis = 0;
+    afficherEtatVocal('ecoute', 'Enregistrement de secours…');
+    afficherStatutVocal("🎙️ Ton audio sera envoyé à Dashle pour transcription.");
+
+    audioSecoursRecorder.ondataavailable = function(e) {
+      if (e.data && e.data.size) morceaux.push(e.data);
+    };
+    audioSecoursRecorder.onstop = async function() {
+      const dureeMs = Math.min(AUDIO_SECOURS_MAX_MS, Math.round(performance.now() - audioSecoursDebut));
+      const blob = new Blob(morceaux, { type: mime });
+      arreterSecoursAudio();
+      if (!blob.size) {
+        afficherEtatVocal('erreur', "Je n'arrive pas à t'entendre, réessaie");
+        afficherStatutVocal("Je n'arrive pas à t'entendre, réessaie");
+        return;
+      }
+      const formAudio = new FormData();
+      formAudio.append('audio', blob, 'dashle-vocal.' + (mime.indexOf('ogg') >= 0 ? 'ogg' : 'webm'));
+      try {
+        const rep = await fetch('/api/transcrire', {
+          method: 'POST',
+          headers: { 'X-CSRF-Token': csrfToken, 'X-Dashle-Audio-Duration-Ms': String(dureeMs) },
+          body: formAudio,
+          credentials: 'same-origin'
+        });
+        const data = await rep.json();
+        if (!rep.ok || !data.texte) throw new Error(data.erreur || 'Transcription indisponible');
+        champ.value = data.texte;
+        champ.style.height = 'auto';
+        if (vocalActif) {
+          afficherEtatVocal('reflexion', 'Dashle réfléchit…');
+          afficherStatutVocal('');
+          try { form.requestSubmit(); } catch(e) { form.dispatchEvent(new Event('submit', {bubbles:true,cancelable:true})); }
+        }
+      } catch(e) {
+        console.warn('[DASHLE][AudioFallback] échec transcription', e && e.message);
+        afficherEtatVocal('erreur', "Je n'arrive pas à t'entendre, réessaie");
+        afficherStatutVocal(e && e.message ? e.message : "Je n'arrive pas à t'entendre, réessaie");
+      }
+    };
+
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (AudioCtx) {
+      audioSecoursContext = new AudioCtx();
+      const source = audioSecoursContext.createMediaStreamSource(audioSecoursStream);
+      const analyser = audioSecoursContext.createAnalyser();
+      analyser.fftSize = 1024;
+      source.connect(analyser);
+      const donnees = new Uint8Array(analyser.fftSize);
+      const verifier = function() {
+        if (!audioSecoursActif) return;
+        const elapsed = performance.now() - audioSecoursDebut;
+        analyser.getByteTimeDomainData(donnees);
+        let somme = 0;
+        for (let i = 0; i < donnees.length; i++) {
+          const x = (donnees[i] - 128) / 128;
+          somme += x * x;
+        }
+        const rms = Math.sqrt(somme / donnees.length);
+        if (rms > 0.035) {
+          audioSecoursParoleDepuis = performance.now();
+        } else if (audioSecoursParoleDepuis && performance.now() - audioSecoursParoleDepuis >= AUDIO_SECOURS_SILENCE_MS) {
+          try { audioSecoursRecorder.stop(); } catch(e) {}
+          return;
+        }
+        if (elapsed >= AUDIO_SECOURS_MAX_MS) {
+          try { audioSecoursRecorder.stop(); } catch(e) {}
+          return;
+        }
+        audioSecoursAnimation = requestAnimationFrame(verifier);
+      };
+      audioSecoursAnimation = requestAnimationFrame(verifier);
+    } else {
+      setTimeout(function() {
+        if (audioSecoursActif) { try { audioSecoursRecorder.stop(); } catch(e) {} }
+      }, AUDIO_SECOURS_MAX_MS);
+    }
+    audioSecoursRecorder.start(250);
+    return true;
+  } catch(e) {
+    arreterSecoursAudio();
+    console.warn('[DASHLE][AudioFallback] micro indisponible', e);
+    return false;
+  }
+}
+
+
 
 // Compteur de backoff pour les relances SpeechRecognition sans résultat.
 let nbRelancesVocal = 0;
@@ -2936,6 +3066,8 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
         compteur: nbFinsImmediatesVocal, dureeEcouteMs: dureeEcouteMs
       });
       if (nbFinsImmediatesVocal >= MAX_FINS_IMMEDIATES_VOCAL) {
+        nbFinsImmediatesVocal = 0;
+        if (demarrerSecoursAudio()) return;
         vocalActif = false;
         btnVocal.classList.remove('vocal-on', 'ecoute', 'parle');
         afficherEtatVocal('erreur', "Je n'arrive pas à t'entendre, réessaie");
@@ -2988,9 +3120,18 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
   };
 } else {
   btnMicro.style.display = 'none';
-  btnVocal.title = 'Reconnaissance vocale non prise en charge par ce navigateur';
-  btnVocal.addEventListener('click', function() {
-    afficherStatutVocal('La reconnaissance vocale DASHLE n’est pas prise en charge dans ce navigateur. Essaie Chrome sur Android ou Chrome/Edge sur ordinateur.');
+  btnVocal.title = 'Utiliser la transcription audio de secours';
+  btnVocal.addEventListener('click', async function() {
+    vocalActif = true;
+    modeActuel = 'vocal';
+    btnVocal.classList.add('vocal-on');
+    ouvrirModeVocal();
+    if (!await demarrerSecoursAudio()) {
+      vocalActif = false;
+      btnVocal.classList.remove('vocal-on', 'ecoute', 'parle');
+      afficherEtatVocal('erreur', "Je n'arrive pas à t'entendre, réessaie");
+      afficherStatutVocal("Je n'arrive pas à t'entendre, réessaie");
+    }
   });
 }
 
