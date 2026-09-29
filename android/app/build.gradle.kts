@@ -3,9 +3,31 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 val dashleBaseUrl = providers.gradleProperty("dashleBaseUrl").orElse("https://dashle.onrender.com/").get().replace("\\", "\\\\").replace("\"", "\\\"")
+
+val releaseStoreFile = providers.environmentVariable("DASHLE_RELEASE_STORE_FILE").orNull
+val releaseStorePassword = providers.environmentVariable("DASHLE_RELEASE_STORE_PASSWORD").orNull
+val releaseKeyAlias = providers.environmentVariable("DASHLE_RELEASE_KEY_ALIAS").orNull
+val releaseKeyPassword = providers.environmentVariable("DASHLE_RELEASE_KEY_PASSWORD").orNull
+val releaseSigningReady = listOf(releaseStoreFile, releaseStorePassword, releaseKeyAlias, releaseKeyPassword).all { !it.isNullOrBlank() }
+
 android {
     namespace = "com.dashle.app"
     compileSdk = 37
+    signingConfigs {
+        create("release") {
+            if (releaseSigningReady) {
+                storeFile = file(releaseStoreFile!!)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
+    buildTypes {
+        getByName("release") {
+            if (releaseSigningReady) signingConfig = signingConfigs.getByName("release")
+        }
+    }
     defaultConfig {
         applicationId = "com.dashle.app"
         minSdk = 26
