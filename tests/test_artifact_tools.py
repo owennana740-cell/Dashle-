@@ -317,6 +317,8 @@ class ArtifactToolsTests(unittest.TestCase):
             user = db.get(User, self.user_id)
             user.subscription_level = "prime"
             user.subscription_expires_at = None
+            from database import ImageGenerationUsage
+            db.query(ImageGenerationUsage).filter_by(user_id=self.user_id).delete(synchronize_session=False)
         with patch.object(web, "generer_image", return_value=(PNG_1X1, "image/png")):
             for _ in range(web.IMAGE_DAILY_LIMITS["prime"]):
                 response = self.client.post("/repondre", data={"message": "Crée une image d'une ville."},
