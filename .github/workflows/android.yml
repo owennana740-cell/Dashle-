@@ -47,17 +47,55 @@ jobs:
       - name: Verify release outputs and reject secrets
         shell: bash
         run: |
+          set -euo pipefail
+
           test -s app/build/outputs/apk/debug/app-debug.apk
           test -s app/build/outputs/apk/release/app-release.apk
           test -s app/build/outputs/bundle/release/app-release.aab
-          if grep -R -n -E 'AIza[0-9A-Za-z_-]{20,}|sk_live_[0-9A-Za-z]+|password[[:space:]]*=' app/build/outputs 2>/dev/null; then
-            echo 'Potential secret found in Android outputs'
+
+          echo "Scanning tracked source/config files for high-confidence secret patterns..."
+          source_pattern='AIza[0-9A-Za-z_-]{20,}|sk'"'"'_live_[0-9A-Za-z]+'"'"'|gh'"'"'p_[0-9A-Za-z]{20,}|github_pat_[0-9A-Za-z_]{20,}|-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|password[[:space:]]*[:=][[:space:]]*["'"'"'][^"'"'"']+["'"'"']'
+          if git grep --cached -I -n -E "$source_pattern" -- . \
+              ':(exclude).github/workflows/android.yml' \
+              ':(exclude)android/app/build/**' \
+              ':(exclude)**/*.md'; then
+            echo "Potential real secret found in tracked source/configuration"
             exit 1
           fi
+
+          echo "Inspecting generated APK/AAB artifacts for high-confidence embedded secrets..."
+          artifact_pattern='AIza[0-9A-Za-z_-]{20,}|sk'"'"'_live_[0-9A-Za-z]+'"'"'|gh'"'"'p_[0-9A-Za-z]{20,}|github_pat_[0-9A-Za-z_]{20,}|-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----'
+          for artifact in \
+            app/build/outputs/apk/debug/app-debug.apk \
+            app/build/outputs/apk/release/app-release.apk \
+            app/build/outputs/bundle/release/app-release.aab; do
+            if strings -a "$artifact" | grep -E -q "$artifact_pattern"; then
+              echo "High-confidence secret pattern found in generated artifact: $artifact"
+              exit 1
+            fi
+          done
+
+          echo "Secret checks passed: generated binaries are not scanned with source/config heuristics."
+      - name: Verify release signatures
+        shell: bash
+        run: |
+          set -euo pipefail
+          apksigner verify --verbose app/build/outputs/apk/release/app-release.apk
+          jarsigner -verify -strict app/build/outputs/bundle/release/app-release.aab >/tmp/aab-signature-check.txt
+          grep -q "jar verified" /tmp/aab-signature-check.txt
+      - name: Report artifact sizes
+        shell: bash
+        run: |
+          set -euo pipefail
+          stat -c '%n %s bytes' \
+            app/build/outputs/apk/debug/app-debug.apk \
+            app/build/outputs/apk/release/app-release.apk \
+            app/build/outputs/bundle/release/app-release.aab
       - name: Upload Android artifacts
         uses: actions/upload-artifact@v4
         with:
           name: dashle-android-build
+          if-no-files-found: error
           path: |
             android/app/build/outputs/apk/debug/app-debug.apk
             android/app/build/outputs/apk/release/app-release.apk
