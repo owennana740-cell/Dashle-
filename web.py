@@ -963,6 +963,27 @@ body.theme-sombre .msg.bot pre { border:1px solid #31483e; }
 }
 
 /* ---- Indicateur de réflexion ---- */
+.suivi-action {
+  margin: 6px 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--bordure);
+  border-radius: 12px;
+  background: var(--fond-secondaire);
+  max-width: min(520px, 92%);
+}
+.suivi-action-entete { display:flex; align-items:center; gap:8px; }
+.suivi-action-titre { flex:1; font-size:13px; color:var(--texte); }
+.suivi-action-indicateur { width:8px; height:8px; border-radius:50%; background:var(--vert); animation:pulse .9s infinite ease-in-out; }
+.suivi-action-indicateur.termine { animation:none; }
+.suivi-action-indicateur.echec { animation:none; background:#c0392b; }
+.suivi-action-indicateur.annule { animation:none; background:#888; }
+.suivi-action-annuler { border:0; background:transparent; color:var(--vert-fonce); cursor:pointer; font-size:12px; }
+.suivi-action-etapes { margin-top:7px; display:grid; gap:3px; font-size:12px; color:var(--texte-secondaire); }
+.suivi-action-etape.termine { color:var(--vert-fonce); }
+.suivi-action-etape.echec { color:#c0392b; }
+.suivi-action-etape.annule { color:var(--texte-secondaire); }
+.suivi-action-points { display:inline-block; letter-spacing:2px; animation:pulse .9s infinite ease-in-out; }
+.suivi-action-resultat { margin-top:8px; }
 .reflexion {
   display: flex;
   align-items: center;
@@ -2095,6 +2116,87 @@ function ajouterReponse(texte, messageId) {
   return enveloppe;
 }
 
+function creerSuiviAction(action) {
+  const bloc = document.createElement('div');
+  bloc.className = 'suivi-action';
+  bloc.dataset.actionId = action.id || '';
+  bloc.innerHTML = '<div class="suivi-action-entete"><span class="suivi-action-indicateur"></span><strong class="suivi-action-titre"></strong><button type="button" class="suivi-action-annuler" title="Annuler" aria-label="Annuler">Annuler</button></div><div class="suivi-action-etapes"></div>';
+  const titre = bloc.querySelector('.suivi-action-titre');
+  titre.textContent = action.type === 'image' ? 'Génération d’image' : action.type === 'pdf' ? 'Génération de PDF' : 'Action Dashle';
+  const annuler = bloc.querySelector('.suivi-action-annuler');
+  annuler.addEventListener('click', function() {
+    if (requeteActiveController) {
+      try { requeteActiveController.abort(); } catch(e) {}
+      requeteActiveController = null;
+    }
+    reponseEnCours = false;
+    mettreAJourSuiviAction(bloc, {
+      id: bloc.dataset.actionId, type: action.type, step: 'annule',
+      message: 'Action annulée', event: 'action_cancelled'
+    });
+  });
+  chat.appendChild(bloc);
+  chat.scrollTop = chat.scrollHeight;
+  return bloc;
+}
+
+function mettreAJourSuiviAction(bloc, action) {
+  if (!bloc) return;
+  const etapes = bloc.querySelector('.suivi-action-etapes');
+  const indicateur = bloc.querySelector('.suivi-action-indicateur');
+  const messages = { preparation: 'Préparation…', generation: 'Génération en cours…', finalisation: 'Finalisation…' };
+  const libelle = action.message || messages[action.step] || 'Action en cours…';
+  const lignes = Array.from(etapes.querySelectorAll('.suivi-action-etape'));
+  if (action.event === 'action_failed') {
+    indicateur.className = 'suivi-action-indicateur echec';
+    const ligne = document.createElement('div'); ligne.className = 'suivi-action-etape echec';
+    ligne.textContent = '✕ ' + libelle; etapes.appendChild(ligne);
+    return;
+  }
+  if (action.event === 'action_cancelled' || action.step === 'annule') {
+    indicateur.className = 'suivi-action-indicateur annule';
+    const ligne = document.createElement('div'); ligne.className = 'suivi-action-etape annule';
+    ligne.textContent = '— ' + libelle; etapes.appendChild(ligne);
+    return;
+  }
+  if (action.event === 'action_completed' || action.step === 'termine') {
+    indicateur.className = 'suivi-action-indicateur termine';
+    const ligne = document.createElement('div'); ligne.className = 'suivi-action-etape termine';
+    ligne.textContent = '✓ ' + libelle; etapes.appendChild(ligne);
+    return;
+  }
+  indicateur.className = 'suivi-action-indicateur actif';
+  const precedent = etapes.querySelector('.suivi-action-etape.actif');
+  if (precedent) precedent.classList.remove('actif');
+  const ligne = document.createElement('div'); ligne.className = 'suivi-action-etape actif';
+  ligne.innerHTML = '<span class="suivi-action-points">•••</span> <span></span>';
+  ligne.lastElementChild.textContent = libelle;
+  etapes.appendChild(ligne);
+  chat.scrollTop = chat.scrollHeight;
+}
+
+function finaliserSuiviAction(bloc, result) {
+  if (!bloc || !result) return;
+  if (result.artifact && result.artifact.data) {
+    const artifact = result.artifact;
+    const bytes = Uint8Array.from(atob(artifact.data), function(c){ return c.charCodeAt(0); });
+    const blob = new Blob([bytes], { type: artifact.mime_type || 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const contenu = document.createElement('div');
+    contenu.className = 'suivi-action-resultat';
+    if (artifact.type === 'image') {
+      const lien = document.createElement('a'); lien.href = url; lien.target = '_blank'; lien.rel = 'noopener noreferrer';
+      const image = document.createElement('img'); image.className = 'image-message'; image.src = url; image.alt = 'Image générée par DASHLE';
+      lien.appendChild(image); contenu.appendChild(lien);
+    } else {
+      const lien = document.createElement('a'); lien.href = url; lien.download = artifact.filename || 'dashle-document.pdf';
+      lien.className = 'pdf-telechargement-chat'; lien.textContent = 'Ouvrir / télécharger le PDF';
+      contenu.appendChild(lien);
+    }
+    bloc.appendChild(contenu);
+  }
+}
+
 function afficherReflexion() {
   const div = document.createElement('div');
   div.className = 'reflexion';
@@ -2152,31 +2254,51 @@ function estPdfTempsReel(texte) {
 }
 
 async function genererArtifactDansChat(texte, type) {
-  ajouterMessage(texte, 'user'); champ.value = ''; champ.style.height = 'auto'; afficherReflexion();
-  const headers = { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' };
+  ajouterMessage(texte, 'user'); champ.value = ''; champ.style.height = 'auto';
+  const headers = { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8', 'Accept': 'text/event-stream' };
   if (estConnecte) headers['X-CSRF-Token'] = csrfToken;
+  let suivi = null;
   try {
     const body = new URLSearchParams(); body.set('message', texte);
-    const res = await fetch('/repondre', { method: 'POST', headers, body: body.toString(), cache: 'no-store' });
-    const data = await res.json().catch(function(){ return {}; });
-    if (!res.ok) throw new Error(data.reponse || data.erreur || 'Génération impossible.');
-    const artifact = data.artifact;
-    if (!artifact || !artifact.data) throw new Error(data.reponse || 'Le fichier généré est indisponible.');
-    const bytes = Uint8Array.from(atob(artifact.data), function(c){ return c.charCodeAt(0); });
-    const blob = new Blob([bytes], { type: artifact.mime_type || (type === 'image' ? 'image/png' : 'application/pdf') });
-    const url = URL.createObjectURL(blob);
-    const enveloppe = ajouterReponse(data.reponse || (type === 'image' ? 'Image générée par DASHLE.' : 'PDF généré par DASHLE.'), '');
-    const message = enveloppe.querySelector('.msg');
-    const lien = document.createElement('a'); lien.href = url; lien.target = '_blank'; lien.rel = 'noopener noreferrer';
-    if (type === 'image') {
-      const image = document.createElement('img'); image.className = 'image-message'; image.src = url; image.alt = 'Image générée par DASHLE';
-      lien.appendChild(image); message.appendChild(document.createElement('br')); message.appendChild(lien);
-    } else {
-      lien.download = artifact.filename || 'dashle-document.pdf'; lien.className = 'pdf-telechargement-chat'; lien.textContent = 'Ouvrir / télécharger le PDF';
-      message.appendChild(document.createElement('br')); message.appendChild(lien);
+    const controller = new AbortController();
+    requeteActiveController = controller; reponseEnCours = true;
+    const res = await fetch('/repondre_flux', { method: 'POST', headers, body: body.toString(), cache: 'no-store', signal: controller.signal });
+    if (!res.ok || !res.body) throw new Error('Flux indisponible (' + res.status + ')');
+    const lecteur = res.body.getReader(); const decodeur = new TextDecoder(); let tampon = '';
+    while (true) {
+      const {done, value} = await lecteur.read();
+      if (done) break;
+      tampon += decodeur.decode(value, {stream:true});
+      const lignes = tampon.split('\n'); tampon = lignes.pop();
+      for (const ligne of lignes) {
+        if (!ligne.startsWith('data:')) continue;
+        let ev; try { ev = JSON.parse(ligne.slice(5).trim()); } catch(e) { continue; }
+        if (ev.event === 'action_started') {
+          suivi = creerSuiviAction(ev.action);
+          mettreAJourSuiviAction(suivi, ev.action);
+        } else if (ev.event === 'action_progress') {
+          if (!suivi) suivi = creerSuiviAction(ev.action);
+          mettreAJourSuiviAction(suivi, ev.action);
+        } else if (ev.event === 'action_completed') {
+          if (!suivi) suivi = creerSuiviAction(ev.action);
+          mettreAJourSuiviAction(suivi, ev.action);
+          finaliserSuiviAction(suivi, ev.action.result || {});
+        } else if (ev.event === 'action_failed') {
+          if (!suivi) suivi = creerSuiviAction(ev.action);
+          mettreAJourSuiviAction(suivi, ev.action);
+          ajouterMessage(ev.action.error || 'La génération a échoué. Réessaie.', 'bot');
+        } else if (ev.event === 'action_cancelled') {
+          if (!suivi) suivi = creerSuiviAction(ev.action);
+          mettreAJourSuiviAction(suivi, ev.action);
+        }
+        if (ev.erreur) throw new Error(ev.erreur);
+      }
     }
-  } catch (erreur) { ajouterMessage(erreur.message || 'La génération a échoué. Réessaie.', 'bot'); }
-  finally { retirerReflexion(); }
+  } catch (erreur) {
+    if (erreur.name !== 'AbortError') ajouterMessage(erreur.message || 'La génération a échoué. Réessaie.', 'bot');
+  } finally {
+    requeteActiveController = null; reponseEnCours = false;
+  }
 }
 
 async function genererPdfTempsReelDansChat(texte) {
