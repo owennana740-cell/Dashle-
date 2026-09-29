@@ -1830,6 +1830,11 @@ if ('serviceWorker' in navigator) {
       <div class="orbe-dashle"></div>
     </div>
     <div class="etat-vocal" id="etat-vocal">En attente</div>
+    <div id="secours-audio-vocal" class="secours-audio-vocal" hidden>
+      <p>Je n'arrive pas à t'entendre. Tu peux envoyer un court enregistrement à Dashle pour transcription.</p>
+      <p class="secours-audio-info">Ton audio sera envoyé à Dashle pour transcription et ne sera pas conservé.</p>
+      <button type="button" id="btn-envoyer-audio-vocal">Envoyer mon audio à Dashle</button>
+    </div>
   </div>
 </section>
 <form class="bas" id="form-message" autocomplete="off" method="post" action="">
@@ -1903,6 +1908,8 @@ const btnVocal    = document.getElementById('btn-vocal');
 const statutVocal = document.getElementById('statut-vocal');
 const modeVocalEl = document.getElementById('mode-vocal');
 const etatVocalEl = document.getElementById('etat-vocal');
+const secoursAudioVocalEl = document.getElementById('secours-audio-vocal');
+const btnEnvoyerAudioVocal = document.getElementById('btn-envoyer-audio-vocal');
 const apercuFichierEl = document.getElementById('apercu-fichier');
 let   apercuMedia     = document.getElementById('apercu-fichier-media');
 const apercuNom       = document.getElementById('apercu-fichier-nom');
@@ -2022,6 +2029,7 @@ async function demarrerSecoursAudio() {
       if (!blob.size) {
         afficherEtatVocal('erreur', "Je n'arrive pas à t'entendre, réessaie");
         afficherStatutVocal("Je n'arrive pas à t'entendre, réessaie");
+        if (secoursAudioVocalEl) secoursAudioVocalEl.hidden = false;
         return;
       }
       const formAudio = new FormData();
@@ -3089,7 +3097,6 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
       });
       if (nbFinsImmediatesVocal >= MAX_FINS_IMMEDIATES_VOCAL) {
         nbFinsImmediatesVocal = 0;
-        if (demarrerSecoursAudio()) return;
         vocalActif = false;
         btnVocal.classList.remove('vocal-on', 'ecoute', 'parle');
         afficherEtatVocal('erreur', "Je n'arrive pas à t'entendre, réessaie");
@@ -3423,7 +3430,22 @@ document.getElementById('reduire-vocal').addEventListener('click', function() {
   if (btnRouvrir) btnRouvrir.classList.toggle('actif', vocalActif);
 });
 
+if (btnEnvoyerAudioVocal) {
+  btnEnvoyerAudioVocal.addEventListener('click', async function() {
+    if (secoursAudioVocalEl) secoursAudioVocalEl.hidden = true;
+    afficherEtatVocal('ecoute', 'Enregistrement audio…');
+    afficherStatutVocal('Ton audio sera envoyé à Dashle pour transcription et ne sera pas conservé.');
+    const ok = await demarrerSecoursAudio();
+    if (!ok) {
+      if (secoursAudioVocalEl) secoursAudioVocalEl.hidden = false;
+      afficherEtatVocal('erreur', "Je n'arrive pas à t'entendre, réessaie");
+      afficherStatutVocal("Je n'arrive pas à t'entendre, réessaie");
+    }
+  });
+}
+
 document.getElementById('fermer-vocal').addEventListener('click', function() {
+  if (document.activeElement === this) { try { this.blur(); } catch(e) {} }
   vocalActif = false;
   btnVocal.classList.remove('vocal-on', 'ecoute', 'parle');
   try { reco && reco.stop(); } catch(e) {}
