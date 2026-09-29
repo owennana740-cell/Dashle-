@@ -32,9 +32,32 @@ def _normaliser(texte: str) -> str:
 
 
 def detecter_demande_pdf(message: str) -> bool:
+    """Détecte les demandes PDF courantes, sans dépendre du sujet demandé."""
     t = _normaliser(message)
-    return bool(re.search(r"\bpdf\b", t) and re.search(
-        r"\b(g[eé]n[eè]re?r?|cr[eé]e?r?|fais|faire|fabriquer|transforme?r?|pr[eé]pare?r?|mets?|mettre|produis|produire|convertis?|convertir|rapport|facture|cours|lettre|cv)\b",
+    if not re.search(r"\bpdf\b", t):
+        return False
+    return bool(re.search(
+        r"\b(g[eé]n[eè]re?r?|cr[eé]e?r?|fais(?:-moi)?|faire|fabriquer|"
+        r"transforme?r?|exporte?r?|pr[eé]pare?r?|mets?|mettre|produis|"
+        r"produire|convertis?|convertir|t[eé]l[eé]charge?r?|rapport|"
+        r"facture|cours|lettre|cv)\b",
+        t,
+    ))
+
+
+def demande_pdf_sans_sujet(message: str) -> bool:
+    """Retourne vrai pour une demande de PDF explicite mais sans sujet."""
+    t = _normaliser(message)
+    if not detecter_demande_pdf(message):
+        return False
+    # Les formulations de type « peux-tu me générer un PDF ? » ne donnent
+    # aucun contenu à produire : Dashle doit confirmer la capacité puis demander
+    # le sujet, au lieu de fabriquer un document arbitraire.
+    return bool(re.fullmatch(
+        r"(?:peux[- ]tu|pourrais[- ]tu|est[- ]ce que tu peux|"
+        r"tu peux|peut[- ]tu)\s+(?:me\s+)?(?:g[eé]n[eè]re?r?|"
+        r"cr[eé]e?r?|fais(?:-moi)?|faire|fabriquer|produire|produis)\s+"
+        r"(?:un|une)?\s*pdf(?:\s+s.?il te plait|\s+stp)?\s*\??",
         t,
     ))
 
