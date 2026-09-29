@@ -313,6 +313,21 @@ class ArtifactToolsTests(unittest.TestCase):
             self.assertEqual(response.status_code, 429)
             self.assertEqual(response.json["quota"]["niveau"], "free")
 
+        with session_base() as db:
+            user = db.get(User, self.user_id)
+            user.subscription_level = "prime"
+            user.subscription_expires_at = None
+        with patch.object(web, "generer_image", return_value=(PNG_1X1, "image/png")):
+            for _ in range(web.IMAGE_DAILY_LIMITS["prime"]):
+                response = self.client.post("/repondre", data={"message": "Crée une image d'une ville."},
+                                            headers={"X-CSRF-Token": "artifact-token"})
+                self.assertEqual(response.status_code, 200)
+            response = self.client.post("/repondre", data={"message": "Crée une image d'une ville."},
+                                        headers={"X-CSRF-Token": "artifact-token"})
+            self.assertEqual(response.status_code, 429)
+            self.assertEqual(response.json["quota"]["niveau"], "prime")
+
+        # OWNER_EMAILS reste exempt de quota.
         original = os.environ.get("OWNER_EMAILS")
         os.environ["OWNER_EMAILS"] = "owner-artifact@example.invalid"
         try:
