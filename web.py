@@ -284,7 +284,7 @@ _ROUTES_PUBLIQUES = {
     "confirmer_message", "nouvelle_conv", "conditions_utilisation",
     "health", "robots_txt", "sitemap_xml", "tarifs", "paiement_retour",
     "cinetpay_notification", "paydunya_callback", "stripe_webhook", "temps_reel", "api_temps_reel",
-    "telecharger_pdf_temps_reel", "admin", "executer_taches_cron",
+    "telecharger_pdf_temps_reel", "generer_image_endpoint", "generer_pdf_endpoint", "admin", "executer_taches_cron",
 }
 
 
@@ -4578,7 +4578,7 @@ def repondre():
             historique = _messages_conversation(user_id, conversation_id, limite=MAX_MESSAGES_CONTEXTE) if conversation_id else []
             contexte = "\n".join(str(x.get("texte", "")) for x in historique[-12:])
             raw, mime = generer_image(message, contexte)
-            saved = _enregistrer_element_bibliotheque(user_id, "image", "image-dashle", mime, raw, conversation_id) if user_id else False
+            saved = _enregistrer_element_bibliotheque(user_id, "image", "image-dashle", mime, raw, conversation_id) if user_id else False if user_id else False
             return jsonify({"reponse": "Image générée par DASHLE.", "artifact": {"type": "image", "mime_type": mime, "data": base64.b64encode(raw).decode("ascii"), "saved": saved}})
         except Exception as exc:
             app.logger.exception("Échec de génération d'image")
@@ -4771,8 +4771,6 @@ def confirmer_message():
 @app.route("/generer-image", methods=["POST"])
 def generer_image_endpoint():
     user_id = session.get("user_id")
-    if not user_id:
-        return jsonify({"erreur": "Connexion requise pour générer une image."}), 401
     donnees = request.get_json(silent=True) or request.form
     prompt = str(donnees.get("prompt", "")).strip()[:24000]
     if not prompt:
@@ -4792,8 +4790,6 @@ def generer_image_endpoint():
 @app.route("/generer-pdf", methods=["POST"])
 def generer_pdf_endpoint():
     user_id = session.get("user_id")
-    if not user_id:
-        return jsonify({"erreur": "Connexion requise pour générer un document."}), 401
     donnees = request.get_json(silent=True) or request.form
     demande = str(donnees.get("demande", "")).strip()[:24000]
     if not demande:
@@ -4808,7 +4804,7 @@ def generer_pdf_endpoint():
             image_bytes, _ = generer_image(demande, contexte)
         raw = rendre_pdf(structure, image_bytes)
         titre = secure_filename(structure["title"])[:120] or "dashle-document"
-        saved = _enregistrer_element_bibliotheque(user_id, "pdf", structure["title"], "application/pdf", raw, conversation_id)
+        saved = _enregistrer_element_bibliotheque(user_id, "pdf", structure["title"], "application/pdf", raw, conversation_id) if user_id else False
         return jsonify({"ok": True, "mime_type": "application/pdf", "filename": titre + ".pdf", "data": base64.b64encode(raw).decode("ascii"), "saved": saved})
     except Exception as exc:
         app.logger.exception("Échec endpoint génération PDF")
