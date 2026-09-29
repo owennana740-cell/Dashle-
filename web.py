@@ -4757,6 +4757,7 @@ def _evenement_action(nom_evenement, action_id, action_type, etape, message,
             "type": action_type,
             "step": etape,
             "message": message,
+            "cancelable": False,
         },
     }
     if resultats is not None:
