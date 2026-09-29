@@ -241,7 +241,7 @@ class ArtifactToolsTests(unittest.TestCase):
 
     def test_web_does_not_add_pdf_button_to_normal_responses(self):
         source = open("web.py", encoding="utf-8").read()
-        self.assertNotIn("class="action-pdf" title="Générer en PDF"", source)
+        self.assertNotIn('class="action-pdf" title="Générer en PDF"', source)
 
     def test_action_event_contains_real_artifact(self):
         event = web._evenement_action(
