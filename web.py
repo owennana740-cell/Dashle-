@@ -1505,6 +1505,27 @@ video#apercu-fichier-media { object-fit: contain; }
 .actions-reponse button:hover { border-color:var(--bordure); }
 .image-message-lien { display:block; margin-top:4px; }
 .image-message { display:block; max-width:min(280px,70vw); max-height:320px; object-fit:contain; border-radius:12px; cursor:zoom-in; }
+.suivi-action.image-generation { width:min(100%,560px); }
+.suivi-action-image-progress { position:relative; overflow:hidden; margin:12px 0 4px; padding:15px 16px; border:1px solid rgba(16,163,127,.18); border-radius:16px; background:linear-gradient(135deg,rgba(34,197,94,.08),rgba(59,130,246,.09)); }
+.suivi-action-image-progress::before { content:""; position:absolute; inset:0 auto 0 0; width:42%; background:linear-gradient(90deg,rgba(34,197,94,.0),rgba(34,197,94,.20),rgba(59,130,246,.22),rgba(59,130,246,0)); transform:translateX(-120%); animation:dashleImageSweep 2.1s ease-in-out infinite; }
+.suivi-action-image-progress .titre { position:relative; font-weight:700; color:var(--texte); }
+.suivi-action-image-progress .sous-titre { position:relative; margin-top:4px; color:var(--muted); font-size:13px; }
+.suivi-action-image-progress .barre { position:relative; height:5px; margin-top:13px; overflow:hidden; border-radius:99px; background:rgba(16,163,127,.10); }
+.suivi-action-image-progress .barre::after { content:""; display:block; width:38%; height:100%; border-radius:inherit; background:linear-gradient(90deg,#22c55e,#3b82f6); animation:dashleImageBar 1.8s ease-in-out infinite; }
+.suivi-action-image-resultat { margin-top:12px; }
+.suivi-action-image-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+.suivi-action-image-actions button,.suivi-action-image-actions a { display:inline-flex; align-items:center; justify-content:center; min-height:38px; padding:8px 12px; border:1px solid var(--bordure); border-radius:10px; background:var(--fond); color:var(--texte); text-decoration:none; font:600 13px/1.2 inherit; cursor:pointer; }
+.suivi-action-image-actions button.primaire,.suivi-action-image-actions a.primaire { border-color:transparent; color:#fff; background:linear-gradient(110deg,#22c55e,#3b82f6); }
+.image-viewer { position:fixed; inset:0; z-index:3000; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:12px; background:rgba(5,16,13,.94); }
+.image-viewer[hidden] { display:none; }
+.image-viewer img { width:auto; max-width:100%; max-height:calc(100vh - 132px); object-fit:contain; border-radius:12px; }
+.image-viewer-bar { width:min(100%,720px); display:flex; flex-wrap:wrap; gap:8px; justify-content:center; margin-top:12px; }
+.image-viewer-bar button { min-height:42px; padding:9px 13px; border:1px solid rgba(255,255,255,.18); border-radius:11px; background:rgba(255,255,255,.09); color:#fff; font:600 13px/1.2 inherit; cursor:pointer; }
+.image-viewer-bar button.primaire { background:linear-gradient(110deg,#22c55e,#3b82f6); border-color:transparent; }
+.image-viewer-fermer { position:absolute; top:max(12px,env(safe-area-inset-top)); right:12px; min-width:42px; min-height:42px; }
+@keyframes dashleImageSweep { to { transform:translateX(330%); } }
+@keyframes dashleImageBar { 0% { transform:translateX(-150%); } 50% { transform:translateX(120%); } 100% { transform:translateX(300%); } }
+@media (max-width:420px) { .image-viewer { padding:8px; } .image-viewer img { max-height:calc(100vh - 150px); } .image-viewer-bar { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); width:100%; } .image-viewer-bar button { width:100%; } }
 .bas { gap:10px !important; padding:12px 14px max(12px,env(safe-area-inset-bottom)) !important; border:1px solid var(--bordure) !important; border-radius:24px; margin-top:8px; margin-bottom:14px; box-shadow:0 8px 28px rgba(16,55,41,.08); }
 .bas textarea { min-height:46px !important; padding:12px 15px !important; border-radius:16px !important; }
 .btn-attach { border:1px solid var(--bordure); background:var(--fond-secondaire); }
@@ -2195,7 +2216,7 @@ function ajouterReponse(texte, messageId) {
 
 function creerSuiviAction(action) {
   const bloc = document.createElement('div');
-  bloc.className = 'suivi-action';
+  bloc.className = 'suivi-action' + (action.type === 'image' ? ' image-generation' : '');
   bloc.dataset.actionId = action.id || '';
   bloc.innerHTML = '<div class="suivi-action-entete"><span class="suivi-action-indicateur"></span><strong class="suivi-action-titre"></strong><button type="button" class="suivi-action-annuler" title="Annuler" aria-label="Annuler">Annuler</button></div><div class="suivi-action-etapes"></div>';
   const titre = bloc.querySelector('.suivi-action-titre');
@@ -2222,9 +2243,8 @@ function mettreAJourSuiviAction(bloc, action) {
   if (!bloc) return;
   const etapes = bloc.querySelector('.suivi-action-etapes');
   const indicateur = bloc.querySelector('.suivi-action-indicateur');
-  const messages = { preparation: 'Préparation…', generation: 'Génération en cours…', finalisation: 'Finalisation…' };
+  const messages = { preparation: 'Ton idée prend forme…', generation: 'Création d’une première ébauche…', finalisation: 'Finitions…' };
   const libelle = action.message || messages[action.step] || 'Action en cours…';
-  const lignes = Array.from(etapes.querySelectorAll('.suivi-action-etape'));
   if (action.event === 'action_failed') {
     indicateur.className = 'suivi-action-indicateur echec';
     const ligne = document.createElement('div'); ligne.className = 'suivi-action-etape echec';
@@ -2234,23 +2254,64 @@ function mettreAJourSuiviAction(bloc, action) {
   if (action.event === 'action_cancelled' || action.step === 'annule') {
     indicateur.className = 'suivi-action-indicateur annule';
     const ligne = document.createElement('div'); ligne.className = 'suivi-action-etape annule';
-    ligne.textContent = '— ' + libelle; etapes.appendChild(ligne);
-    return;
+    ligne.textContent = '— ' + libelle; etapes.appendChild(ligne); return;
   }
   if (action.event === 'action_completed' || action.step === 'termine') {
     indicateur.className = 'suivi-action-indicateur termine';
     const ligne = document.createElement('div'); ligne.className = 'suivi-action-etape termine';
-    ligne.textContent = '✓ ' + libelle; etapes.appendChild(ligne);
-    return;
+    ligne.textContent = '✓ ' + libelle; etapes.appendChild(ligne); return;
   }
   indicateur.className = 'suivi-action-indicateur actif';
   const precedent = etapes.querySelector('.suivi-action-etape.actif');
   if (precedent) precedent.classList.remove('actif');
-  const ligne = document.createElement('div'); ligne.className = 'suivi-action-etape actif';
-  ligne.innerHTML = '<span class="suivi-action-points">•••</span> <span></span>';
-  ligne.lastElementChild.textContent = libelle;
-  etapes.appendChild(ligne);
+  if (action.type === 'image') {
+    let carte = bloc.querySelector('.suivi-action-image-progress');
+    if (!carte) { carte = document.createElement('div'); carte.className = 'suivi-action-image-progress'; etapes.appendChild(carte); }
+    carte.innerHTML = '<div class="titre"></div><div class="sous-titre">Une image originale se prépare.</div><div class="barre" aria-hidden="true"></div>';
+    carte.querySelector('.titre').textContent = libelle;
+  } else {
+    const ligne = document.createElement('div'); ligne.className = 'suivi-action-etape actif';
+    ligne.innerHTML = '<span class="suivi-action-points">•••</span> <span></span>';
+    ligne.lastElementChild.textContent = libelle; etapes.appendChild(ligne);
+  }
   chat.scrollTop = chat.scrollHeight;
+}
+
+function ouvrirVisionneuseImage(url, alt, prompt, filename) {
+  let viewer = document.getElementById('dashle-image-viewer');
+  if (!viewer) {
+    viewer = document.createElement('div'); viewer.id = 'dashle-image-viewer'; viewer.className = 'image-viewer'; viewer.hidden = true;
+    viewer.innerHTML = '<button type="button" class="image-viewer-fermer" aria-label="Fermer">×</button><img alt=""><div class="image-viewer-bar"><button type="button" class="primaire" data-action="download">Télécharger</button><button type="button" data-action="share">Partager</button><button type="button" data-action="retry">Régénérer</button><button type="button" data-action="close">Fermer</button></div>';
+    document.body.appendChild(viewer);
+    viewer.querySelector('[data-action="close"]').addEventListener('click', function(){ viewer.hidden = true; });
+    viewer.querySelector('.image-viewer-fermer').addEventListener('click', function(){ viewer.hidden = true; });
+    viewer.addEventListener('click', function(e){ if(e.target === viewer) viewer.hidden = true; });
+  }
+  const image = viewer.querySelector('img'); image.src = url; image.alt = alt || 'Image générée par DASHLE';
+  viewer.querySelector('[data-action="download"]').onclick = function(){ const a=document.createElement('a'); a.href=url; a.download=filename || 'image-dashle.png'; document.body.appendChild(a); a.click(); a.remove(); };
+  viewer.querySelector('[data-action="share"]').onclick = async function(){
+    try {
+      if (navigator.share) { await navigator.share({title:'Image générée par DASHLE', text: alt || 'Image générée par DASHLE', url:url}); return; }
+    } catch(e) { if (e && e.name === 'AbortError') return; }
+    try { await navigator.clipboard.writeText(url); this.textContent='Lien copié'; setTimeout(()=>{this.textContent='Partager';},1600); }
+    catch(e) { window.prompt('Copie ce lien :', url); }
+  };
+  viewer.querySelector('[data-action="retry"]').onclick = function(){ viewer.hidden = true; if(prompt) genererArtifactDansChat(prompt, 'image'); };
+  viewer.hidden = false;
+}
+
+function afficherQuotaImage(bloc, quota, prompt) {
+  if (!bloc) return;
+  const zone = document.createElement('div'); zone.className = 'suivi-action-image-resultat';
+  const reset = quota && quota.reset_at ? new Date(quota.reset_at) : null;
+  const heure = reset && !isNaN(reset.getTime()) ? reset.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : '00:00';
+  const texte = (quota && quota.message ? quota.message : 'Tu as utilisé tes images du jour. Elles reviennent à HH:MM').replace('HH:MM', heure);
+  const p = document.createElement('div'); p.textContent = texte; zone.appendChild(p);
+  const actions = document.createElement('div'); actions.className = 'suivi-action-image-actions';
+  const bouton = document.createElement('button'); bouton.className='primaire';
+  const visiteur = quota && quota.niveau === 'visitor'; bouton.textContent = visiteur ? 'Créer un compte' : 'Voir les forfaits';
+  bouton.onclick = function(){ window.location.href = visiteur ? '/inscription' : '/tarifs'; };
+  actions.appendChild(bouton); zone.appendChild(actions); bloc.appendChild(zone);
 }
 
 function finaliserSuiviAction(bloc, result) {
@@ -2262,32 +2323,20 @@ function finaliserSuiviAction(bloc, result) {
     if (artifact.type === 'image' && !mime.startsWith('image/')) throw new Error('MIME image invalide');
     const blob = new Blob([bytes], { type: mime });
     const url = URL.createObjectURL(blob);
-    const contenu = document.createElement('div');
-    contenu.className = 'suivi-action-resultat';
-    contenu.dataset.artifactType = artifact.type || '';
+    const contenu = document.createElement('div'); contenu.className = 'suivi-action-resultat suivi-action-image-resultat';
     if (artifact.type === 'image') {
-      const lien = document.createElement('a');
-      lien.className = 'image-message-lien';
-      lien.href = url; lien.target = '_blank'; lien.rel = 'noopener noreferrer';
-      const image = document.createElement('img');
-      image.className = 'image-message'; image.src = url;
-      image.alt = 'Image générée par DASHLE';
-      image.onload = function(){ chat.scrollTop = chat.scrollHeight; };
-      image.onerror = function(){ contenu.dataset.imageError = 'true'; image.alt = 'Image générée indisponible'; };
+      const lien = document.createElement('a'); lien.className = 'image-message-lien'; lien.href = url; lien.setAttribute('aria-label','Ouvrir l’image générée');
+      const image = document.createElement('img'); image.className = 'image-message'; image.src = url; image.alt = 'Image générée par DASHLE';
+      image.onclick = function(e){ e.preventDefault(); ouvrirVisionneuseImage(url, image.alt, bloc.dataset.prompt || '', artifact.filename || 'image-dashle.png'); };
+      image.onerror = function(){ contenu.dataset.imageError='true'; image.alt='Image générée indisponible'; };
       lien.appendChild(image); contenu.appendChild(lien);
     } else {
-      const lien = document.createElement('a'); lien.href = url; lien.download = artifact.filename || 'dashle-document.pdf';
-      lien.className = 'pdf-telechargement-chat'; lien.textContent = 'Ouvrir / télécharger le PDF';
-      contenu.appendChild(lien);
+      const lien = document.createElement('a'); lien.href=url; lien.download=artifact.filename || 'dashle-document.pdf'; lien.className='pdf-telechargement-chat'; lien.textContent='Ouvrir / télécharger le PDF'; contenu.appendChild(lien);
     }
-    bloc.appendChild(contenu);
-    chat.scrollTop = chat.scrollHeight;
-  } catch (erreur) {
+    bloc.appendChild(contenu); chat.scrollTop=chat.scrollHeight;
+  } catch(erreur) {
     console.error('[DASHLE] Artefact reçu mais rendu impossible', erreur);
-    const erreurEl = document.createElement('div');
-    erreurEl.className = 'suivi-action-etape echec';
-    erreurEl.textContent = '✕ L’image générée n’a pas pu être affichée.';
-    bloc.appendChild(erreurEl);
+    const erreurEl=document.createElement('div'); erreurEl.className='suivi-action-etape echec'; erreurEl.textContent='✕ L’image générée n’a pas pu être affichée.'; bloc.appendChild(erreurEl);
   }
 }
 
@@ -2375,6 +2424,7 @@ async function genererArtifactDansChat(texte, type) {
         let ev; try { ev = JSON.parse(ligne.slice(5).trim()); } catch(e) { continue; }
         if (ev.event === 'action_started') {
           suivi = creerSuiviAction(ev.action);
+          suivi.dataset.prompt = texte;
           mettreAJourSuiviAction(suivi, ev.action);
         } else if (ev.event === 'action_progress') {
           if (!suivi) suivi = creerSuiviAction(ev.action);
@@ -2386,7 +2436,8 @@ async function genererArtifactDansChat(texte, type) {
         } else if (ev.event === 'action_failed') {
           if (!suivi) suivi = creerSuiviAction(ev.action);
           mettreAJourSuiviAction(suivi, ev.action);
-          ajouterMessage(ev.action.error || 'La génération a échoué. Réessaie.', 'bot');
+          if (ev.action.result && ev.action.result.quota) afficherQuotaImage(suivi, ev.action.result.quota, texte);
+          else ajouterMessage(ev.action.error || 'La génération a échoué. Réessaie.', 'bot');
         } else if (ev.event === 'action_cancelled') {
           if (!suivi) suivi = creerSuiviAction(ev.action);
           mettreAJourSuiviAction(suivi, ev.action);
@@ -3504,6 +3555,7 @@ form.addEventListener('submit', async function(e) {
         if (reponseElement) { reponseElement.remove(); reponseElement = null; messageElement = null; }
         retirerReflexion();
         suiviActionSse = creerSuiviAction(ev.action);
+        suiviActionSse.dataset.prompt = texte;
         mettreAJourSuiviAction(suiviActionSse, ev.action);
         return true;
       }
@@ -3524,7 +3576,10 @@ form.addEventListener('submit', async function(e) {
         actionArtifactSse = true;
         if (!suiviActionSse) { retirerReflexion(); suiviActionSse = creerSuiviAction(ev.action); }
         mettreAJourSuiviAction(suiviActionSse, ev.action);
-        if (ev.event === 'action_failed') ajouterMessage(ev.action.error || 'La génération a échoué. Réessaie.', 'bot');
+        if (ev.event === 'action_failed') {
+          if (ev.action.result && ev.action.result.quota) afficherQuotaImage(suiviActionSse, ev.action.result.quota, texte);
+          else ajouterMessage(ev.action.error || 'La génération a échoué. Réessaie.', 'bot');
+        }
         return true;
       }
       return false;
