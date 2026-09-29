@@ -54,30 +54,47 @@ jobs:
           test -s app/build/outputs/bundle/release/app-release.aab
 
           echo "Scanning tracked source/config files for high-confidence secret patterns..."
-          provider_pattern='AIza[0-9A-Za-z_-]{20,}|sk'"'"'_live_[0-9A-Za-z]+'"'"'|gh'"'"'p_[0-9A-Za-z]{20,}|github_pat_[0-9A-Za-z_]{20,}|-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----'
-          provider_matches="$(git grep --cached -I -l -E "$provider_pattern" -- . \
-            ':(exclude).github/workflows/**' \
-            ':(exclude)android/app/build/**' \
-            ':(exclude)**/*.md' || true)"
-          if [ -n "$provider_matches" ]; then
-            echo "High-confidence provider/private-key match in tracked source/config files:"
-            printf '%s\n' "$provider_matches"
+
+          provider_patterns=(
+            'AIza[0-9A-Za-z_-]{20,}'
+            'sk_live_[0-9A-Za-z]{16,}'
+            'ghp_[0-9A-Za-z]{20,}'
+            'github_pat_[0-9A-Za-z_]{20,}'
+            '-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----'
+          )
+
+          for pattern in "${provider_patterns[@]}"; do
+            if git grep --cached -I -n -E -- "$pattern" -- . \
+                ':(exclude).github/workflows/**' \
+                ':(exclude)android/app/build/**' \
+                ':(exclude)**/*.md'; then
+              echo "High-confidence provider/private-key secret found in tracked source/configuration"
+              exit 1
+            fi
+          done
+
+          password_literal_pattern='(^|[[:space:]])(password|passwd|secret|token)(_[A-Za-z0-9]+)?[[:space:]]*[:=][[:space:]]*["'\''"][^"'\''$\x7B\x7D]{8,}["'\''"]([[:space:]]*(#.*)?)$'
+          if git grep --cached -I -n -E -- "$password_literal_pattern" -- . \
+              ':(exclude).github/workflows/**' \
+              ':(exclude)android/app/build/**' \
+              ':(exclude)tests/**' \
+              ':(exclude)**/*.md'; then
+            echo "Potential plaintext password/secret literal found in tracked non-test source/configuration"
             exit 1
           fi
 
-          password_pattern='password[[:space:]]*[:=][[:space:]]*["'"'"'][^$"'""{}][^"'"'"']+["'"'"']'
-          password_matches="$(git grep --cached -I -l -E "$password_pattern" -- . \
-            ':(exclude).github/workflows/**' \
-            ':(exclude)android/app/build/**' \
-            ':(exclude)tests/**' \
-            ':(exclude)**/*.md' || true)"
-          if [ -n "$password_matches" ]; then
-            echo "Potential plaintext password in tracked non-test source/config files:"
-            printf '%s\n' "$password_matches"
+          sensitive_paths="$(
+            git ls-files | grep -E '(^|/)(\.env($|\.)|.*\.(pem|key|p12|pfx|jks|keystore)$)' | \
+              grep -Ev '(\.env\.example|\.env\.sample)$' || true
+          )"
+          if [ -n "$sensitive_paths" ]; then
+            echo "Sensitive credential/keystore file is tracked:"
+            printf '%s\n' "$sensitive_paths"
             exit 1
           fi
 
-          echo "Inspecting generated APK/AAB artifacts without treating binary strings as source secrets..."
+          echo "Inspecting generated APK/AAB artifacts separately from tracked source..."
+
           for artifact in \
             app/build/outputs/apk/debug/app-debug.apk \
             app/build/outputs/apk/release/app-release.apk \
@@ -87,23 +104,20 @@ jobs:
               exit 1
             fi
 
-            # Provider-shaped API/token strings in third-party binaries are inspected but
-            # are not treated as proof of a leaked credential by themselves. A real source
-            # credential is already blocked by the tracked source/config scan above.
             for label_and_pattern in \
               'Google API key|AIza[0-9A-Za-z_-]{20,}' \
-              'Stripe live key|sk'"'"'_live_[0-9A-Za-z]+' \
-              'GitHub token|gh'"'"'p_[0-9A-Za-z]{20,}' \
+              'Stripe live key|sk_live_[0-9A-Za-z]{16,}' \
+              'GitHub token|ghp_[0-9A-Za-z]{20,}' \
               'GitHub fine-grained token|github_pat_[0-9A-Za-z_]{20,}'; do
               label="${label_and_pattern%%|*}"
               pattern="${label_and_pattern#*|}"
               if strings -a "$artifact" | grep -E -q -- "$pattern"; then
-                echo "Observed $label-shaped text in generated binary: $artifact (not treated as a leak unless the same credential exists in tracked source/config)"
+                echo "Observed $label-shaped text in generated binary: $artifact"
               fi
             done
           done
 
-          echo "Secret checks passed: source/config heuristics exclude generated binaries; binary inspection remains active for private keys and reports provider-shaped strings without false-positive failure."
+          echo "Secret checks passed: tracked source/configuration is scanned for high-confidence secrets; generated binaries are inspected separately without treating binary strings as source secrets."
       - name: Verify release signatures
         shell: bash
         run: |
