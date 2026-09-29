@@ -13,6 +13,7 @@ import web
 from artifact_tools import (
     detecter_demande_image,
     detecter_demande_pdf,
+    demande_pdf_sans_sujet,
     demande_illustration_pedagogique,
     rendre_pdf,
     structurer_document,
@@ -60,6 +61,13 @@ class ArtifactToolsTests(unittest.TestCase):
     def test_intentions(self):
         self.assertTrue(detecter_demande_pdf("Génère-moi un PDF de 5 pages présentant DASHLE"))
         self.assertTrue(detecter_demande_pdf("Transforme ce texte en PDF"))
+        self.assertTrue(detecter_demande_pdf("fais-moi un PDF"))
+        self.assertTrue(detecter_demande_pdf("génère un pdf sur le gouvernement burkinabè"))
+        self.assertTrue(detecter_demande_pdf("exporte en PDF"))
+        self.assertTrue(detecter_demande_pdf("peux-tu me faire un pdf de 5 conseils pour apprendre Python"))
+        self.assertTrue(demande_pdf_sans_sujet("tu peux me générer un PDF ?"))
+        self.assertFalse(demande_pdf_sans_sujet("génère un PDF sur le gouvernement burkinabè"))
+        self.assertFalse(demande_pdf_sans_sujet("fais-moi un PDF de 5 conseils pour apprendre Python"))
         self.assertTrue(detecter_demande_image("Crée une image d'une ville futuriste"))
         self.assertTrue(detecter_demande_image("Fais un schéma du fonctionnement d'un moteur"))
         self.assertFalse(demande_illustration_pedagogique("Quelle est la définition de HTTP ?"))
