@@ -170,5 +170,68 @@ class ArtifactToolsTests(unittest.TestCase):
         self.assertIn("pas pu générer", response.json["reponse"])
 
 
+    def test_sse_image_action_lifecycle(self):
+        with patch.object(web, "generer_image", return_value=(PNG_1X1, "image/png")), \
+             patch.object(web, "_enregistrer_element_bibliotheque", return_value=True):
+            response = self.client.post(
+                "/repondre_flux",
+                data={"message": "Génère une image d'une ville futuriste."},
+                headers={"X-CSRF-Token": "artifact-token"},
+            )
+        body = response.get_data(as_text=True)
+        self.assertIn('"event": "action_started"', body)
+        self.assertIn('"event": "action_progress"', body)
+        self.assertIn('"event": "action_completed"', body)
+        self.assertIn('"type": "image"', body)
+        self.assertIn('"saved": true', body)
+
+    def test_sse_pdf_action_lifecycle(self):
+        structure = {
+            "title": "Conseils Python",
+            "author": "DASHLE",
+            "language": "fr",
+            "orientation": "portrait",
+            "footer": "DASHLE",
+            "sections": [{
+                "heading": "Conseils",
+                "paragraphs": ["Apprendre Python progressivement."],
+                "bullets": ["Pratiquer", "Lire la documentation"],
+            }],
+        }
+        with patch.object(web, "structurer_document", return_value=structure), \
+             patch.object(web, "rendre_pdf", return_value=b"%PDF-test"), \
+             patch.object(web, "_enregistrer_element_bibliotheque", return_value=True):
+            response = self.client.post(
+                "/repondre_flux",
+                data={"message": "Génère un PDF de 5 conseils pour apprendre Python."},
+                headers={"X-CSRF-Token": "artifact-token"},
+            )
+        body = response.get_data(as_text=True)
+        self.assertIn('"event": "action_started"', body)
+        self.assertIn('"message": "Génération du contenu…"', body)
+        self.assertIn('"message": "Mise en page du PDF…"', body)
+        self.assertIn('"message": "Génération du PDF…"', body)
+        self.assertIn('"event": "action_completed"', body)
+        self.assertIn('"type": "pdf"', body)
+
+    def test_sse_action_failure_has_no_completed_event(self):
+        with patch.object(web, "generer_image", side_effect=RuntimeError("provider failure")):
+            response = self.client.post(
+                "/repondre_flux",
+                data={"message": "Crée un logo pour mon projet."},
+                headers={"X-CSRF-Token": "artifact-token"},
+            )
+        body = response.get_data(as_text=True)
+        self.assertIn('"event": "action_failed"', body)
+        self.assertNotIn('"event": "action_completed"', body)
+
+    def test_action_event_builder_supports_cancelled(self):
+        event = web._evenement_action(
+            "action_cancelled", "abc123", "image", "annule", "Action annulée"
+        )
+        self.assertIn('"event": "action_cancelled"', event)
+        self.assertIn('"step": "annule"', event)
+
+
 if __name__ == "__main__":
     unittest.main()
