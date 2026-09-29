@@ -35,8 +35,10 @@ def tool_declarations(uid):
             if not load_credential(uid,p):continue
         except Exception:continue
         c=get_connector(p)
+        perm=_perm(uid,p)
         for a in c.spec.actions:
             if a.risk=="interdite":continue
+            if a.risk=="ecriture" and (not perm or perm.access_level!="actions_confirm" or not perm.write_until or perm.write_until<datetime.utcnow()):continue
             out.append({"name":p+"_"+a.id,"description":a.description,"parameters":{"type":"object","properties":{"resource_id":{"type":"string"},"repo":{"type":"string"},"path":{"type":"string"},"query":{"type":"string"},"number":{"type":"integer"},"title":{"type":"string"},"body":{"type":"string"},"to":{"type":"string"},"subject":{"type":"string"},"service_id":{"type":"string"},"page_id":{"type":"string"},"parent_page_id":{"type":"string"}},"required":[]}})
     return out
 
