@@ -1935,6 +1935,7 @@ let recoResultatsAutorises = false;
 let recoDebutEcouteMs = 0;
 let dernierTranscriptDictee = '';
 let dernierModeReconnaissance = 'texte';
+let dernierResultatReconnaissance = '';
 
 // États vocaux
 let vocalActif          = false;
@@ -2110,9 +2111,8 @@ let minuteurRelanceReco = null;
 const DELAI_RELANCE_RECO_INITIAL = 300;
 const DELAI_RELANCE_RECO_MAX = 2000;
 const MAX_PALIERS_RELANCE_RECO = 6;
-let nbFinsImmediatesVocal = 0;
-const DUREE_FIN_IMMEDIATE_VOCAL_MS = 1200;
-const MAX_FINS_IMMEDIATES_VOCAL = 3;
+let nbFinsSansTranscriptionVocal = 0;
+const MAX_FINS_SANS_TRANSCRIPTION_VOCAL = 3;
 
 // Attendre que les résultats finaux se stabilisent avant d'envoyer le tour vocal.
 let transcriptionFinaleVocale = '';
@@ -3012,6 +3012,7 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
       const transcript = (resultat && resultat[0] && resultat[0].transcript || '').trim();
       if (!transcript) return;
       dernierTranscriptDictee = transcript;
+      dernierResultatReconnaissance = transcript;
       champ.value = transcript;
       champ.style.height = 'auto';
       return;
@@ -3023,6 +3024,7 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
       const texte = resultats[i] && resultats[i][0] && resultats[i][0].transcript;
       if (texte && texte.trim()) {
         resultatNonVide = true;
+        dernierResultatReconnaissance = texte.trim();
         if (!resultats[i].isFinal) paroleInterimaire = true;
       }
     }
@@ -3037,7 +3039,7 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
 
     if (resultatNonVide) {
       nbRelancesVocal = 0;
-      nbFinsImmediatesVocal = 0;
+      nbFinsSansTranscriptionVocal = 0;
       if (minuteurRelanceReco !== null) {
         clearTimeout(minuteurRelanceReco);
         minuteurRelanceReco = null;
@@ -3056,6 +3058,29 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
     const dureeEcouteMs = recoDebutEcouteMs ? Math.max(0, Math.round(performance.now() - recoDebutEcouteMs)) : null;
     desarmerWatchdog();
     const transcriptionLog = dernierModeReconnaissance === 'dictee' ? dernierTranscriptDictee : transcriptionFinaleVocale;
+    const aUneTranscription = Boolean(String(transcriptionLog || '').trim());
+    if (dernierModeReconnaissance === 'vocal') {
+      if (aUneTranscription) {
+        nbFinsSansTranscriptionVocal = 0;
+      } else if (vocalActif && !reponseEnCours && !syntheseEnCours && !recoMutePendantTTS) {
+        nbFinsSansTranscriptionVocal += 1;
+        console.warn('[DASHLE][SpeechRecognition] fin sans transcription', {
+          compteur: nbFinsSansTranscriptionVocal,
+          dureeEcouteMs: dureeEcouteMs
+        });
+        if (nbFinsSansTranscriptionVocal >= MAX_FINS_SANS_TRANSCRIPTION_VOCAL) {
+          nbFinsSansTranscriptionVocal = 0;
+          vocalActif = false;
+          btnVocal.classList.remove('vocal-on', 'ecoute', 'parle');
+          afficherEtatVocal('erreur', "Je n'arrive pas à t'entendre, réessaie");
+          afficherStatutVocal("Je n'arrive pas à t'entendre, réessaie");
+          if (secoursAudioVocalEl) secoursAudioVocalEl.hidden = false;
+          recoResultatsAutorises = false;
+          try { reco.stop(); } catch(e) {}
+          return;
+        }
+      }
+    }
     console.log('[DASHLE][SpeechRecognition] onend', {
       mode: modeActuel, vocalActif: vocalActif, dureeEcouteMs: dureeEcouteMs,
       hasTranscription: Boolean(String(transcriptionLog || '').trim()),
@@ -3111,6 +3136,7 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
 
   reco.onerror = function(e) {
     desarmerWatchdog();
+    console.log('[DASHLE][SpeechRecognition][error-detail]', { error: e && e.error, message: e && e.message, name: e && e.name, type: e && e.type });
     console.log('[DASHLE][SpeechRecognition] onerror', {
       error: e && e.error, message: e && e.message, mode: modeActuel, vocalActif: vocalActif
     });
