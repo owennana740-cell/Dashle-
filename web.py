@@ -2133,9 +2133,44 @@ function estDemandePdf(texte) {
     && /\b(genere|generer|creer|cree|fais|faire|fabrique|telecharger|telecharge|produis|produire)\b/.test(normalise);
 }
 
+function demandeIllustrationPedagogique(texte) {
+  const t = String(texte || '').toLocaleLowerCase();
+  return !/\b(image|illustration|logo|affiche|schéma|diagramme|infographie)\b/.test(t)
+    && /\b(explique|comment fonctionne|fonctionnement|processus|architecture|système|concept|comparaison|notion)\b/.test(t)
+    && t.length >= 35;
+}
+
 function estPdfTempsReel(texte) {
   const normalise = String(texte || '').toLocaleLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
   return /\b(meteo|actualites?|nouvelles recentes|temps reel|date et heure|heure locale)\b/.test(normalise);
+}
+
+async function genererArtifactDansChat(texte, type) {
+  ajouterMessage(texte, 'user'); champ.value = ''; champ.style.height = 'auto'; afficherReflexion();
+  const headers = { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' };
+  if (estConnecte) headers['X-CSRF-Token'] = csrfToken;
+  try {
+    const body = new URLSearchParams(); body.set('message', texte);
+    const res = await fetch('/repondre', { method: 'POST', headers, body: body.toString(), cache: 'no-store' });
+    const data = await res.json().catch(function(){ return {}; });
+    if (!res.ok) throw new Error(data.reponse || data.erreur || 'Génération impossible.');
+    const artifact = data.artifact;
+    if (!artifact || !artifact.data) throw new Error(data.reponse || 'Le fichier généré est indisponible.');
+    const bytes = Uint8Array.from(atob(artifact.data), function(c){ return c.charCodeAt(0); });
+    const blob = new Blob([bytes], { type: artifact.mime_type || (type === 'image' ? 'image/png' : 'application/pdf') });
+    const url = URL.createObjectURL(blob);
+    const enveloppe = ajouterReponse(data.reponse || (type === 'image' ? 'Image générée par DASHLE.' : 'PDF généré par DASHLE.'), '');
+    const message = enveloppe.querySelector('.msg');
+    const lien = document.createElement('a'); lien.href = url; lien.target = '_blank'; lien.rel = 'noopener noreferrer';
+    if (type === 'image') {
+      const image = document.createElement('img'); image.className = 'image-message'; image.src = url; image.alt = 'Image générée par DASHLE';
+      lien.appendChild(image); message.appendChild(document.createElement('br')); message.appendChild(lien);
+    } else {
+      lien.download = artifact.filename || 'dashle-document.pdf'; lien.className = 'pdf-telechargement-chat'; lien.textContent = 'Ouvrir / télécharger le PDF';
+      message.appendChild(document.createElement('br')); message.appendChild(lien);
+    }
+  } catch (erreur) { ajouterMessage(erreur.message || 'La génération a échoué. Réessaie.', 'bot'); }
+  finally { retirerReflexion(); }
 }
 
 async function genererPdfTempsReelDansChat(texte) {
@@ -3128,8 +3163,14 @@ form.addEventListener('submit', async function(e) {
 
   if (!texte) return;
 
+  if (!vocalActif && /\b(image|illustration|logo|affiche|schéma|diagramme|infographie|visuel|dessin)\b/i.test(texte)
+      && /\b(génère|genere|crée|cree|fais|faire|dessine|montre|représente|represente)\b/i.test(texte)) {
+    await genererArtifactDansChat(texte, 'image');
+    return;
+  }
+
   if (!vocalActif && estDemandePdf(texte)) {
-    await genererPdfTempsReelDansChat(texte);
+    await genererArtifactDansChat(texte, 'pdf');
     return;
   }
 
@@ -3228,6 +3269,23 @@ form.addEventListener('submit', async function(e) {
         }
         if (ev.termine) {
           messageId = ev.message_id;
+          if (demandeIllustrationPedagogique(texte)) {
+            try {
+              const h = { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' };
+              if (estConnecte) h['X-CSRF-Token'] = csrfToken;
+              const b = new URLSearchParams(); b.set('prompt', 'Illustration pédagogique fidèle à cette explication : ' + reponseTexte.slice(0, 8000));
+              const ir = await fetch('/generer-image', { method: 'POST', headers: h, body: b.toString(), cache: 'no-store' });
+              const idata = await ir.json().catch(function(){ return {}; });
+              if (ir.ok && idata.data) {
+                const raw = Uint8Array.from(atob(idata.data), function(c){ return c.charCodeAt(0); });
+                const blob = new Blob([raw], { type: idata.mime_type || 'image/png' });
+                const u = URL.createObjectURL(blob);
+                const lien = document.createElement('a'); lien.href = u; lien.target = '_blank'; lien.rel = 'noopener noreferrer';
+                const img = document.createElement('img'); img.className = 'image-message'; img.src = u; img.alt = 'Illustration pédagogique générée par DASHLE';
+                lien.appendChild(img); messageElement.appendChild(document.createElement('br')); messageElement.appendChild(lien);
+              }
+            } catch (_) {}
+          }
           // Visiteur : sauvegarder la réponse en session via une requête séparée.
           // Impossible de le faire dans le générateur SSE (headers déjà envoyés).
           if (!estConnecte && ev.reponse) {
