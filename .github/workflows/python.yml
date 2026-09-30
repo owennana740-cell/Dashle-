@@ -13,8 +13,13 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
       - name: Installer les dépendances
         run: python -m pip install --upgrade pip && pip install -r requirements.txt
+      - name: Installer les dépendances JavaScript de test
+        run: npm install --no-audit --no-fund
       - name: Compiler Python
         run: python -m py_compile artifact_tools.py web.py app.py
       - name: Tests génération fichiers/images
