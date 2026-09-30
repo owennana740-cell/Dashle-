@@ -70,7 +70,7 @@ class RegistrationPhoneTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_rendered_pages_have_valid_inline_javascript_and_registration_dom(self):
-        result = self.run_probe(r"""
+        result = self.run_probe(r'''
             import re
             import shutil
             import subprocess
@@ -141,8 +141,7 @@ class RegistrationPhoneTests(unittest.TestCase):
             """
             checked = subprocess.run([node, "-e", dom_script, html_path], text=True, capture_output=True, check=False)
             assert checked.returncode == 0, checked.stderr
-        """)
-        self.assertEqual(result.returncode, 0, result.stderr)
+        ''')        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_registration_error_preserves_non_password_fields(self):
         result = self.run_probe("""
