@@ -2239,9 +2239,9 @@ let minuteurRelanceReco = null;
 const DELAI_RELANCE_RECO_INITIAL = 300;
 const DELAI_RELANCE_RECO_MAX = 2000;
 const MAX_PALIERS_RELANCE_RECO = 6;
-let nbFinsImmediatesVocal = 0;
+let nbFinsSansTranscriptionVocal = 0;
 const DUREE_FIN_IMMEDIATE_VOCAL_MS = 1200;
-const MAX_FINS_IMMEDIATES_VOCAL = 3;
+const MAX_FINS_SANS_TRANSCRIPTION_VOCAL = 3;
 
 // Attendre que les résultats finaux se stabilisent avant d'envoyer le tour vocal.
 let transcriptionFinaleVocale = '';
@@ -3112,8 +3112,9 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
       return false;
     }
     journaliserEtatAudioReconnaissance();
-    reco.interimResults = true;
-    reco.continuous = true;
+    arreterVAD();
+    reco.interimResults = false;
+    reco.continuous = false;
     modeActuel = 'vocal';
     ouvrirModeVocal();
     afficherEtatVocal('ecoute', 'Dashle écoute...');
@@ -3228,14 +3229,10 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
       return;
     }
 
-    let paroleInterimaire = false;
     let resultatNonVide = false;
     for (let i = 0; i < resultats.length; i++) {
       const texte = resultats[i] && resultats[i][0] && resultats[i][0].transcript;
-      if (texte && texte.trim()) {
-        resultatNonVide = true;
-        if (!resultats[i].isFinal) paroleInterimaire = true;
-      }
+      if (texte && texte.trim()) resultatNonVide = true;
     }
     const debut = Math.max(Number.isInteger(e.resultIndex) ? e.resultIndex : 0, dernierIndexFinalVocal);
     for (let i = debut; i < resultats.length; i++) {
@@ -3248,7 +3245,7 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
 
     if (resultatNonVide) {
       nbRelancesVocal = 0;
-      nbFinsImmediatesVocal = 0;
+      nbFinsSansTranscriptionVocal = 0;
       if (minuteurRelanceReco !== null) {
         clearTimeout(minuteurRelanceReco);
         minuteurRelanceReco = null;
@@ -3256,11 +3253,7 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
     }
     if (!transcriptionFinaleVocale) return;
     interruptionDemandee = false;
-    if (paroleInterimaire) {
-      annulerFinPhraseVocale();
-    } else {
-      planifierEnvoiFinPhraseVocale();
-    }
+    planifierEnvoiFinPhraseVocale();
   };
 
   reco.onend = function() {
@@ -3286,17 +3279,13 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
       return;
     }
     const synthActive = ('speechSynthesis' in window) && window.speechSynthesis.speaking;
-    const finImmediate = modeActuel === 'vocal'
-      && !transcriptionFinaleVocale.trim()
-      && typeof dureeEcouteMs === 'number'
-      && dureeEcouteMs < DUREE_FIN_IMMEDIATE_VOCAL_MS;
-    if (finImmediate) {
-      nbFinsImmediatesVocal += 1;
-      console.warn('[DASHLE][SpeechRecognition] fin immédiate', {
-        compteur: nbFinsImmediatesVocal, dureeEcouteMs: dureeEcouteMs
+    if (modeActuel === 'vocal' && !transcriptionFinaleVocale.trim()) {
+      nbFinsSansTranscriptionVocal += 1;
+      console.warn('[DASHLE][SpeechRecognition] fin sans transcription', {
+        compteur: nbFinsSansTranscriptionVocal, dureeEcouteMs: dureeEcouteMs
       });
-      if (nbFinsImmediatesVocal >= MAX_FINS_IMMEDIATES_VOCAL) {
-        nbFinsImmediatesVocal = 0;
+      if (nbFinsSansTranscriptionVocal >= MAX_FINS_SANS_TRANSCRIPTION_VOCAL) {
+        nbFinsSansTranscriptionVocal = 0;
         if (demarrerSecoursAudio()) return;
         vocalActif = false;
         btnVocal.classList.remove('vocal-on', 'ecoute', 'parle');
