@@ -101,17 +101,17 @@ class RegistrationPhoneTests(unittest.TestCase):
                 const bf = rows.find((row) => row[0] === "BF");
                 if (!bf || bf[2] !== "226") throw new Error("Burkina Faso +226 absent");
                 const country = document.getElementById("pays");
-                const indicator = document.getElementById("indicatif");
+                const indicator = document.getElementById("indicatif-prefix");
                 const hidden = document.getElementById("indicatif-envoye");
                 if (!country || !indicator || !hidden) throw new Error("champs téléphone absents");
                 const cases = [["BF", "+226"], ["FR", "+33"], ["CI", "+225"], ["BS", "+1242"]];
                 for (const [code, expected] of cases) {
                     country.value = code;
                     country.dispatchEvent(new dom.window.Event("input"));
-                    if (document.getElementById("indicatif-prefix").textContent !== expected) throw new Error(code + " préfixe incorrect");
+                    if (indicator.textContent !== expected) throw new Error(code + " préfixe incorrect");
                     if (hidden.value !== expected) throw new Error(code + " indicatif caché incorrect");
                     country.dispatchEvent(new dom.window.Event("change"));
-                    if (document.getElementById("indicatif-prefix").textContent !== expected) throw new Error(code + " préfixe change incorrect");
+                    if (indicator.textContent !== expected) throw new Error(code + " préfixe change incorrect");
                     if (hidden.value !== expected) throw new Error(code + " indicatif change incorrect");
                 }
                 if (document.body.textContent.includes("+---") || document.querySelector("#indicatif")) throw new Error("ancien select +--- encore présent");
