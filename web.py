@@ -1909,6 +1909,7 @@ let   apercuMedia     = document.getElementById('apercu-fichier-media');
 const apercuNom       = document.getElementById('apercu-fichier-nom');
 const apercuType      = document.getElementById('apercu-fichier-type');
 const inputImage      = document.getElementById('image-input');
+const btnRouvrirVocal = document.getElementById('btn-rouvrir-vocal');
 
 // CSRF token injecté côté serveur
 const csrfToken        = __CSRF_TOKEN__;
@@ -2230,17 +2231,54 @@ function afficherEtatVocal(etat, libelle) {
   etatVocalEl.textContent  = libelle;
 }
 
-function ouvrirModeVocal() {
-  modeVocalEl.classList.add('visible');
-  modeVocalEl.removeAttribute('inert');
-}
-
-function fermerModeVocal() {
+function synchroniserVueVocale() {
+  if (vocalActif) return true;
   if (modeVocalEl.contains(document.activeElement)) {
     try { document.activeElement.blur(); } catch(e) {}
   }
   modeVocalEl.setAttribute('inert', '');
   modeVocalEl.classList.remove('visible');
+  if (btnRouvrirVocal) btnRouvrirVocal.classList.remove('actif');
+  return false;
+}
+
+function ouvrirModeVocal() {
+  if (!synchroniserVueVocale()) return false;
+  modeVocalEl.classList.add('visible');
+  modeVocalEl.removeAttribute('inert');
+  if (btnRouvrirVocal) btnRouvrirVocal.classList.remove('actif');
+  return true;
+}
+
+function fermerModeVocal(autoriserRouvrir = true) {
+  if (modeVocalEl.contains(document.activeElement)) {
+    try { document.activeElement.blur(); } catch(e) {}
+  }
+  modeVocalEl.setAttribute('inert', '');
+  modeVocalEl.classList.remove('visible');
+  if (btnRouvrirVocal) {
+    btnRouvrirVocal.classList.toggle('actif', Boolean(vocalActif && autoriserRouvrir));
+  }
+}
+
+function desactiverModeVocal() {
+  vocalActif = false;
+  modeActuel = 'texte';
+  interruptionDemandee = true;
+  reinitialiserTranscriptionVocale();
+  annulerFinPhraseVocale();
+  if (minuteurRelanceReco !== null) {
+    clearTimeout(minuteurRelanceReco);
+    minuteurRelanceReco = null;
+  }
+  reinitialiserEtatVocal();
+  arreterSecoursAudio();
+  btnVocal.classList.remove('vocal-on', 'ecoute', 'parle');
+  btnMicro.classList.remove('actif');
+  afficherStatutVocal('');
+  fermerModeVocal(false);
+  afficherEtatVocal('attente', 'En attente');
+  interruptionDemandee = false;
 }
 
 function afficherStatutVocal(texte) {
@@ -2934,28 +2972,21 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
   };
 
   btnVocal.onclick = async function() {
-    vocalActif = !vocalActif;
     if (vocalActif) {
-      reinitialiserTranscriptionVocale();
-      btnVocal.classList.add('vocal-on');
-      ouvrirModeVocal();
-      interruptionDemandee = false;
-        // Aucun getUserMedia/AnalyserNode en parallèle de SpeechRecognition.
-      recoResultatsAutorises = false;
-      try { reco.stop(); } catch(e) {}
-      setTimeout(demarrerEcouteVocale, 80);
-    } else {
-      reinitialiserTranscriptionVocale();
-      btnVocal.classList.remove('vocal-on', 'ecoute', 'parle');
-      fermerModeVocal();
-      afficherEtatVocal('attente', 'En attente');
-      afficherStatutVocal('');
-      recoResultatsAutorises = false;
-      try { reco.stop(); } catch(e) {}
-      arreterGeneration();
-      if ('speechSynthesis' in window) window.speechSynthesis.cancel();
-      arreterVAD();
+      desactiverModeVocal();
+      return;
     }
+    vocalActif = true;
+    reinitialiserTranscriptionVocale();
+    btnVocal.classList.add('vocal-on');
+    ouvrirModeVocal();
+    interruptionDemandee = false;
+    // Aucun getUserMedia/AnalyserNode en parallèle de SpeechRecognition.
+    recoResultatsAutorises = false;
+    try { reco.stop(); } catch(e) {}
+    setTimeout(function() {
+      if (vocalActif) demarrerEcouteVocale();
+    }, 80);
   };
 
   reco.onstart = function() {
@@ -3403,27 +3434,15 @@ document.getElementById('reduire-vocal').addEventListener('click', function() {
 });
 
 document.getElementById('fermer-vocal').addEventListener('click', function() {
-  vocalActif = false;
-  btnVocal.classList.remove('vocal-on', 'ecoute', 'parle');
-  try { reco && reco.stop(); } catch(e) {}
-  afficherStatutVocal('');
-  fermerModeVocal();
-  afficherEtatVocal('attente', 'En attente');
-  if ('speechSynthesis' in window) window.speechSynthesis.cancel();
-  arreterVAD();
-  // Cacher le bouton de réouverture : le mode vocal est réellement arrêté.
-  var btnRouvrir = document.getElementById('btn-rouvrir-vocal');
-  if (btnRouvrir) btnRouvrir.classList.remove('actif');
+  desactiverModeVocal();
 });
 
 // Bouton rouvrir : ramène l'overlay sans relancer quoi que ce soit —
 // le VAD et la reconnaissance continuent de tourner en arrière-plan.
-var btnRouvrirVocal = document.getElementById('btn-rouvrir-vocal');
 if (btnRouvrirVocal) {
   btnRouvrirVocal.addEventListener('click', function() {
     if (!vocalActif) return;
     ouvrirModeVocal();
-    btnRouvrirVocal.classList.remove('actif');
   });
 }
 
