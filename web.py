@@ -2245,6 +2245,15 @@ const MAX_FINS_SANS_TRANSCRIPTION_VOCAL = 3;
 
 // Attendre que les résultats finaux se stabilisent avant d'envoyer le tour vocal.
 let transcriptionFinaleVocale = '';
+const VOCAL_DIAG_STORAGE_KEY = 'dashle_vocal_diagnostic_v1';
+function journaliserDiagnosticVocal(type, detail) {
+  try {
+    const courant = JSON.parse(localStorage.getItem(VOCAL_DIAG_STORAGE_KEY) || '[]');
+    courant.push({ ts: new Date().toISOString(), type: String(type || ''), detail: detail || null });
+    while (courant.length > 120) courant.shift();
+    localStorage.setItem(VOCAL_DIAG_STORAGE_KEY, JSON.stringify(courant));
+  } catch (e) {}
+}
 let dernierIndexFinalVocal = 0;
 let minuteurFinPhraseVocale = null;
 const DELAI_FIN_PHRASE_VOCALE = 1600;
@@ -3188,6 +3197,7 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
   };
 
   reco.onstart = function() {
+    journaliserDiagnosticVocal('onstart', { mode: modeActuel, vocalActif: vocalActif });
     recoDebutEcouteMs = performance.now();
     if (modeActuel === 'vocal') journaliserEtatAudioReconnaissance();
     console.log('[DASHLE][SpeechRecognition] onstart', { mode: modeActuel, vocalActif: vocalActif });
@@ -3202,6 +3212,7 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
   };
 
   reco.onresult = function(e) {
+    journaliserDiagnosticVocal('onresult', { resultIndex: e && e.resultIndex, count: (e && e.results && e.results.length) || 0 });
     const resultatsJournal = Array.from(e.results || []).map(function(r, index) {
       const transcript = r && r[0] ? String(r[0].transcript || '').trim() : '';
       const confidence = r && r[0] && typeof r[0].confidence === 'number' ? r[0].confidence : null;
@@ -3257,6 +3268,7 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
   };
 
   reco.onend = function() {
+    journaliserDiagnosticVocal('onend', { mode: modeActuel, vocalActif: vocalActif });
     const dureeEcouteMs = recoDebutEcouteMs ? Math.max(0, Math.round(performance.now() - recoDebutEcouteMs)) : null;
     const transcriptionLog = modeActuel === 'dictee' ? dernierTranscriptDictee : transcriptionFinaleVocale;
     console.log('[DASHLE][SpeechRecognition] onend', {
@@ -3300,6 +3312,7 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
   };
 
   reco.onerror = function(e) {
+    journaliserDiagnosticVocal('onerror', { error: e && e.error, message: e && e.message });
     console.log('[DASHLE][SpeechRecognition] onerror', {
       error: e && e.error, message: e && e.message, mode: modeActuel, vocalActif: vocalActif
     });
@@ -4524,7 +4537,14 @@ body.theme-sombre label{border-color:#294238}
       </select>
     </label>
   </section>
-  <section class="carte"><h2>À propos de Dashle</h2>
+  <section class="carte" id="diagnostic-vocal" hidden>
+  <h2>Diagnostic vocal</h2>
+  <p class="note">Ce panneau est local au navigateur et n'apparaît qu'après 5 appuis rapides sur « Paramètres ».</p>
+  <pre id="diagnostic-vocal-contenu" style="max-height:280px;overflow:auto;white-space:pre-wrap"></pre>
+  <button type="button" class="secondaire" id="diagnostic-vocal-copier">Copier</button>
+  <button type="button" class="secondaire" id="diagnostic-vocal-effacer">Effacer</button>
+</section>
+<section class="carte"><h2>À propos de Dashle</h2>
     <p class="note"><strong>Version :</strong> version du projet non déclarée</p>
     <p class="note"><strong>Modèle IA :</strong> {{ modele_gemini }} (Google AI)</p>
     <p class="note">Dashle est un assistant personnel conçu par Owen. Il mémorise le contexte de tes conversations et s'améliore avec le temps.</p>
@@ -4537,6 +4557,40 @@ body.theme-sombre label{border-color:#294238}
   <button type="submit" class="secondaire">Commencer une nouvelle conversation</button>
 </form>
 <script>
+const diagSection = document.getElementById('diagnostic-vocal');
+const diagContent = document.getElementById('diagnostic-vocal-contenu');
+function afficherDiagnosticVocal() {
+  if (!diagSection || !diagContent) return;
+  diagSection.hidden = false;
+  try { diagContent.textContent = JSON.stringify(JSON.parse(localStorage.getItem('dashle_vocal_diagnostic_v1') || '[]'), null, 2); } catch(e) { diagContent.textContent = 'Diagnostic indisponible.'; }
+}
+try {
+  if (localStorage.getItem('dashle_vocal_diag_open') === '1') {
+    localStorage.removeItem('dashle_vocal_diag_open');
+    afficherDiagnosticVocal();
+  }
+} catch(e) {}
+if (diagSection) {
+  document.getElementById('diagnostic-vocal-copier').addEventListener('click', async function() {
+    try { await navigator.clipboard.writeText(diagContent.textContent); } catch(e) {}
+  });
+  document.getElementById('diagnostic-vocal-effacer').addEventListener('click', function() {
+    try { localStorage.removeItem('dashle_vocal_diagnostic_v1); } catch(e) {}
+    diagContent.textContent = '';
+  });
+}
+document.querySelectorAll('a[href*="/parametres"]').forEach(function(lien) {
+  let appuis = 0, dernierAppui = 0;
+  lien.addEventListener('click', function() {
+    const maintenant = Date.now();
+    appuis = maintenant - dernierAppui < 1400 ? appuis + 1 : 1;
+    dernierAppui = maintenant;
+    if (appuis >= 5) {
+      try { localStorage.setItem('dashle_vocal_diag_open', '1'); } catch(e) {}
+      appuis = 0;
+    }
+  });
+});
 const sv = document.getElementById('voix-select');
 let vp = [];
 function remplirVoix() {
