@@ -303,6 +303,7 @@ class VocalViewTests(unittest.TestCase):
             )
             assert checked.returncode == 0, checked.stderr
             assert "VOCAL_VAD_ECHO_OK" in checked.stdout
+        ''')
 
     def test_vocal_interruption_guards_remain_present(self):
         source = Path(ROOT / "web.py").read_text(encoding="utf-8")
