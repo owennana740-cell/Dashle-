@@ -43,7 +43,7 @@ class EphemeralDatabasePolicyTests(unittest.TestCase):
     def test_database_url_has_priority_over_ephemeral_flag(self):
         env = os.environ.copy()
         env["RENDER"] = "true"
-        env["DATABASE_URL"] = "sqlite:////tmp/should-not-be-used.db"
+        env["DATABASE_URL"] = "postgresql://example.invalid/dashle"
         env["ALLOW_EPHEMERAL_DB"] = "1"
         code = "import database; print(database.DATABASE_URL); print(database.EPHEMERAL_DB_MODE)"
         result = subprocess.run(
@@ -53,8 +53,9 @@ class EphemeralDatabasePolicyTests(unittest.TestCase):
             text=True,
             capture_output=True,
         )
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("Render must use the configured PostgreSQL database", result.stderr + result.stdout)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("postgresql+psycopg://example.invalid/dashle", result.stdout)
+        self.assertIn("False", result.stdout)
 
 
 if __name__ == "__main__":
