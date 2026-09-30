@@ -40,6 +40,34 @@ class RegistrationPhoneTests(unittest.TestCase):
         """)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_rendered_registration_script_is_valid_javascript(self):
+        result = self.run_probe(r"""
+            import re
+            import shutil
+            import subprocess
+            import web
+            client = web.app.test_client()
+            page = client.get("/inscription")
+            assert page.status_code == 200
+            body = page.get_data(as_text=True)
+            scripts = re.findall(r"<script>(.*?)</script>", body, flags=re.S)
+            assert scripts, "aucun script d'inscription rendu"
+            script = next((s for s in scripts if "const indicatifs" in s), None)
+            assert script is not None, "script des indicatifs absent"
+            node = shutil.which("node")
+            assert node, "node requis pour vérifier le JavaScript rendu"
+            checked = subprocess.run(
+                [node, "--check"],
+                input=script,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            assert checked.returncode == 0, checked.stderr
+            assert 'const indicatifs={"BF":"+226"' in script
+        """)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_registration_error_preserves_non_password_fields(self):
         result = self.run_probe("""
             import re
