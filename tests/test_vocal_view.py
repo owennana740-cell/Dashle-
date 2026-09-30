@@ -500,7 +500,7 @@ class VocalViewTests(unittest.TestCase):
           setTimeout(() => {
             if (fetches !== 2) throw new Error("le nouveau message n'a pas pris la main");
             const botFinal = w.document.querySelectorAll(".message-wrap.bot .msg").length;
-            if (botFinal !== botInitial) throw new Error("message fantôme ou double réponse");
+            if (botFinal !== botInitial) throw new Error("message fantôme ou double réponse: initial=" + botInitial + " final=" + botFinal);
             if (w.document.querySelectorAll(".message-wrap.user .msg").length < 2) throw new Error("nouveau message absent");
             console.log("TEXT_RESUBMIT_ABORT_OK");
           }, 180);
