@@ -4524,7 +4524,9 @@ button{margin-top:22px;padding:12px;border:0;border-radius:10px;background:linea
 .erreur{color:#b00020;font-size:13px;margin-top:8px}.note{font-size:12px;color:#71837b;margin:7px 0 0}
 p{font-size:14px;color:#555;margin-top:16px}p a{color:#22C55E;font-weight:600;text-decoration:none}
 .visiteur{display:block;text-align:center;margin-top:12px;font-size:13px;color:#71837b}.visiteur a{color:#22C55E}
-.phone{display:grid;grid-template-columns:130px 1fr;gap:8px}.phone select,.phone input{margin-top:5px}
+.phone{display:grid;grid-template-columns:auto minmax(0,1fr);gap:8px;align-items:end}
+.phone-prefix{min-width:3.5rem;max-width:5rem;box-sizing:border-box;margin-top:5px;padding:12px 8px;border:1px solid #d9e1dd;border-radius:10px;background:#f5f7f6;text-align:center;font-weight:600;line-height:1.2;white-space:nowrap;overflow:hidden}
+.phone-prefix:empty{visibility:hidden}
 </style></head><body><main class="carte">
 <div class="logo-titre"><img class="logo" src="/static/icons/dashle-logo-header.png" alt="Dashle"><h1>Dashle</h1></div>
 <h2>{{ titre }}</h2>
@@ -4539,7 +4541,7 @@ p{font-size:14px;color:#555;margin-top:16px}p a{color:#22C55E;font-weight:600;te
 {% for code, nom_pays, indicatif in pays_profil %}<option value="{{ code }}" {% if inscription_pays|default('') == code %}selected{% endif %}>{{ nom_pays }} (+{{ indicatif }})</option>{% endfor %}
 </select></label>
 <label>Numéro de téléphone
-<div class="phone"><select id="indicatif" aria-label="Indicatif" disabled><option>+---</option></select><input type="hidden" id="indicatif-envoye" name="indicatif" value="{{ inscription_indicatif|default('') }}"><input id="telephone" name="telephone" type="tel" required autocomplete="tel-national" inputmode="tel" placeholder="Numéro national" value="{{ inscription_telephone|default('') }}"></div>
+<div class="phone"><span id="indicatif-prefix" class="phone-prefix" aria-label="Indicatif international"></span><input type="hidden" id="indicatif-envoye" name="indicatif" value="{{ inscription_indicatif|default('') }}"><input id="telephone" name="telephone" type="tel" required autocomplete="tel-national" inputmode="tel" placeholder="Numéro national" value="{{ inscription_telephone|default('') }}"></div>
 <p class="note">Le numéro est enregistré avec son indicatif international. Le 0 initial est conservé dans ton profil.</p>
 </label>{% endif %}
 <label>Mot de passe<input name="password" type="password" required minlength="8" autocomplete="{{ autocomplete }}"></label>
@@ -4567,14 +4569,12 @@ for (const [code, valeur] of Object.entries(repliIndicatifs)) {
   if (!donneesIndicatifs[code]) donneesIndicatifs[code]=valeur;
 }
 function syncIndicatif(){
-  const valeur=donneesIndicatifs[pays.value]||donneesIndicatifs.BF||repliIndicatifs.BF;
-  indicatif.options[0].textContent=valeur;
+  const valeur=donneesIndicatifs[pays.value]||'';
+  document.getElementById('indicatif-prefix').textContent=valeur;
   indicatifEnvoye.value=valeur;
 }
-if (!Object.keys(donneesIndicatifs).length) {
-  indicatif.options[0].textContent=repliIndicatifs.BF;
-}
 pays.addEventListener('change',syncIndicatif);
+pays.addEventListener('input',syncIndicatif);
 syncIndicatif();
 </script>{% endif %}
 </main></body></html>
