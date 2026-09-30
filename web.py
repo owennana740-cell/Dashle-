@@ -43,7 +43,7 @@ from database import (
     AdminAuditLog, Conversation, ImageGenerationUsage, VoiceTranscriptionUsage, LibraryItem, Message, MessageFeedback, ShareLink, SubscriptionPayment, User,
     UserMemory, UserPreference, StatisticalAnalysisUsage, Project, ProjectFile, Reminder, UserPlugin,
     ScheduledTask, ScheduledTaskRun, UserNotification,
-    initialiser_base, session_base,
+    initialiser_base, session_base, EPHEMERAL_DB_MODE,
 )
 from statistiques import analyser_fichier
 from temps_reel import actualites_recentes, meteo_du_jour
@@ -73,6 +73,8 @@ app.config.update(
     PERMANENT_SESSION_LIFETIME=timedelta(days=3650),
 )
 initialiser_base()
+if EPHEMERAL_DB_MODE:
+    app.logger.warning("MODE TEST : données temporaires, perdues à chaque redémarrage")
 app.register_blueprint(connectors_bp)
 
 
@@ -4315,6 +4317,7 @@ body.theme-sombre label{border-color:#294238}
     </label>
   </section>
   <section class="carte"><h2>À propos de Dashle</h2>
+    {% if ephemeral_db_mode %}<p class="note"><strong>MODE TEST :</strong> données temporaires, perdues à chaque redémarrage.</p>{% endif %}
     <p class="note"><strong>Version :</strong> <code>{{ build_commit_short }}</code> · <strong>build :</strong> {{ build_date }}</p>
     <p class="note"><strong>Modèle IA :</strong> {{ modele_gemini }} (Google AI)</p>
     <p class="note">Dashle est un assistant personnel conçu par Owen. Il mémorise le contexte de tes conversations et s'améliore avec le temps.</p>
@@ -5250,6 +5253,7 @@ def parametres():
         modele_gemini=MODELE_GEMINI,
         build_commit_short=BUILD_COMMIT_SHORT,
         build_date=BUILD_DATE,
+        ephemeral_db_mode=EPHEMERAL_DB_MODE,
         consignes_personnalisees=reglages.get(cle_consignes, ""),
         longueur_reponse=reglages.get(cle_longueur, "standard"),
         memoires=memoires,
