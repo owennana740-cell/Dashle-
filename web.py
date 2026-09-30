@@ -52,7 +52,7 @@ from artifact_tools import (detecter_demande_pdf, detecter_demande_image,
                             structurer_document, rendre_pdf, generer_image, extraire_texte_structure)
 
 try:
-    from PIL import Image
+    from PIL import Image, ImageOps
     PIL_DISPONIBLE = True
 except Exception:
     PIL_DISPONIBLE = False
@@ -61,7 +61,7 @@ except Exception:
 app = Flask(__name__)
 app.config.update(
     SECRET_KEY=os.environ.get("FLASK_SECRET_KEY") or os.urandom(32),
-    MAX_CONTENT_LENGTH=8 * 1024 * 1024,
+    MAX_CONTENT_LENGTH=12 * 1024 * 1024,
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
     # Render définit explicitement 1; le défaut 0 permet les sessions en localhost HTTP.
@@ -81,6 +81,9 @@ def definir_charset_json_utf8(response):
 
 # Nombre maximal de messages conservés en session pour les visiteurs anonymes.
 MAX_HISTORIQUE_VISITEUR = 30
+IMAGE_UPLOAD_MAX_BYTES = 10 * 1024 * 1024
+IMAGE_PREVIEW_MAX_SIDE = 320
+_IMAGE_PREVIEW_PREFIX = "[[DASHLE_IMAGE_PREVIEW:"
 
 # Quotas de génération d'images : compteurs exclusivement côté serveur.
 IMAGE_DAILY_LIMITS = {
@@ -530,15 +533,17 @@ def _messages_conversation(user_id, conversation_id, limite=None):
             messages.reverse()
         else:
             messages = conv.messages
-        return [
-            {
+        resultat = []
+        for m in messages:
+            texte, apercu = _extraire_apercu_image_message(m.texte)
+            resultat.append({
                 "id": m.id,
                 "auteur": m.auteur,
-                "texte": m.texte,
+                "texte": texte,
+                "image_preview": apercu,
                 "date": m.created_at.isoformat(),
-            }
-            for m in messages
-        ]
+            })
+        return resultat
 
 
 def _resume_conversation(user_id, conversation_id):
@@ -658,18 +663,57 @@ def _titre_automatique(texte):
     return titre or ""
 
 
-def ajouter_message(user_id, conversation_id, texte, auteur):
+def _extraire_apercu_image_message(texte):
+    brut = str(texte or "")
+    marqueur = "\n" + _IMAGE_PREVIEW_PREFIX
+    if marqueur not in brut:
+        return brut, ""
+    propre, suffixe = brut.rsplit(marqueur, 1)
+    apercu = suffixe[:-2] if suffixe.endswith("]]") else ""
+    if apercu.startswith("data:image/jpeg;base64,"):
+        return propre.rstrip(), apercu
+    return brut, ""
+
+
+def _texte_persistant_message(texte, image_preview=""):
+    propre = str(texte or "").strip()
+    apercu = str(image_preview or "")
+    if apercu.startswith("data:image/jpeg;base64,"):
+        return propre + "\n" + _IMAGE_PREVIEW_PREFIX + apercu + "]]"
+    return propre
+
+
+def _miniature_image_data_uri(image_bytes):
+    if not PIL_DISPONIBLE:
+        return ""
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as image:
+            image = ImageOps.exif_transpose(image).convert("RGB")
+            image.thumbnail((IMAGE_PREVIEW_MAX_SIDE, IMAGE_PREVIEW_MAX_SIDE), Image.Resampling.LANCZOS)
+            sortie = io.BytesIO()
+            image.save(sortie, format="JPEG", quality=72, optimize=True)
+        return "data:image/jpeg;base64," + base64.b64encode(sortie.getvalue()).decode("ascii")
+    except Exception:
+        return ""
+
+
+def ajouter_message(user_id, conversation_id, texte, auteur, image_preview=""):
     with session_base() as db:
         conv = db.query(Conversation).filter_by(
             id=conversation_id, user_id=user_id
         ).one_or_none()
         if conv is None:
             raise LookupError("Conversation introuvable")
-        msg = Message(conversation_id=conv.id, auteur=auteur, texte=texte)
+        texte_propre = str(texte or "").strip()
+        msg = Message(
+            conversation_id=conv.id,
+            auteur=auteur,
+            texte=_texte_persistant_message(texte_propre, image_preview),
+        )
         db.add(msg)
         db.flush()
         if auteur == "user" and conv.title == "Nouvelle conversation":
-            conv.title = _titre_automatique(texte) or conv.title
+            conv.title = _titre_automatique(texte_propre) or conv.title
         conv.updated_at = datetime.utcnow()
         return msg.id
 
@@ -1505,6 +1549,8 @@ video#apercu-fichier-media { object-fit: contain; }
 .message-wrap { max-width:min(95%,var(--largeur-conversation)); }
 .message-wrap { margin-bottom:22px; }
 .msg { padding:14px 17px; border:1px solid var(--bordure); box-shadow:0 3px 12px rgba(17,51,39,.045); }
+.message-image-persistante { margin:0 0 8px; max-width:min(320px,100%); }
+.message-image-persistante img { display:block; width:auto; max-width:100%; max-height:260px; border-radius:14px; object-fit:contain; cursor:zoom-in; }
 .msg.user { border-color:rgba(34,197,94,.18); }
 .msg.bot { background:var(--fond-secondaire); }
 .actions-reponse { gap:4px; padding:6px 4px; }
@@ -1795,6 +1841,11 @@ if ('serviceWorker' in navigator) {
   {% endif %}
   {% for m in messages %}
     <div class="message-wrap {{ 'user' if m.auteur == 'user' else 'bot' }}">
+      {% if m.get('image_preview') %}
+      <div class="message-image-persistante">
+        <img src="{{ m.get('image_preview') }}" alt="Image envoyée" loading="lazy">
+      </div>
+      {% endif %}
       <div class="msg {{ 'user' if m.auteur == 'user' else 'bot' }}" data-message-id="{{ m.get('id','') }}">{{ m.texte }}</div>
       {% if m.auteur == 'bot' %}
       <div class="actions-reponse">
@@ -2347,22 +2398,22 @@ function ajouterMessage(texte, classe) {
   return div;
 }
 
-function ajouterMessageImage(texte, fichier) {
+function ajouterMessageImage(texte, fichier, miniature) {
   if (!fichier || !fichier.type.startsWith('image/')) {
     return ajouterMessage(texte || '📎 Fichier envoyé', 'user');
   }
   const message = ajouterMessage(texte, 'user');
-  const url = URL.createObjectURL(fichier);
   const lien = document.createElement('a');
   lien.className = 'image-message-lien';
-  lien.href = url;
+  lien.href = miniature || '#';
   lien.target = '_blank';
   lien.rel = 'noopener noreferrer';
   lien.setAttribute('aria-label', 'Ouvrir l’image envoyée');
   const image = document.createElement('img');
   image.className = 'image-message';
-  image.src = url;
+  image.src = miniature || '';
   image.alt = fichier.name ? 'Image envoyée : ' + fichier.name : 'Image envoyée';
+  image.addEventListener('error', function(){ lien.replaceWith(document.createTextNode('Image envoyée : ' + (fichier.name || 'fichier image'))); });
   lien.appendChild(image);
   message.appendChild(lien);
   return message;
@@ -3395,32 +3446,103 @@ function afficherApercuFichier(fichier) {
 }
 
 let fichierImage = null;
+const IMAGE_UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
+
+async function _rasteriserImage(fichier, coteMax, qualite) {
+  const bitmap = await createImageBitmap(fichier, { imageOrientation: 'from-image' });
+  const echelle = Math.min(1, coteMax / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(bitmap.width * echelle));
+  canvas.height = Math.max(1, Math.round(bitmap.height * echelle));
+  const contexte = canvas.getContext('2d', { alpha: false });
+  contexte.fillStyle = '#fff';
+  contexte.fillRect(0, 0, canvas.width, canvas.height);
+  contexte.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close();
+  return new Promise(function(resolve, reject) {
+    canvas.toBlob(function(blob) {
+      if (!blob) reject(new Error('Compression de l’image indisponible.'));
+      else resolve(blob);
+    }, 'image/jpeg', qualite);
+  });
+}
+
 async function preparerImagePourEnvoi(fichier) {
-  if (!fichier || !fichier.type.startsWith('image/') || fichier.size <= 5 * 1024 * 1024) return fichier;
+  if (!fichier || !fichier.type.startsWith('image/')) return fichier;
+  if (fichier.size > IMAGE_UPLOAD_MAX_BYTES) {
+    throw new Error('L’image dépasse 10 Mo. Réduis-la puis réessaie.');
+  }
   try {
-    const bitmap = await createImageBitmap(fichier);
-    const echelle = Math.min(1, 2048 / Math.max(bitmap.width, bitmap.height));
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.max(1, Math.round(bitmap.width * echelle));
-    canvas.height = Math.max(1, Math.round(bitmap.height * echelle));
-    const contexte = canvas.getContext('2d');
-    contexte.fillStyle = '#fff';
-    contexte.fillRect(0, 0, canvas.width, canvas.height);
-    contexte.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-    bitmap.close();
-    const blob = await new Promise(function(resolve) { canvas.toBlob(resolve, 'image/jpeg', 0.84); });
-    if (!blob || blob.size >= fichier.size) return fichier;
+    const blob = await _rasteriserImage(fichier, 1600, 0.8);
     const nom = (fichier.name || 'image').replace(/\.[^.]+$/, '') + '.jpg';
     return new File([blob], nom, { type: 'image/jpeg', lastModified: Date.now() });
   } catch (erreur) {
-    console.warn('[DASHLE] Compression de l’image impossible, envoi de l’originale :', erreur);
-    return fichier;
+    throw new Error('Je n’ai pas pu préparer cette image. Réessaie.');
+  }
+}
+
+async function creerMiniatureImage(fichier) {
+  if (!fichier || !fichier.type.startsWith('image/')) return '';
+  try {
+    const blob = await _rasteriserImage(fichier, 320, 0.72);
+    return await new Promise(function(resolve, reject) {
+      const lecteur = new FileReader();
+      lecteur.onload = function(){ resolve(String(lecteur.result || '')); };
+      lecteur.onerror = reject;
+      lecteur.readAsDataURL(blob);
+    });
+  } catch (erreur) {
+    return '';
   }
 }
 inputImage.addEventListener('change', function(e) {
   fichierImage = e.target.files[0] || null;
   afficherApercuFichier(fichierImage);
 });
+function envoyerImageAvecProgression(fd, headers, onProgress) {
+  return new Promise(function(resolve, reject) {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', urlImage, true);
+    xhr.responseType = 'json';
+    Object.keys(headers || {}).forEach(function(cle) { xhr.setRequestHeader(cle, headers[cle]); });
+    xhr.upload.onprogress = function(e) {
+      if (e.lengthComputable && typeof onProgress === 'function') {
+        onProgress(Math.round((e.loaded / e.total) * 100));
+      }
+    };
+    xhr.onload = function() {
+      let data = xhr.response;
+      if (!data) {
+        try { data = JSON.parse(xhr.responseText || '{}'); } catch(e) { data = {}; }
+      }
+      resolve({ ok: xhr.status >= 200 && xhr.status < 300, status: xhr.status, message: data.reponse || data.erreur || '', ...data });
+    };
+    xhr.onerror = function() {
+      reject(new Error('Je n’ai pas pu envoyer l’image. Réessaie.'));
+    };
+    xhr.ontimeout = function() {
+      reject(new Error('Je n’ai pas pu envoyer l’image. Réessaie.'));
+    };
+    xhr.send(fd);
+  });
+}
+
+function afficherEchecEnvoiImage(texte, fichier, message) {
+  const zone = ajouterMessage(message || 'Je n’ai pas pu envoyer l’image. Réessaie.', 'bot');
+  const bouton = document.createElement('button');
+  bouton.type = 'button';
+  bouton.className = 'primaire';
+  bouton.textContent = 'Réessayer';
+  bouton.addEventListener('click', function() {
+    fichierImage = fichier;
+    champ.value = texte || '';
+    afficherApercuFichier(fichier);
+    zone.appendChild(bouton);
+    form.requestSubmit();
+  });
+  zone.appendChild(bouton);
+}
+
 document.getElementById('retirer-fichier').addEventListener('click', effacerApercuFichier);
 
 const feuilleFichiers = document.getElementById('feuille-fichiers');
@@ -3707,7 +3829,8 @@ form.addEventListener('submit', async function(e) {
 
     try {
       const imageEnvoyee = await preparerImagePourEnvoi(imageOriginale);
-      ajouterMessageImage(texte, imageEnvoyee);
+      const miniature = await creerMiniatureImage(imageEnvoyee);
+      ajouterMessageImage(texte, imageEnvoyee, miniature);
       const fd = new FormData();
       fd.append('message', texte);
       fd.append('image', imageEnvoyee, imageEnvoyee.name);
@@ -3716,15 +3839,17 @@ form.addEventListener('submit', async function(e) {
       }
       const headers = {};
       if (estConnecte) headers['X-CSRF-Token'] = csrfToken;
-      const res  = await fetch(urlImage, { method: 'POST', headers, body: fd });
-      const data = await res.json().catch(function() { return {}; });
+      const data = await envoyerImageAvecProgression(fd, headers, function(pourcentage) {
+        const reflexion = document.getElementById('reflexion-active');
+        if (reflexion) reflexion.setAttribute('aria-label', 'Envoi de l’image : ' + pourcentage + '%');
+      });
       retirerReflexion();
-      if (!res.ok) throw new Error(data.erreur || data.reponse || 'Erreur image (' + res.status + '). Réessaie.');
+      if (!data.ok) throw new Error(data.message || 'Je n’ai pas pu envoyer l’image. Réessaie.');
       ajouterReponse(data.reponse, data.message_id);
     } catch(err) {
       retirerReflexion();
-      console.warn('[DASHLE] Échec envoi image :', err);
-      ajouterMessage(err.message || "Erreur d'envoi de l'image. Réessaie.", 'bot');
+      console.warn('[DASHLE] Échec envoi image (%s)', err && err.name ? err.name : 'erreur');
+      afficherEchecEnvoiImage(texte, imageOriginale, err && err.message);
     }
     fichierImage = null;
     effacerApercuFichier();
@@ -5763,37 +5888,78 @@ def repondre_image():
     if not fichier:
         return jsonify({"reponse": "Aucune image reçue."})
 
-    image_bytes = fichier.read()
+    image_bytes = fichier.read(IMAGE_UPLOAD_MAX_BYTES + 1)
+    if len(image_bytes) > IMAGE_UPLOAD_MAX_BYTES:
+        return jsonify({
+            "reponse": "L’image est trop volumineuse. La limite avant compression est de 10 Mo. Réduis-la puis réessaie.",
+            "code": "image_trop_volumineuse",
+            "retryable": True,
+        }), 413
     if not image_bytes:
-        return jsonify({"reponse": "L'image reçue est vide."}), 400
+        return jsonify({"reponse": "L'image reçue est vide.", "retryable": True}), 400
 
     mime_type = detecter_type_media(image_bytes)
     if not mime_type:
-        return jsonify({"reponse": "Le fichier envoyé n'est pas une image ou une vidéo valide."}), 400
+        return jsonify({
+            "reponse": "Je n’ai pas pu reconnaître cette image. Choisis un JPEG, PNG, GIF, BMP ou WebP valide.",
+            "code": "image_invalide",
+            "retryable": True,
+        }), 400
 
     if mime_type.startswith("image/") and PIL_DISPONIBLE:
         try:
             with Image.open(io.BytesIO(image_bytes)) as img:
                 img.verify()
         except Exception:
-            return jsonify({"reponse": "Le fichier envoyé n'est pas une image valide."}), 400
+            return jsonify({
+                "reponse": "Je n’ai pas pu lire cette image. Vérifie le fichier puis réessaie.",
+                "code": "image_invalide",
+                "retryable": True,
+            }), 400
+
+    bloque, quota = _quota_image_bloque(user_id) if mime_type.startswith("image/") else (False, None)
+    if bloque:
+        return jsonify({"reponse": quota["message"], "quota": quota}), 429
 
     image_b64 = base64.b64encode(image_bytes).decode("utf-8")
     type_media = "Vidéo" if mime_type.startswith("video/") else "Image"
     texte_msg = message or f"[{type_media} envoyée]"
 
+    apercu_persistant = _miniature_image_data_uri(image_bytes) if mime_type.startswith("image/") else ""
     if user_id and conserver:
-        ajouter_message(user_id, conversation_id, texte_msg, "user")
+        ajouter_message(
+            user_id, conversation_id, texte_msg, "user",
+            image_preview=apercu_persistant,
+        )
     elif not user_id:
         _ajouter_message_visiteur(texte_msg, "user")
 
     contexte_projet = (
         _arguments_contexte_projet(user_id, conversation_id) if user_id else {}
     )
-    reponse = traiter_message_image(
-        message, image_b64, mime_type, historique, resume,
-        user_id=user_id, **contexte_projet,
-    )
+    try:
+        reponse = traiter_message_image(
+            message, image_b64, mime_type, historique, resume,
+            user_id=user_id, **contexte_projet,
+        )
+    except requests.RequestException:
+        app.logger.warning("Échec réseau lors de l’analyse d’image")
+        return jsonify({
+            "reponse": "Je n’ai pas pu envoyer l’image. Réessaie.",
+            "code": "image_reseau",
+            "retryable": True,
+        }), 502
+    except Exception as exc:
+        app.logger.warning("Échec analyse image (%s)", type(exc).__name__)
+        return jsonify({
+            "reponse": "Je n’ai pas pu analyser l’image. Réessaie.",
+            "code": "image_analyse",
+            "retryable": True,
+        }), 502
+
+    if mime_type.startswith("image/") and not _consommer_quota_image(user_id):
+        bloque, quota = _quota_image_bloque(user_id)
+        return jsonify({"reponse": quota["message"], "quota": quota}), 429
 
     if user_id and conserver:
         mid = ajouter_message(user_id, conversation_id, reponse, "bot")
@@ -5816,7 +5982,11 @@ def repondre_image():
 
 @app.errorhandler(413)
 def fichier_trop_volumineux(_erreur):
-    return jsonify({"reponse": "Le fichier est trop volumineux (maximum : 8 Mo)."}), 413
+    return jsonify({
+        "reponse": "L’image est trop volumineuse. La limite avant compression est de 10 Mo. Réduis-la puis réessaie.",
+        "code": "image_trop_volumineuse",
+        "retryable": True,
+    }), 413
 
 
 # ---------------------------------------------------------------------------
