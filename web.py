@@ -1949,7 +1949,7 @@ let vadDerniereDetection = 0;
 let vadDebutParole  = 0;
 let vadPret         = false;
 let vadBruitBase = 0.01;
-let vadSeuilCourant = VAD_SEUIL;
+let vadSeuilCourant = 0.06;
 
 // Flag : vrai pendant toute la durée d'une synthèse vocale pour éviter
 // que le VAD ne déclenche une interruption sur la voix de Dashle lui-même.
