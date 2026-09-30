@@ -123,7 +123,8 @@ class RegistrationPhoneTests(unittest.TestCase):
             dom_script = r"""
                 const fs = require("fs");
                 const {JSDOM} = require("jsdom");
-                const document = new JSDOM(fs.readFileSync(process.argv[1], "utf8")).window.document;
+                const dom = new JSDOM(fs.readFileSync(process.argv[1], "utf8"), {runScripts: "dangerously"});
+                const document = dom.window.document;
                 const data = document.getElementById("donnees-indicatifs");
                 if (!data) throw new Error("donnees-indicatifs absent");
                 const rows = JSON.parse(data.textContent);
@@ -133,11 +134,8 @@ class RegistrationPhoneTests(unittest.TestCase):
                 const indicator = document.getElementById("indicatif");
                 const hidden = document.getElementById("indicatif-envoye");
                 if (!country || !indicator || !hidden) throw new Error("champs téléphone absents");
-                const values = Object.fromEntries(rows.map((row) => [row[0], "+" + row[2]]));
                 country.value = "BF";
-                const value = values[country.value] || "+226";
-                indicator.options[0].textContent = value;
-                hidden.value = value;
+                country.dispatchEvent(new dom.window.Event("change"));
                 if (indicator.options[0].textContent !== "+226") throw new Error("indicatif visible incorrect");
                 if (hidden.value !== "+226") throw new Error("indicatif caché incorrect");
             """
