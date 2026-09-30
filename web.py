@@ -51,6 +51,13 @@ from artifact_tools import (detecter_demande_pdf, detecter_demande_image,
                             demande_illustration_pedagogique, extraire_contenu_fourni,
                             structurer_document, rendre_pdf, generer_image, extraire_texte_structure)
 
+BUILD_COMMIT = os.environ.get("RENDER_GIT_COMMIT") or os.environ.get("DASHLE_BUILD_COMMIT") or "inconnu"
+BUILD_COMMIT_SHORT = BUILD_COMMIT[:12] if BUILD_COMMIT != "inconnu" else BUILD_COMMIT
+try:
+    BUILD_DATE = os.environ.get("DASHLE_BUILD_DATE") or datetime.fromtimestamp(os.path.getmtime(__file__), timezone.utc).isoformat()
+except OSError:
+    BUILD_DATE = "non déclarée"
+
 try:
     from PIL import Image, ImageOps
     PIL_DISPONIBLE = True
@@ -2044,6 +2051,18 @@ const btnRouvrirVocal = document.getElementById('btn-rouvrir-vocal');
 const btnInterrompreVocal = document.getElementById('btn-interrompre-vocal');
 
 // CSRF token injecté côté serveur
+document.querySelectorAll('a[href*="/parametres"]').forEach(function(lien) {
+  let appuis = 0, dernierAppui = 0;
+  lien.addEventListener('click', function() {
+    const maintenant = Date.now();
+    appuis = maintenant - dernierAppui < 1400 ? appuis + 1 : 1;
+    dernierAppui = maintenant;
+    if (appuis >= 5) {
+      try { localStorage.setItem('dashle_vocal_diag_open', '1'); } catch(e) {}
+      appuis = 0;
+    }
+  });
+});
 const csrfToken        = __CSRF_TOKEN__;
 const preferencesVocales = __PREFS_VOCALES__;
 if (preferencesVocales.voix_active === false) {
@@ -2239,12 +2258,21 @@ let minuteurRelanceReco = null;
 const DELAI_RELANCE_RECO_INITIAL = 300;
 const DELAI_RELANCE_RECO_MAX = 2000;
 const MAX_PALIERS_RELANCE_RECO = 6;
-let nbFinsImmediatesVocal = 0;
+let nbFinsSansTranscriptionVocal = 0;
 const DUREE_FIN_IMMEDIATE_VOCAL_MS = 1200;
-const MAX_FINS_IMMEDIATES_VOCAL = 3;
+const MAX_FINS_SANS_TRANSCRIPTION_VOCAL = 3;
 
 // Attendre que les résultats finaux se stabilisent avant d'envoyer le tour vocal.
 let transcriptionFinaleVocale = '';
+const VOCAL_DIAG_STORAGE_KEY = 'dashle_vocal_diagnostic_v1';
+function journaliserDiagnosticVocal(type, detail) {
+  try {
+    const courant = JSON.parse(localStorage.getItem(VOCAL_DIAG_STORAGE_KEY) || '[]');
+    courant.push({ ts: new Date().toISOString(), type: String(type || ''), detail: detail || null });
+    while (courant.length > 120) courant.shift();
+    localStorage.setItem(VOCAL_DIAG_STORAGE_KEY, JSON.stringify(courant));
+  } catch (e) {}
+}
 let dernierIndexFinalVocal = 0;
 let minuteurFinPhraseVocale = null;
 const DELAI_FIN_PHRASE_VOCALE = 1600;
@@ -3112,8 +3140,9 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
       return false;
     }
     journaliserEtatAudioReconnaissance();
-    reco.interimResults = true;
-    reco.continuous = true;
+    arreterVAD();
+    reco.interimResults = false;
+    reco.continuous = false;
     modeActuel = 'vocal';
     ouvrirModeVocal();
     afficherEtatVocal('ecoute', 'Dashle écoute...');
@@ -3187,6 +3216,7 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
   };
 
   reco.onstart = function() {
+    journaliserDiagnosticVocal('onstart', { mode: modeActuel, vocalActif: vocalActif });
     recoDebutEcouteMs = performance.now();
     if (modeActuel === 'vocal') journaliserEtatAudioReconnaissance();
     console.log('[DASHLE][SpeechRecognition] onstart', { mode: modeActuel, vocalActif: vocalActif });
@@ -3201,6 +3231,7 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
   };
 
   reco.onresult = function(e) {
+    journaliserDiagnosticVocal('onresult', { resultIndex: e && e.resultIndex, count: (e && e.results && e.results.length) || 0 });
     const resultatsJournal = Array.from(e.results || []).map(function(r, index) {
       const transcript = r && r[0] ? String(r[0].transcript || '').trim() : '';
       const confidence = r && r[0] && typeof r[0].confidence === 'number' ? r[0].confidence : null;
@@ -3228,14 +3259,10 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
       return;
     }
 
-    let paroleInterimaire = false;
     let resultatNonVide = false;
     for (let i = 0; i < resultats.length; i++) {
       const texte = resultats[i] && resultats[i][0] && resultats[i][0].transcript;
-      if (texte && texte.trim()) {
-        resultatNonVide = true;
-        if (!resultats[i].isFinal) paroleInterimaire = true;
-      }
+      if (texte && texte.trim()) resultatNonVide = true;
     }
     const debut = Math.max(Number.isInteger(e.resultIndex) ? e.resultIndex : 0, dernierIndexFinalVocal);
     for (let i = debut; i < resultats.length; i++) {
@@ -3248,7 +3275,7 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
 
     if (resultatNonVide) {
       nbRelancesVocal = 0;
-      nbFinsImmediatesVocal = 0;
+      nbFinsSansTranscriptionVocal = 0;
       if (minuteurRelanceReco !== null) {
         clearTimeout(minuteurRelanceReco);
         minuteurRelanceReco = null;
@@ -3256,14 +3283,11 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
     }
     if (!transcriptionFinaleVocale) return;
     interruptionDemandee = false;
-    if (paroleInterimaire) {
-      annulerFinPhraseVocale();
-    } else {
-      planifierEnvoiFinPhraseVocale();
-    }
+    planifierEnvoiFinPhraseVocale();
   };
 
   reco.onend = function() {
+    journaliserDiagnosticVocal('onend', { mode: modeActuel, vocalActif: vocalActif });
     const dureeEcouteMs = recoDebutEcouteMs ? Math.max(0, Math.round(performance.now() - recoDebutEcouteMs)) : null;
     const transcriptionLog = modeActuel === 'dictee' ? dernierTranscriptDictee : transcriptionFinaleVocale;
     console.log('[DASHLE][SpeechRecognition] onend', {
@@ -3286,17 +3310,13 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
       return;
     }
     const synthActive = ('speechSynthesis' in window) && window.speechSynthesis.speaking;
-    const finImmediate = modeActuel === 'vocal'
-      && !transcriptionFinaleVocale.trim()
-      && typeof dureeEcouteMs === 'number'
-      && dureeEcouteMs < DUREE_FIN_IMMEDIATE_VOCAL_MS;
-    if (finImmediate) {
-      nbFinsImmediatesVocal += 1;
-      console.warn('[DASHLE][SpeechRecognition] fin immédiate', {
-        compteur: nbFinsImmediatesVocal, dureeEcouteMs: dureeEcouteMs
+    if (modeActuel === 'vocal' && !transcriptionFinaleVocale.trim()) {
+      nbFinsSansTranscriptionVocal += 1;
+      console.warn('[DASHLE][SpeechRecognition] fin sans transcription', {
+        compteur: nbFinsSansTranscriptionVocal, dureeEcouteMs: dureeEcouteMs
       });
-      if (nbFinsImmediatesVocal >= MAX_FINS_IMMEDIATES_VOCAL) {
-        nbFinsImmediatesVocal = 0;
+      if (nbFinsSansTranscriptionVocal >= MAX_FINS_SANS_TRANSCRIPTION_VOCAL) {
+        nbFinsSansTranscriptionVocal = 0;
         if (demarrerSecoursAudio()) return;
         vocalActif = false;
         btnVocal.classList.remove('vocal-on', 'ecoute', 'parle');
@@ -3311,6 +3331,7 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
   };
 
   reco.onerror = function(e) {
+    journaliserDiagnosticVocal('onerror', { error: e && e.error, message: e && e.message });
     console.log('[DASHLE][SpeechRecognition] onerror', {
       error: e && e.error, message: e && e.message, mode: modeActuel, vocalActif: vocalActif
     });
@@ -4535,8 +4556,17 @@ body.theme-sombre label{border-color:#294238}
       </select>
     </label>
   </section>
-  <section class="carte"><h2>À propos de Dashle</h2>
-    <p class="note"><strong>Version :</strong> version du projet non déclarée</p>
+  <section class="carte" id="diagnostic-vocal" hidden>
+  <h2>Diagnostic vocal</h2>
+  <p class="note">Ce panneau est local au navigateur et n'apparaît qu'après 5 appuis rapides sur « Paramètres ».</p>
+  <pre id="diagnostic-vocal-contenu" style="max-height:280px;overflow:auto;white-space:pre-wrap"></pre>
+  <button type="button" class="secondaire" id="diagnostic-vocal-copier">Copier</button>
+  <button type="button" class="secondaire" id="diagnostic-vocal-effacer">Effacer</button>
+</section>
+<section class="carte"><h2>À propos de Dashle</h2>
+    <p class="note"><strong>Build :</strong> {{ build_commit_short }}</p>
+    <p class="note"><strong>Commit :</strong> {{ build_commit }}</p>
+    <p class="note"><strong>Date :</strong> {{ build_date }}</p>
     <p class="note"><strong>Modèle IA :</strong> {{ modele_gemini }} (Google AI)</p>
     <p class="note">Dashle est un assistant personnel conçu par Owen. Il mémorise le contexte de tes conversations et s'améliore avec le temps.</p>
     <p><a href="{{ url_for('conditions_utilisation') }}">Conditions d'utilisation</a></p>
@@ -4548,6 +4578,28 @@ body.theme-sombre label{border-color:#294238}
   <button type="submit" class="secondaire">Commencer une nouvelle conversation</button>
 </form>
 <script>
+const diagSection = document.getElementById('diagnostic-vocal');
+const diagContent = document.getElementById('diagnostic-vocal-contenu');
+function afficherDiagnosticVocal() {
+  if (!diagSection || !diagContent) return;
+  diagSection.hidden = false;
+  try { diagContent.textContent = JSON.stringify(JSON.parse(localStorage.getItem('dashle_vocal_diagnostic_v1') || '[]'), null, 2); } catch(e) { diagContent.textContent = 'Diagnostic indisponible.'; }
+}
+try {
+  if (localStorage.getItem('dashle_vocal_diag_open') === '1') {
+    localStorage.removeItem('dashle_vocal_diag_open');
+    afficherDiagnosticVocal();
+  }
+} catch(e) {}
+if (diagSection) {
+  document.getElementById('diagnostic-vocal-copier').addEventListener('click', async function() {
+    try { await navigator.clipboard.writeText(diagContent.textContent); } catch(e) {}
+  });
+  document.getElementById('diagnostic-vocal-effacer').addEventListener('click', function() {
+    try { localStorage.removeItem('dashle_vocal_diagnostic_v1'); } catch(e) {}
+    diagContent.textContent = '';
+  });
+}
 const sv = document.getElementById('voix-select');
 let vp = [];
 function remplirVoix() {
@@ -5462,6 +5514,9 @@ def parametres():
         telephone_utilisateur=(user.telephone_national if user else ""),
         preferences=_preferences(user_id),
         modele_gemini=MODELE_GEMINI,
+        build_commit=BUILD_COMMIT,
+        build_commit_short=BUILD_COMMIT_SHORT,
+        build_date=BUILD_DATE,
         consignes_personnalisees=reglages.get(cle_consignes, ""),
         longueur_reponse=reglages.get(cle_longueur, "standard"),
         memoires=memoires,
