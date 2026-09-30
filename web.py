@@ -1965,7 +1965,7 @@ if ('serviceWorker' in navigator) {
       <div class="orbite" style="--taille:58%;--vitesse:11s"><span class="planete" style="--diametre:9px;--couleur:#b8ffe5"></span></div>
       <div class="orbite" style="--taille:78%;--vitesse:17s"><span class="planete" style="--diametre:13px;--couleur:#62dcb0"></span></div>
       <div class="orbite" style="--taille:98%;--vitesse:25s"><span class="planete" style="--diametre:7px;--couleur:#d5fff0"></span></div>
-      <div class="orbe-dashle"></div>
+      <div class="orbe-dashle" id="orbe-dashle" role="button" tabindex="0" aria-label="Appuie pour interrompre Dashle"></div>
     </div>
     <div class="etat-vocal" id="etat-vocal">En attente</div>
   </div>
@@ -2036,6 +2036,7 @@ const chat        = document.getElementById('chat');
 const form        = document.getElementById('form-message');
 const champ       = document.getElementById('message');
 const btnEnvoyer  = document.getElementById('btn-envoyer');
+const orbeDashle = document.getElementById('orbe-dashle');
 const btnMicro    = document.getElementById('btn-micro');
 const btnVocal    = document.getElementById('btn-vocal');
 const statutVocal = document.getElementById('statut-vocal');
@@ -2937,6 +2938,7 @@ async function genererPdfTempsReelDansChat(texte) {
 // Gestion des générations SSE
 // =====================================================================
 function arreterGeneration() {
+  if ('speechSynthesis' in window) window.speechSynthesis.cancel();
   if (requeteActiveController) {
     try { requeteActiveController.abort(); } catch(e) {}
     requeteActiveController = null;
@@ -3055,6 +3057,18 @@ function surveillerParole() {
 // =====================================================================
 // Mode vocal — interruption et séquencement
 // =====================================================================
+if (orbeDashle) {
+  orbeDashle.addEventListener('click', function() {
+    interrompreDashle();
+  });
+  orbeDashle.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      interrompreDashle();
+    }
+  });
+}
+
 function interrompreDashle() {
   if (!vocalActif) return;
   interruptionDemandee = true;
@@ -3978,6 +3992,12 @@ form.addEventListener('submit', async function(e) {
   e.preventDefault();
   const texte = champ.value.trim();
   if (!texte && !fichierImage) return;
+
+  // Un nouvel envoi prend la main : annuler immédiatement le SSE et le TTS précédents.
+  if (reponseEnCours || requeteActiveController) {
+    arreterGeneration();
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+  }
 
   // Couper toute lecture en cours si l'utilisateur envoie manuellement
   if ('speechSynthesis' in window && window.speechSynthesis.speaking) arreterLecture();
