@@ -64,7 +64,7 @@ class RegistrationPhoneTests(unittest.TestCase):
                 check=False,
             )
             assert checked.returncode == 0, checked.stderr
-            assert re.search(r'const\\s+indicatifs\\s*=\\s*\\{', script)
+            assert re.search(r'const\s+indicatifs\s*=\s*\{', script)
             assert '"BF":"+226"' in script
         """)
         self.assertEqual(result.returncode, 0, result.stderr)
