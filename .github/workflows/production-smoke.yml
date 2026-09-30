@@ -1,0 +1,76 @@
+name: Production HTML smoke test
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  production-html:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Attendre le déploiement Render et vérifier les pages publiques
+        env:
+          PRODUCTION_URL: https://dashle.onrender.com
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 30); do
+            ok=1
+            for path in / /connexion /inscription; do
+              file="/tmp/dashle$(echo "$path" | tr '/' '_').html"
+              if ! curl -fsS --retry 1 --max-time 20 -H 'Cache-Control: no-cache' "$PRODUCTION_URL$path?nocache=$(date +%s%N)" -o "$file"; then
+                ok=0
+                break
+              fi
+            done
+            if [ "$ok" -eq 1 ] && grep -q 'id="donnees-indicatifs"' /tmp/dashle_inscription.html; then
+              break
+            fi
+            if [ "$i" -eq 30 ]; then
+              echo "Déploiement production non observé ou HTML ancien après 5 minutes."
+              exit 1
+            fi
+            sleep 10
+          done
+      - name: Vérifier tous les scripts JavaScript inline de production
+        run: |
+          python - <<'PY'
+          from html.parser import HTMLParser
+          from pathlib import Path
+          import subprocess, sys
+
+          class Scripts(HTMLParser):
+              def __init__(self):
+                  super().__init__()
+                  self.items, self.attrs, self.buf, self.in_script = [], {}, [], False
+              def handle_starttag(self, tag, attrs):
+                  if tag == "script":
+                      self.attrs, self.buf, self.in_script = dict(attrs), [], True
+              def handle_endtag(self, tag):
+                  if tag == "script" and self.in_script:
+                      self.items.append((self.attrs, "".join(self.buf)))
+                      self.in_script = False
+              def handle_data(self, data):
+                  if self.in_script:
+                      self.buf.append(data)
+
+          for path in ("/tmp/dashle_.html", "/tmp/dashle__connexion.html", "/tmp/dashle__inscription.html"):
+              parser = Scripts()
+              parser.feed(Path(path).read_text(encoding="utf-8"))
+              for attrs, script in parser.items:
+                  kind = (attrs.get("type") or "").lower()
+                  if kind in {"application/json", "application/ld+json"}:
+                      continue
+                  result = subprocess.run(["node", "--check"], input=script, text=True, capture_output=True)
+                  if result.returncode:
+                      print(f"JavaScript invalide dans {path}:\n{result.stderr}", file=sys.stderr)
+                      sys.exit(1)
+
+          inscription = Path("/tmp/dashle__inscription.html").read_text(encoding="utf-8")
+          if 'id="donnees-indicatifs"' not in inscription or '"BF","Burkina Faso","226"' not in inscription:
+              print("Les données JSON des indicatifs ne sont pas présentes dans la production.", file=sys.stderr)
+              sys.exit(1)
+          PY
