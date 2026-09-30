@@ -182,6 +182,40 @@ class ArtifactToolsTests(unittest.TestCase):
             self.client.get(f"/bibliotheque/{item_id}/telecharger").status_code, 404
         )
 
+    def test_generer_image_uses_canonical_interactions_input_and_decodes_image(self):
+        class FakeResponse:
+            ok = True
+            status_code = 200
+            def json(self):
+                return {
+                    "output_image": {
+                        "data": base64.b64encode(PNG_1X1).decode("ascii"),
+                        "mime_type": "image/png",
+                    }
+                }
+
+        with patch.object(artifact_tools.requests, "post", return_value=FakeResponse()) as appel:
+            raw, mime = artifact_tools.generer_image("Crée une image simple.")
+
+        self.assertEqual(raw, PNG_1X1)
+        self.assertEqual(mime, "image/png")
+        payload = appel.call_args.kwargs["json"]
+        self.assertEqual(payload["input"][0]["type"], "text")
+        self.assertTrue(payload["input"][0]["text"])
+        self.assertEqual(payload["response_format"]["type"], "image")
+        self.assertEqual(payload["response_format"]["image_size"], "1K")
+
+    def test_generer_image_exposes_provider_http_error_detail(self):
+        class FakeResponse:
+            ok = False
+            status_code = 400
+            def json(self):
+                return {"error": {"message": "invalid_request: test provider detail"}}
+
+        with patch.object(artifact_tools.requests, "post", return_value=FakeResponse()):
+            with self.assertRaisesRegex(RuntimeError, r"HTTP 400.*invalid_request: test provider detail"):
+                artifact_tools.generer_image("Crée une image simple.")
+
     def test_image_generation_failure_does_not_break_chat(self):
         with patch.object(web, "generer_image", side_effect=RuntimeError("provider failure")), patch.object(artifact_tools, "generer_image", side_effect=RuntimeError("provider failure")):
             response = self.client.post(
