@@ -494,6 +494,10 @@ class VocalViewTests(unittest.TestCase):
           form.dispatchEvent(new w.Event("submit", {bubbles:true,cancelable:true}));
           setTimeout(() => {
             if (!fetches || !w.document.querySelector(".message-wrap.bot .msg")) throw new Error("première réponse non démarrée");
+            w.arreterGeneration();
+            if (w.document.querySelectorAll(".message-wrap.bot .msg").length !== botInitial) {
+              throw new Error("arreterGeneration laisse un message fantôme");
+            }
             champ.value = "second";
             form.dispatchEvent(new w.Event("submit", {bubbles:true,cancelable:true}));
           }, 100);
