@@ -141,7 +141,8 @@ class RegistrationPhoneTests(unittest.TestCase):
             """
             checked = subprocess.run([node, "-e", dom_script, html_path], text=True, capture_output=True, check=False)
             assert checked.returncode == 0, checked.stderr
-        ''')        self.assertEqual(result.returncode, 0, result.stderr)
+        ''')
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_registration_error_preserves_non_password_fields(self):
         result = self.run_probe("""
