@@ -440,7 +440,12 @@ class VocalViewTests(unittest.TestCase):
         node = shutil.which("node")
         if not node:
             self.skipTest("Node.js indisponible")
-        path = ROOT / "web.py"
+        import tempfile
+        import web
+        html = web.app.test_client().get("/").get_data(as_text=True)
+        with tempfile.NamedTemporaryFile("w", suffix=".html", encoding="utf-8", delete=False) as handle:
+            handle.write(html)
+            path = handle.name
         script = r"""
           const fs = require("fs");
           const {JSDOM} = require("jsdom");
