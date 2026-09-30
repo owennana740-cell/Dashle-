@@ -462,13 +462,34 @@ class VocalViewTests(unittest.TestCase):
           });
           const w = dom.window;
           let fetches = 0;
-          w.fetch = () => {
+          w.fetch = (url, options) => {
             fetches += 1;
-            return Promise.resolve({ok:true, body:{getReader(){return {read(){return new Promise(resolve => { this._resolve = resolve; });}};}}});
+            let reader;
+            const body = {
+              getReader() {
+                reader = {
+                  read() {
+                    return new Promise((resolve, reject) => {
+                      reader.resolve = resolve;
+                      reader.reject = reject;
+                    });
+                  }
+                };
+                if (options && options.signal) {
+                  options.signal.addEventListener("abort", () => {
+                    if (reader.reject) reader.reject(Object.assign(new Error("aborted"), {name:"AbortError"}));
+                  });
+                }
+                if (fetches === 2) setTimeout(() => reader.resolve({done:true, value:undefined}), 40);
+                return reader;
+              }
+            };
+            return Promise.resolve({ok:true, body});
           };
           const form = w.document.getElementById("form-message");
           const champ = w.document.getElementById("message");
           if (!form || !champ) throw new Error("formulaire absent");
+          const botInitial = w.document.querySelectorAll(".message-wrap.bot .msg").length;
           champ.value = "premier";
           form.dispatchEvent(new w.Event("submit", {bubbles:true,cancelable:true}));
           setTimeout(() => {
@@ -478,7 +499,9 @@ class VocalViewTests(unittest.TestCase):
           }, 20);
           setTimeout(() => {
             if (fetches !== 2) throw new Error("le nouveau message n'a pas pris la main");
-            if (w.document.querySelectorAll(".message-wrap .msg").length > 2) throw new Error("message fantôme ou double réponse");
+            const botFinal = w.document.querySelectorAll(".message-wrap.bot .msg").length;
+            if (botFinal !== botInitial + 1) throw new Error("message fantôme ou double réponse");
+            if (w.document.querySelectorAll(".message-wrap.user .msg").length < 2) throw new Error("nouveau message absent");
             console.log("TEXT_RESUBMIT_ABORT_OK");
           }, 180);
           setTimeout(() => process.exit(0), 220);
