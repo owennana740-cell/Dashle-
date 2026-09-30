@@ -1949,6 +1949,7 @@ if ('serviceWorker' in navigator) {
   <div class="vocal-entete">
     <strong>Conversation vocale</strong>
     <div class="vocal-commandes">
+      <button type="button" id="btn-interrompre-vocal" title="Interrompre la réponse vocale" aria-label="Interrompre la réponse vocale">Interrompre</button>
       <button type="button" id="reduire-vocal" title="Réduire">Réduire</button>
       <button type="button" id="fermer-vocal" title="Quitter le mode vocal">Fermer</button>
     </div>
@@ -2040,6 +2041,7 @@ const apercuNom       = document.getElementById('apercu-fichier-nom');
 const apercuType      = document.getElementById('apercu-fichier-type');
 const inputImage      = document.getElementById('image-input');
 const btnRouvrirVocal = document.getElementById('btn-rouvrir-vocal');
+const btnInterrompreVocal = document.getElementById('btn-interrompre-vocal');
 
 // CSRF token injecté côté serveur
 const csrfToken        = __CSRF_TOKEN__;
@@ -2076,6 +2078,8 @@ let vadAnimation    = null;
 let vadDerniereDetection = 0;
 let vadDebutParole  = 0;
 let vadPret         = false;
+let vadBruitBase = 0.01;
+let vadSeuilCourant = 0.06;
 
 // Flag : vrai pendant toute la durée d'une synthèse vocale pour éviter
 // que le VAD ne déclenche une interruption sur la voix de Dashle lui-même.
@@ -2092,8 +2096,10 @@ let syntheseEnCours = false;
 // Empêche reco.onend de relancer reco automatiquement pendant la synthèse.
 let recoMutePendantTTS = false;
 
-const VAD_SEUIL       = 0.06;  // RMS minimal pour "parole humaine"
-const VAD_DUREE_MIN   = 350;   // ms continus avant interruption (↑ anti-plosive)
+const VAD_SEUIL       = 0.06;  // RMS plancher pour "parole humaine"
+const VAD_DUREE_MIN   = 350;   // ms continus avant interruption (anti-plosive)
+const VAD_MARGE        = 0.025; // marge au-dessus du bruit ambiant estimé
+const VAD_FACTEUR      = 3.0;   // seuil adaptatif = bruit x facteur + marge
 const VAD_COOLDOWN    = 1200;  // ms minimum entre deux interruptions
 const VAD_DELAI_POST  = 350;   // ms de délai anti-écho après fin réelle de synthèse
 const AUDIO_SECOURS_MAX_MS = 20000;
@@ -2951,6 +2957,8 @@ function arreterVAD() {
   vadAudioContext = null;
   vadPret = false;
   vadDebutParole = 0;
+  vadBruitBase = 0.01;
+  vadSeuilCourant = VAD_SEUIL;
   // Libérer les verrous de synthèse : on quitte le mode vocal,
   // plus aucune protection n'est nécessaire.
   syntheseEnCours = false;
@@ -2972,6 +2980,25 @@ function surveillerParole() {
       somme += x * x;
     }
     const rms = Math.sqrt(somme / donnees.length);
+    if (rms < vadSeuilCourant) {
+      vadBruitBase = (vadBruitBase * 0.92) + (rms * 0.08);
+    }
+    vadSeuilCourant = Math.max(
+      VAD_SEUIL,
+      Math.min(0.18, (vadBruitBase * VAD_FACTEUR) + VAD_MARGE)
+    );
+    window.__dashleVocalDiagnostic = {
+      vadActif: Boolean(vadPret && vadStream),
+      rms: Number(rms.toFixed(4)),
+      bruitBase: Number(vadBruitBase.toFixed(4)),
+      seuil: Number(vadSeuilCourant.toFixed(4)),
+      paroleDepuisMs: vadDebutParole ? Math.round(now - vadDebutParole) : 0,
+      dureeMinMs: VAD_DUREE_MIN,
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+      speechRecognitionBloqueePendantTTS: Boolean(recoMutePendantTTS || syntheseEnCours)
+    };
     // Dashle est occupé si SSE en cours OU synthèse en cours.
     const dashleOccupe = reponseEnCours
       || syntheseEnCours
@@ -2983,7 +3010,7 @@ function surveillerParole() {
     const enPeriodeProtegee = vadDebutSynthese > 0
       && (now - vadDebutSynthese) < VAD_DELAI_POST;
 
-    if (dashleOccupe && !enPeriodeProtegee && rms >= VAD_SEUIL) {
+    if (dashleOccupe && !enPeriodeProtegee && rms >= vadSeuilCourant) {
       if (!vadDebutParole) vadDebutParole = now;
       if (now - vadDebutParole >= VAD_DUREE_MIN
           && now - vadDerniereDetection >= VAD_COOLDOWN) {
@@ -3041,6 +3068,7 @@ function interrompreDashle() {
 
   // 5. Redémarrer reco pour capter la nouvelle phrase.
   recoResultatsAutorises = false;
+  arreterVAD();
   if (reconnaissanceEnCoursAvantInterruption) {
     recoEnCours = true;
     try { reco && reco.abort(); } catch(e) {}
@@ -3448,7 +3476,16 @@ function lireReponse(bouton, texteForce, lectureAutomatique) {
     // L'audio démarre réellement : on arme le verrou d'état.
     // C'est ici, pas dans speak(), que le son commence vraiment.
     syntheseEnCours = true;
-    vadDebutSynthese = 0;  // réinitialiser le délai post-synthèse
+    vadDebutSynthese = 0;
+    demarrerVAD().then(function(ok) {
+      if (!ok) {
+        console.warn('[DASHLE][VAD] micro VAD indisponible pendant TTS');
+        window.__dashleVocalDiagnostic = Object.assign({}, window.__dashleVocalDiagnostic || {}, {
+          vadActif: false,
+          vadErreur: 'getUserMedia indisponible/refusé'
+        });
+      }
+    });
   };
 
   utteranceActuelle.onend = function() {
@@ -3458,6 +3495,7 @@ function lireReponse(bouton, texteForce, lectureAutomatique) {
     // Armer le délai anti-écho : le VAD attend encore VAD_DELAI_POST ms
     // avant d'autoriser une interruption, le temps que l'écho s'estompe.
     vadDebutSynthese = performance.now();
+    arreterVAD();
     arreterLecture();
     // En mode vocal : relancer reco maintenant que le TTS est terminé.
     // On attend VAD_DELAI_POST ms (délai anti-écho) avant d'écouter.
@@ -3476,6 +3514,7 @@ function lireReponse(bouton, texteForce, lectureAutomatique) {
     syntheseEnCours = false;
     recoMutePendantTTS = false;
     vadDebutSynthese = 0;
+    arreterVAD();
     // Ne pas afficher d'erreur si l'interruption est volontaire (cancel).
     if (ev && ev.error !== 'interrupted' && ev.error !== 'canceled') {
       etat.textContent = 'Erreur audio';
@@ -3682,6 +3721,12 @@ document.getElementById('reduire-vocal').addEventListener('click', function() {
 document.getElementById('fermer-vocal').addEventListener('click', function() {
   desactiverModeVocal();
 });
+
+if (btnInterrompreVocal) {
+  btnInterrompreVocal.addEventListener('click', function() {
+    interrompreDashle();
+  });
+}
 
 // Bouton rouvrir : ramène l'overlay sans relancer quoi que ce soit —
 // le VAD et la reconnaissance continuent de tourner en arrière-plan.
