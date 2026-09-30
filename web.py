@@ -51,6 +51,13 @@ from artifact_tools import (detecter_demande_pdf, detecter_demande_image,
                             demande_illustration_pedagogique, extraire_contenu_fourni,
                             structurer_document, rendre_pdf, generer_image, extraire_texte_structure)
 
+BUILD_COMMIT = os.environ.get("RENDER_GIT_COMMIT") or os.environ.get("DASHLE_BUILD_COMMIT") or "inconnu"
+BUILD_COMMIT_SHORT = BUILD_COMMIT[:12] if BUILD_COMMIT != "inconnu" else BUILD_COMMIT
+try:
+    BUILD_DATE = os.environ.get("DASHLE_BUILD_DATE") or datetime.fromtimestamp(os.path.getmtime(__file__), timezone.utc).isoformat()
+except OSError:
+    BUILD_DATE = "non déclarée"
+
 try:
     from PIL import Image, ImageOps
     PIL_DISPONIBLE = True
@@ -2044,6 +2051,18 @@ const btnRouvrirVocal = document.getElementById('btn-rouvrir-vocal');
 const btnInterrompreVocal = document.getElementById('btn-interrompre-vocal');
 
 // CSRF token injecté côté serveur
+document.querySelectorAll('a[href*="/parametres"]').forEach(function(lien) {
+  let appuis = 0, dernierAppui = 0;
+  lien.addEventListener('click', function() {
+    const maintenant = Date.now();
+    appuis = maintenant - dernierAppui < 1400 ? appuis + 1 : 1;
+    dernierAppui = maintenant;
+    if (appuis >= 5) {
+      try { localStorage.setItem('dashle_vocal_diag_open', '1'); } catch(e) {}
+      appuis = 0;
+    }
+  });
+});
 const csrfToken        = __CSRF_TOKEN__;
 const preferencesVocales = __PREFS_VOCALES__;
 if (preferencesVocales.voix_active === false) {
@@ -4545,7 +4564,7 @@ body.theme-sombre label{border-color:#294238}
   <button type="button" class="secondaire" id="diagnostic-vocal-effacer">Effacer</button>
 </section>
 <section class="carte"><h2>À propos de Dashle</h2>
-    <p class="note"><strong>Version :</strong> version du projet non déclarée</p>
+    <p class="note"><strong>Build :</strong> {{ build_commit_short }}</p>\n    <p class="note"><strong>Commit :</strong> {{ build_commit }}</p>\n    <p class="note"><strong>Date :</strong> {{ build_date }}</p>
     <p class="note"><strong>Modèle IA :</strong> {{ modele_gemini }} (Google AI)</p>
     <p class="note">Dashle est un assistant personnel conçu par Owen. Il mémorise le contexte de tes conversations et s'améliore avec le temps.</p>
     <p><a href="{{ url_for('conditions_utilisation') }}">Conditions d'utilisation</a></p>
@@ -4575,22 +4594,10 @@ if (diagSection) {
     try { await navigator.clipboard.writeText(diagContent.textContent); } catch(e) {}
   });
   document.getElementById('diagnostic-vocal-effacer').addEventListener('click', function() {
-    try { localStorage.removeItem('dashle_vocal_diagnostic_v1); } catch(e) {}
+    try { localStorage.removeItem('dashle_vocal_diagnostic_v1'); } catch(e) {}
     diagContent.textContent = '';
   });
 }
-document.querySelectorAll('a[href*="/parametres"]').forEach(function(lien) {
-  let appuis = 0, dernierAppui = 0;
-  lien.addEventListener('click', function() {
-    const maintenant = Date.now();
-    appuis = maintenant - dernierAppui < 1400 ? appuis + 1 : 1;
-    dernierAppui = maintenant;
-    if (appuis >= 5) {
-      try { localStorage.setItem('dashle_vocal_diag_open', '1'); } catch(e) {}
-      appuis = 0;
-    }
-  });
-});
 const sv = document.getElementById('voix-select');
 let vp = [];
 function remplirVoix() {
@@ -5505,6 +5512,9 @@ def parametres():
         telephone_utilisateur=(user.telephone_national if user else ""),
         preferences=_preferences(user_id),
         modele_gemini=MODELE_GEMINI,
+        build_commit=BUILD_COMMIT,
+        build_commit_short=BUILD_COMMIT_SHORT,
+        build_date=BUILD_DATE,
         consignes_personnalisees=reglages.get(cle_consignes, ""),
         longueur_reponse=reglages.get(cle_longueur, "standard"),
         memoires=memoires,
