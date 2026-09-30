@@ -369,7 +369,9 @@ class VocalViewTests(unittest.TestCase):
               const document = w.document;
               const vocal = document.getElementById("btn-vocal");
               const interrupt = document.getElementById("btn-interrompre-vocal");
-              if (!vocal || !interrupt) throw new Error("contrôles D2 absents");
+              const orb = document.getElementById("orbe-dashle");
+              if (!vocal || interrupt || !orb) throw new Error("UI d'interruption incorrecte");
+              if (orb.getAttribute("aria-label") !== "Appuie pour interrompre Dashle") throw new Error("aria-label orbe absent");
 
               vocal.click();
               await settle(180);
@@ -410,7 +412,11 @@ class VocalViewTests(unittest.TestCase):
                 throw new Error("la parole utilisateur n'a pas interrompu le TTS");
               }
 
-              if (interrupt.disabled) throw new Error("bouton Interrompre désactivé");
+              const avantOrbe = w.__ttsCancelCount();
+              w.speechSynthesis.speaking = true;
+              orb.click();
+              await settle(180);
+              if (w.__ttsCancelCount() <= avantOrbe) throw new Error("appui sur l'orbe n'interrompt pas Dashle");
               console.log("VOCAL_VAD_ECHO_OK");
             })().catch((error) => {
               console.error(error.stack || error);
@@ -428,6 +434,43 @@ class VocalViewTests(unittest.TestCase):
             assert checked.returncode == 0, checked.stderr
             assert "VOCAL_VAD_ECHO_OK" in checked.stdout
         ''')
+
+    def test_new_text_submission_aborts_previous_sse_and_tts(self):
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("Node.js indisponible")
+        path = ROOT / "web.py"
+        script = r"""
+          const fs = require("fs");
+          const {JSDOM} = require("jsdom");
+          const html = fs.readFileSync(process.argv[1], "utf8");
+          const dom = new JSDOM(html, {runScripts:"dangerously", resources:"usable", url:"http://localhost/"});
+          const w = dom.window;
+          let fetches = 0;
+          w.fetch = () => {
+            fetches += 1;
+            return Promise.resolve({ok:true, body:{getReader(){return {read(){return new Promise(resolve => { this._resolve = resolve; });}};}}});
+          };
+          const form = w.document.getElementById("form-message");
+          const champ = w.document.getElementById("message");
+          if (!form || !champ) throw new Error("formulaire absent");
+          champ.value = "premier";
+          form.dispatchEvent(new w.Event("submit", {bubbles:true,cancelable:true}));
+          setTimeout(() => {
+            if (!fetches) throw new Error("première réponse non démarrée");
+            champ.value = "second";
+            form.dispatchEvent(new w.Event("submit", {bubbles:true,cancelable:true}));
+          }, 20);
+          setTimeout(() => {
+            if (fetches !== 2) throw new Error("le nouveau message n'a pas pris la main");
+            if (w.document.querySelectorAll(".message-wrap .msg").length > 2) throw new Error("message fantôme ou double réponse");
+            console.log("TEXT_RESUBMIT_ABORT_OK");
+          }, 180);
+          setTimeout(() => process.exit(0), 220);
+        """
+        checked = subprocess.run([node, "-e", script, str(path)], cwd=ROOT, text=True, capture_output=True, check=False)
+        assert checked.returncode == 0, checked.stderr
+        assert "TEXT_RESUBMIT_ABORT_OK" in checked.stdout
 
     def test_vocal_diagnostic_and_build_metadata_are_local_and_hidden_by_default(self):
         source = Path(ROOT / "web.py").read_text(encoding="utf-8")
@@ -462,6 +505,10 @@ class VocalViewTests(unittest.TestCase):
             "let syntheseEnCours = false",
             "let recoEnCours = false",
             "requeteActiveController.abort()",
+            'id="orbe-dashle"',
+            'aria-label="Appuie pour interrompre Dashle"',
+            "if (reponseEnCours || requeteActiveController)",
+            "window.speechSynthesis.cancel()",
         ]
         for marker in required:
             self.assertIn(marker, source, marker)
