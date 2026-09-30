@@ -4536,7 +4536,7 @@ p{font-size:14px;color:#555;margin-top:16px}p a{color:#22C55E;font-weight:600;te
 <label>Pays
 <select name="pays" id="pays" required autocomplete="country">
 <option value="">Sélectionner un pays</option>
-{% for code, nom_pays, indicatif in pays_profil %}<option value="{{ code }}">{{ nom_pays }} (+{{ indicatif }})</option>{% endfor %}
+{% for code, nom_pays, indicatif in pays_profil %}<option value="{{ code }}" {% if inscription_pays|default('') == code %}selected{% endif %}>{{ nom_pays }} (+{{ indicatif }})</option>{% endfor %}
 </select></label>
 <label>Numéro de téléphone
 <div class="phone"><select id="indicatif" aria-label="Indicatif" disabled><option>+---</option></select><input type="hidden" id="indicatif-envoye" name="indicatif" value="{{ inscription_indicatif|default('') }}"><input id="telephone" name="telephone" type="tel" required autocomplete="tel-national" inputmode="tel" placeholder="Numéro national" value="{{ inscription_telephone|default('') }}"></div>
