@@ -22,5 +22,7 @@ jobs:
       - name: Tests sécurité connecteurs
         if: always()
         run: python -m unittest tests.test_connectors -v
+      - name: Tests inscription et téléphones
+        run: python -m unittest tests.test_registration_phone -v
       - name: Vérifier le diff
         run: git diff --check
