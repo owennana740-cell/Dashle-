@@ -198,7 +198,8 @@ class VocalViewTests(unittest.TestCase):
             document.getElementById('btn-vocal').click();
             const reco = instances[0];
             if (!reco) throw new Error('SpeechRecognition absent');
-            if (reco.continuous !== true) throw new Error('continuous=true attendu avant preuve de causalité');
+            if (reco.continuous !== false) throw new Error('continuous=false attendu en sessions courtes');
+            if (reco.interimResults !== false) throw new Error('interimResults=false attendu en sessions courtes');
 
             const make = (text, final) => {
               const r=[{transcript:text, confidence:1}];
@@ -239,6 +240,29 @@ class VocalViewTests(unittest.TestCase):
             // Le contrôle utilisateur de relecture reste disponible.
             dom.window.lireReponse(boutons[0], 'Première réponse', false);
             if (spoken.length !== 3) throw new Error('relecture manuelle bloquée');
+
+            if (instances.length !== 1) throw new Error('plusieurs instances SpeechRecognition créées');
+
+            // Interruption pendant TTS : couper la voix puis relancer une seule écoute.
+            dom.window.speechSynthesis.speaking = true;
+            dom.window.__ttsCancelCount = () => 0;
+            const avantStart = reco.start;
+            let startCount = 0;
+            reco.start = () => { startCount += 1; avantStart(); };
+            dom.window.interrompreDashle();
+            await new Promise((resolve) => setTimeout(resolve, 180));
+            if (dom.window.speechSynthesis.speaking) throw new Error('TTS non interrompu');
+            if (startCount !== 1) throw new Error('reprise SpeechRecognition multiple ou absente');
+
+            // Trois fins sans transcription arrêtent le mode vocal avec le message attendu.
+            dom.window.__dashleTestDisableAudioFallback = true;
+            reco.onend();
+            reco.onend();
+            reco.onend();
+            if (dom.window._dashleVocal && dom.window._dashleVocal.estActif()) throw new Error('vocal encore actif après 3 fins sans transcription');
+            if (!document.body.textContent.includes("Je n'arrive pas à t'entendre, réessaie")) {
+              throw new Error('message des 3 fins sans transcription absent');
+            }
 
             console.log('VOCAL_RESULT_SEQUENCE_OK');
             """;
