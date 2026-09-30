@@ -4564,7 +4564,9 @@ body.theme-sombre label{border-color:#294238}
   <button type="button" class="secondaire" id="diagnostic-vocal-effacer">Effacer</button>
 </section>
 <section class="carte"><h2>À propos de Dashle</h2>
-    <p class="note"><strong>Build :</strong> {{ build_commit_short }}</p>\n    <p class="note"><strong>Commit :</strong> {{ build_commit }}</p>\n    <p class="note"><strong>Date :</strong> {{ build_date }}</p>
+    <p class="note"><strong>Build :</strong> {{ build_commit_short }}</p>
+    <p class="note"><strong>Commit :</strong> {{ build_commit }}</p>
+    <p class="note"><strong>Date :</strong> {{ build_date }}</p>
     <p class="note"><strong>Modèle IA :</strong> {{ modele_gemini }} (Google AI)</p>
     <p class="note">Dashle est un assistant personnel conçu par Owen. Il mémorise le contexte de tes conversations et s'améliore avec le temps.</p>
     <p><a href="{{ url_for('conditions_utilisation') }}">Conditions d'utilisation</a></p>
