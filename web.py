@@ -4549,7 +4549,7 @@ p{font-size:14px;color:#555;margin-top:16px}p a{color:#22C55E;font-weight:600;te
 <span class="visiteur">Pas encore prêt ? <a href="{{ url_for('accueil') }}">Continuer sans compte →</a></span>
 {% if afficher_pays %}<script>
 const pays=document.getElementById('pays'), indicatif=document.getElementById('indicatif');
-const indicatifs={% for code, nom_pays, indicatif in pays_profil %}{{ code|tojson }}:{{ ("+"+indicatif)|tojson }},{% endfor %};
+const indicatifs={ {% for code, nom_pays, indicatif in pays_profil %}{{ code|tojson }}:{{ ("+"+indicatif)|tojson }},{% endfor %} };
 function syncIndicatif(){const valeur=indicatifs[pays.value]||'+---';indicatif.options[0].textContent=valeur;document.getElementById('indicatif-envoye').value=valeur;}
 pays.addEventListener('change',syncIndicatif); syncIndicatif();
 </script>{% endif %}
