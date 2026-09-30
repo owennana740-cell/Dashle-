@@ -104,10 +104,17 @@ class RegistrationPhoneTests(unittest.TestCase):
                 const indicator = document.getElementById("indicatif");
                 const hidden = document.getElementById("indicatif-envoye");
                 if (!country || !indicator || !hidden) throw new Error("champs téléphone absents");
-                country.value = "BF";
-                country.dispatchEvent(new dom.window.Event("change"));
-                if (indicator.options[0].textContent !== "+226") throw new Error("indicatif visible incorrect");
-                if (hidden.value !== "+226") throw new Error("indicatif caché incorrect");
+                const cases = [["BF", "+226"], ["FR", "+33"], ["CI", "+225"], ["BS", "+1242"]];
+                for (const [code, expected] of cases) {
+                    country.value = code;
+                    country.dispatchEvent(new dom.window.Event("input"));
+                    if (document.getElementById("indicatif-prefix").textContent !== expected) throw new Error(code + " préfixe incorrect");
+                    if (hidden.value !== expected) throw new Error(code + " indicatif caché incorrect");
+                    country.dispatchEvent(new dom.window.Event("change"));
+                    if (document.getElementById("indicatif-prefix").textContent !== expected) throw new Error(code + " préfixe change incorrect");
+                    if (hidden.value !== expected) throw new Error(code + " indicatif change incorrect");
+                }
+                if (document.body.textContent.includes("+---") || document.querySelector("#indicatif")) throw new Error("ancien select +--- encore présent");
             """
             checked = subprocess.run([node, "-e", dom_script, html_path], text=True, capture_output=True, check=False)
             assert checked.returncode == 0, checked.stderr
