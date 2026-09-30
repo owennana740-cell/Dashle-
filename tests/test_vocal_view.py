@@ -146,6 +146,106 @@ class VocalViewTests(unittest.TestCase):
             )
             assert checked.returncode == 0, checked.stderr
             assert "VOCAL_VIEW_STATE_OK" in checked.stdout
+        ''')
+
+    def test_transcription_results_deduplicate_and_tts_is_single_flight(self):
+        result = self.run_probe(r'''
+            import shutil
+            import subprocess
+            import tempfile
+            import web
+
+            node = shutil.which('node')
+            assert node, 'node requis'
+            html = web.app.test_client().get('/').get_data(as_text=True)
+            with tempfile.NamedTemporaryFile('w', suffix='.html', encoding='utf-8', delete=False) as handle:
+                handle.write(html)
+                path = handle.name
+            script = r"""
+            const fs = require('fs');
+            const {JSDOM} = require('jsdom');
+            const instances = [];
+            const spoken = [];
+            const dom = new JSDOM(fs.readFileSync(process.argv[1], 'utf8'), {
+              url: 'https://dashle.test/', runScripts: 'dangerously',
+              beforeParse(window) {
+                window.requestAnimationFrame = (cb) => setTimeout(() => cb(performance.now()), 0);
+                window.cancelAnimationFrame = (id) => clearTimeout(id);
+                window.matchMedia = () => ({matches:false, addEventListener(){}, removeEventListener(){}});
+                window.scrollTo = () => {};
+                window.fetch = () => Promise.resolve(new Response(''));
+                window.EventSource = class {};
+                window.ResizeObserver = class { observe(){} disconnect(){} };
+                window.IntersectionObserver = class { observe(){} disconnect(){} };
+                window.MediaRecorder = class {};
+                window.navigator.mediaDevices = {getUserMedia: () => Promise.reject(new Error('no-microphone'))};
+                window.speechSynthesis = {
+                  speaking:false, paused:false, pending:false, getVoices:()=>[],
+                  cancel(){this.speaking=false;}, pause(){}, resume(){},
+                  speak(u){this.speaking=true; spoken.push(u.text);}
+                };
+                window.SpeechSynthesisUtterance = function(text){this.text=text;};
+                window.SpeechRecognition = class {
+                  constructor(){instances.push(this);}
+                  start(){this.onstart&&this.onstart();}
+                  stop(){this.onend&&this.onend();}
+                  abort(){this.onend&&this.onend();}
+                };
+                window.webkitSpeechRecognition = window.SpeechRecognition;
+              }
+            });
+            const document = dom.window.document;
+            document.getElementById('btn-vocal').click();
+            const reco = instances[0];
+            if (!reco) throw new Error('SpeechRecognition absent');
+            if (reco.continuous !== true) throw new Error('continuous=true attendu avant preuve de causalité');
+
+            const make = (text, final) => {
+              const r=[{transcript:text, confidence:1}];
+              r.isFinal=final;
+              return r;
+            };
+
+            // Séquence observée : un même final revient avec un nouvel index.
+            reco.onresult({resultIndex:0, results:[make('je veux', true)]});
+            reco.onresult({resultIndex:1, results:[
+              make('je veux', true),
+              make('je veux', true)
+            ]});
+            reco.onresult({resultIndex:2, results:[
+              make('je veux', true),
+              make('je veux', true),
+              make('que tu m aides', true)
+            ]});
+            const texteFinal = dom.window.eval('transcriptionFinaleVocale');
+            if (texteFinal !== 'je veux que tu m aides') {
+              throw new Error('déduplication vocale incorrecte: ' + texteFinal);
+            }
+
+            const wraps = document.createElement('div');
+            wraps.innerHTML =
+              '<div class="message-wrap" data-message-id="msg-1"><div class="msg">Première réponse</div><div class="actions-reponse"><button class="lecture-reponse"></button><span class="lecture-etat"></span></div></div>' +
+              '<div class="message-wrap" data-message-id="msg-2"><div class="msg">Deuxième réponse</div><div class="actions-reponse"><button class="lecture-reponse"></button><span class="lecture-etat"></span></div></div>';
+            document.body.appendChild(wraps);
+            const boutons = document.querySelectorAll('.lecture-reponse');
+
+            dom.window.lireReponse(boutons[0], 'Première réponse', true);
+            dom.window.lireReponse(boutons[0], 'Première réponse', true);
+            if (spoken.length !== 1) throw new Error('TTS relancé pour le même message');
+
+            dom.window.lireReponse(boutons[1], 'Deuxième réponse', true);
+            if (spoken.length !== 2) throw new Error('TTS absent pour un nouveau message');
+
+            // Le contrôle utilisateur de relecture reste disponible.
+            dom.window.lireReponse(boutons[0], 'Première réponse', false);
+            if (spoken.length !== 3) throw new Error('relecture manuelle bloquée');
+
+            console.log('VOCAL_RESULT_SEQUENCE_OK');
+            """;
+            checked = subprocess.run([node, '-e', script, path], cwd=ROOT, text=True, capture_output=True, check=False)
+            assert checked.returncode == 0, checked.stderr
+            assert 'VOCAL_RESULT_SEQUENCE_OK' in checked.stdout
+        ''')
 
     def test_vocal_interruption_guards_remain_present(self):
         source = Path(ROOT / "web.py").read_text(encoding="utf-8")

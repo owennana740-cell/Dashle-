@@ -2256,6 +2256,33 @@ function reinitialiserTranscriptionVocale() {
   dernierIndexFinalVocal = 0;
 }
 
+function ajouterTexteFinalVocalUnique(texte) {
+  const candidat = String(texte || '').trim().replace(/\s+/g, ' ');
+  if (!candidat) return;
+  const courant = transcriptionFinaleVocale.trim().replace(/\s+/g, ' ');
+  if (!courant) {
+    transcriptionFinaleVocale = candidat;
+    return;
+  }
+  if (courant === candidat || courant.endsWith(' ' + candidat)) return;
+  if (candidat.startsWith(courant + ' ')) {
+    transcriptionFinaleVocale = candidat;
+    return;
+  }
+  const motsCourant = courant.split(' ');
+  const motsCandidat = candidat.split(' ');
+  let chevauchement = 0;
+  const maximum = Math.min(motsCourant.length, motsCandidat.length);
+  for (let taille = maximum; taille > 0; taille -= 1) {
+    if (motsCourant.slice(-taille).join(' ') === motsCandidat.slice(0, taille).join(' ')) {
+      chevauchement = taille;
+      break;
+    }
+  }
+  const suffixe = motsCandidat.slice(chevauchement).join(' ');
+  if (suffixe) transcriptionFinaleVocale = courant + ' ' + suffixe;
+}
+
 function planifierEnvoiFinPhraseVocale() {
   annulerFinPhraseVocale();
   minuteurFinPhraseVocale = setTimeout(function() {
@@ -3187,7 +3214,7 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
       const resultat = resultats[i];
       const texte = (resultat && resultat[0] && resultat[0].transcript || '').trim();
       if (!resultat || !resultat.isFinal || !texte) continue;
-      transcriptionFinaleVocale += (transcriptionFinaleVocale ? ' ' : '') + texte;
+      ajouterTexteFinalVocalUnique(texte);
       dernierIndexFinalVocal = i + 1;
     }
 
@@ -3374,15 +3401,20 @@ function nettoyerPourLecture(texte) {
   return propre;
 }
 
-function lireReponse(bouton, texteForce) {
+const lecturesAutomatiquesEffectuees = new Set();
+
+function lireReponse(bouton, texteForce, lectureAutomatique) {
   if (!('speechSynthesis' in window)) {
     bouton.closest('.actions-reponse').querySelector('.lecture-etat').textContent = 'Voix indisponible';
     return;
   }
+  const messageWrap = bouton.closest('.message-wrap');
+  const messageId = messageWrap ? messageWrap.dataset.messageId : '';
+  if (lectureAutomatique && messageId && lecturesAutomatiquesEffectuees.has(messageId)) return;
   const texte = typeof texteForce === 'string'
     ? texteForce
-    : (bouton.closest('.message-wrap').querySelector('.msg').dataset.markdownSource
-        || bouton.closest('.message-wrap').querySelector('.msg').textContent);
+    : (messageWrap.querySelector('.msg').dataset.markdownSource
+        || messageWrap.querySelector('.msg').textContent);
   if (lectureActuelle === bouton && window.speechSynthesis.speaking) {
     if (window.speechSynthesis.paused) {
       window.speechSynthesis.resume();
@@ -3476,6 +3508,7 @@ function lireReponse(bouton, texteForce) {
   // d'attente mais l'audio peut démarrer avec un délai. C'est onstart
   // qui marque le vrai début du son.
   window.speechSynthesis.speak(utteranceActuelle);
+  if (lectureAutomatique && messageId) lecturesAutomatiquesEffectuees.add(messageId);
 }
 
 // =====================================================================
@@ -4124,11 +4157,11 @@ form.addEventListener('submit', async function(e) {
     const vocal = window._dashleVocal;
     if (!actionArtifactSse && vocal && vocal.estActif() && reponseTexte) {
       vocal.marquerParle();
-      lireReponse(reponseElement.querySelector('.action-lire'));
+      lireReponse(reponseElement.querySelector('.action-lire'), undefined, true);
       // L'écoute reprendra via utteranceActuelle.onend (après la synthèse)
     } else if (preferencesVocales.voix_active && preferencesVocales.lecture_automatique
         && reponseTexte && reponseElement) {
-      lireReponse(reponseElement.querySelector('.action-lire'));
+      lireReponse(reponseElement.querySelector('.action-lire'), undefined, true);
     }
 
     if (reponseTexte) {
