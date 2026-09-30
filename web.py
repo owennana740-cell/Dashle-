@@ -4531,7 +4531,7 @@ p{font-size:14px;color:#555;margin-top:16px}p a{color:#22C55E;font-weight:600;te
 {% if erreur %}<p class="erreur">{{ erreur }}</p>{% endif %}
 <form method="post">
 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-<label>E-mail<input name="email" type="email" required maxlength="254" autocomplete="email"></label>
+<label>E-mail<input name="email" type="email" required maxlength="254" autocomplete="email" value="{{ inscription_email|default('') }}"></label>
 {% if afficher_nom %}<label>Nom<input name="nom" type="text" required maxlength="160" autocomplete="name" value="{{ inscription_nom|default('') }}"></label>
 <label>Pays
 <select name="pays" id="pays" required autocomplete="country">
