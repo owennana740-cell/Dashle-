@@ -64,7 +64,7 @@ class RegistrationPhoneTests(unittest.TestCase):
             assert 'value="7012564"' in body
             assert 'name="password"' in body
             assert "not-reused-in-response" not in body
-            assert re.search(r'value="BF"\s+selected', body)
+            assert re.search(r'value="BF"\\s+selected', body)
             assert 'value="+226"' in body
         """)
         self.assertEqual(result.returncode, 0, result.stderr)
