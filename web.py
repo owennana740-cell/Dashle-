@@ -474,19 +474,48 @@ def _maj_resume_visiteur(nouveau_resume: str):
 # ---------------------------------------------------------------------------
 
 def _conv_courante(user_id):
-    """Renvoie l'identifiant d'une conversation active pour l'utilisateur."""
+    """Retourne la conversation sélectionnée ou la dernière, sans en créer."""
+    if session.get("nouvelle_conversation_en_attente"):
+        return None
     conversation_id = session.get("conversation_id")
     with session_base() as db:
-        conversation = db.query(Conversation).filter_by(
-            id=conversation_id, user_id=user_id
-        ).one_or_none()
+        conversation = None
+        if conversation_id:
+            conversation = db.query(Conversation).filter_by(
+                id=conversation_id, user_id=user_id
+            ).one_or_none()
         if conversation is None:
-            conversation = Conversation(user_id=user_id)
-            db.add(conversation)
-            db.flush()
-            conversation_id = conversation.id
+            conversation = (
+                db.query(Conversation)
+                .filter_by(user_id=user_id, archivee=False)
+                .order_by(Conversation.updated_at.desc())
+                .first()
+            )
+        if conversation is None:
+            session.pop("conversation_id", None)
+            return None
+        conversation_id = conversation.id
     session["conversation_id"] = conversation_id
     return conversation_id
+
+
+def _creer_conversation(user_id):
+    with session_base() as db:
+        conversation = Conversation(user_id=user_id)
+        db.add(conversation)
+        db.flush()
+        conversation_id = conversation.id
+    session["conversation_id"] = conversation_id
+    session.pop("nouvelle_conversation_en_attente", None)
+    return conversation_id
+
+
+def _conversation_pour_message(user_id):
+    """Crée une conversation uniquement au premier message si nécessaire."""
+    if session.pop("nouvelle_conversation_en_attente", False):
+        return _creer_conversation(user_id)
+    conversation_id = _conv_courante(user_id)
+    return conversation_id if conversation_id else _creer_conversation(user_id)
 
 
 def _conserver_historique(user_id):
@@ -664,6 +693,39 @@ def _titre_automatique(texte):
     return titre or ""
 
 
+
+
+def _titre_fallback_six_mots(texte):
+    nettoye = re.sub(r"[*_~#\\x60>]+", "", str(texte or ""))
+    nettoye = nettoye.replace(chr(96), "")
+    nettoye = re.sub(r"\\s+", " ", nettoye).strip()
+    if not nettoye or nettoye.lower() in {"image", "image envoyée", "photo"}:
+        return ""
+    return " ".join(nettoye.split()[:6])[:58].rstrip(" ,.;:-")
+
+
+def _titre_premier_echange(user_id, conversation_id):
+    with session_base() as db:
+        messages = (
+            db.query(Message)
+            .filter_by(conversation_id=conversation_id)
+            .order_by(Message.id.asc())
+            .limit(2)
+            .all()
+        )
+    if len(messages) < 2 or messages[0].auteur != "user" or messages[1].auteur != "bot":
+        return ""
+    historique = [{"auteur": m.auteur, "texte": m.texte} for m in messages]
+    try:
+        resume = resumer_conversation(historique, "", user_id=user_id)
+    except Exception:
+        resume = ""
+    titre = _titre_fallback_six_mots(resume)
+    if titre:
+        return titre
+    source = messages[1].texte if not _titre_fallback_six_mots(messages[0].texte) else messages[0].texte
+    return _titre_fallback_six_mots(source)
+
 def _extraire_apercu_image_message(texte):
     brut = str(texte or "")
     marqueur = "\n" + _IMAGE_PREVIEW_PREFIX
@@ -713,10 +775,19 @@ def ajouter_message(user_id, conversation_id, texte, auteur, image_preview=""):
         )
         db.add(msg)
         db.flush()
-        if auteur == "user" and conv.title == "Nouvelle conversation":
-            conv.title = _titre_automatique(texte_propre) or conv.title
         conv.updated_at = datetime.utcnow()
-        return msg.id
+        message_id = msg.id
+        doit_titrer = auteur == "bot" and conv.title == "Nouvelle conversation"
+    if doit_titrer:
+        titre = _titre_premier_echange(user_id, conversation_id)
+        if titre:
+            with session_base() as db:
+                conv = db.query(Conversation).filter_by(
+                    id=conversation_id, user_id=user_id
+                ).one_or_none()
+                if conv is not None and conv.title == "Nouvelle conversation":
+                    conv.title = titre
+    return message_id
 
 
 # ---------------------------------------------------------------------------
@@ -4938,7 +5009,7 @@ def accueil():
                 conversation_id=conversation_id,
                 preferences=preferences,
             )
-        # Utilisateur connecté — comportement existant
+        # Utilisateur connecté : l'ouverture ne crée aucune conversation.
         conversation_id = _conv_courante(user_id)
         return _rendre_page(
             messages=_messages_conversation(user_id, conversation_id),
@@ -4973,12 +5044,18 @@ def nouvelle_conv():
         return redirect(url_for("accueil"))
     if not _conserver_historique(user_id):
         session.pop("conversation_id", None)
+        session.pop("nouvelle_conversation_en_attente", None)
         return redirect(url_for("accueil"))
-    with session_base() as db:
-        conv = Conversation(user_id=user_id)
-        db.add(conv)
-        db.flush()
-        session["conversation_id"] = conv.id
+    conversation_id = session.get("conversation_id")
+    if conversation_id:
+        with session_base() as db:
+            conv = db.query(Conversation).filter_by(
+                id=conversation_id, user_id=user_id
+            ).one_or_none()
+            if conv is not None and not conv.messages:
+                return redirect(url_for("accueil"))
+    session.pop("conversation_id", None)
+    session["nouvelle_conversation_en_attente"] = True
     return redirect(url_for("accueil"))
 
 
@@ -5531,7 +5608,7 @@ def repondre_flux():
     if user_id:
         conserver = _conserver_historique(user_id)
         if conserver:
-            conversation_id = _conv_courante(user_id)
+            conversation_id = _conversation_pour_message(user_id)
             historique = _messages_conversation(
                 user_id, conversation_id, limite=MAX_MESSAGES_CONTEXTE
             )
@@ -5863,7 +5940,7 @@ def repondre_image():
     if user_id:
         conserver = _conserver_historique(user_id)
         if conserver:
-            conversation_id = _conv_courante(user_id)
+            conversation_id = _conversation_pour_message(user_id)
             historique = _messages_conversation(
                 user_id, conversation_id, limite=MAX_MESSAGES_CONTEXTE
             )
@@ -7883,7 +7960,7 @@ def transferer_conversation():
     if not hist:
         return jsonify({"ok": True, "transfere": 0})
 
-    conversation_id = _conv_courante(user_id)
+    conversation_id = _conv_courante(user_id) or _creer_conversation(user_id)
     # Ne transférer que si la conversation cible est vide
     existants = _messages_conversation(user_id, conversation_id)
     if existants:
