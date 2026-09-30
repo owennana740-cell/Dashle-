@@ -2281,6 +2281,10 @@ function desactiverModeVocal() {
   interruptionDemandee = false;
 }
 
+
+// Source de vérité : au chargement, le mode vocal désactivé ne peut jamais
+// laisser une vue ou un bouton de réouverture visibles.
+synchroniserVueVocale();
 function afficherStatutVocal(texte) {
   statutVocal.textContent = texte;
   statutVocal.classList.toggle('visible', !!texte);
