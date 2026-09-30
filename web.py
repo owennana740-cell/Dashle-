@@ -2944,6 +2944,12 @@ function arreterGeneration() {
     reponseActiveElement.remove();
   }
   reponseActiveElement = null;
+  const messagesActifs = Array.from(document.querySelectorAll('.message-wrap.bot .msg'))
+    .filter(function(message) { return !message.dataset.messageId; });
+  const dernierMessageActif = messagesActifs[messagesActifs.length - 1];
+  if (dernierMessageActif && dernierMessageActif.parentElement) {
+    dernierMessageActif.parentElement.remove();
+  }
   if (requeteActiveController) {
     try { requeteActiveController.abort(); } catch(e) {}
     requeteActiveController = null;
