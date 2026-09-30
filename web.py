@@ -651,6 +651,7 @@ _PREFS_VISITEUR = {
 
 
 def _titre_automatique(texte):
+    titre = re.sub(r"[*_~#\\x60>]+", "", str(texte or ""))
     titre = re.sub(r"\s+", " ", str(texte or "")).strip()
     if re.fullmatch(r"\[(?:image|vidéo) envoyée\]", titre, flags=re.IGNORECASE):
         return ""
@@ -1550,6 +1551,11 @@ video#apercu-fichier-media { object-fit: contain; }
 .message-wrap { margin-bottom:22px; }
 .msg { padding:14px 17px; border:1px solid var(--bordure); box-shadow:0 3px 12px rgba(17,51,39,.045); }
 .message-image-persistante { margin:0 0 8px; max-width:min(320px,100%); }
+.msg table { display:block; max-width:100%; overflow-x:auto; border-collapse:collapse; }
+.msg th, .msg td { padding:6px 8px; border:1px solid rgba(127,127,127,.25); text-align:left; }
+.msg thead th { background:rgba(127,127,127,.08); }
+.msg ul, .msg ol { padding-left:1.4rem; }
+
 .message-image-persistante img { display:block; width:auto; max-width:100%; max-height:260px; border-radius:14px; object-fit:contain; cursor:zoom-in; }
 .msg.user { border-color:rgba(34,197,94,.18); }
 .msg.bot { background:var(--fond-secondaire); }
@@ -1703,6 +1709,8 @@ PAGE = _HEADER_USER_MACRO + """
 <script type="application/ld+json">
 {"@context":"https://schema.org","@type":"WebApplication","name":"Dashle","url":"https://dashle.onrender.com/","description":"Dashle est une intelligence artificielle personnelle accessible depuis un navigateur pour échanger par écrit et demander l’analyse d’images ou de vidéos."}
 </script>
+<script src="{{ url_for('static', filename='vendor/marked.min.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/purify.min.js') }}"></script>
 <link rel="manifest" href="/static/manifest.json">
 <link rel="icon" type="image/png" sizes="1024x1024" href="/static/icons/dashle-icon-1024.png">
 <link rel="icon" type="image/png" sizes="512x512" href="/static/icons/dashle-icon-512.png">
@@ -2347,43 +2355,34 @@ function echapperHtml(texte) {
   });
 }
 
+function texteSansMarqueursMarkdown(texte) {
+  return String(texte || '')
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/\x60\x60\x60[\w+-]*\n?([\s\S]*?)\x60\x60\x60/g, '$1')
+    .replace(/\x60([^\x60\n]+)\x60/g, '$1')
+    .replace(/[*_~#>]/g, '')
+    .replace(/^[-+*]\s+/gm, '')
+    .replace(/^\d+[.)]\s+/gm, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+}
 function rendreMarkdown(texte) {
-  const blocsCode = [];
-  let html = echapperHtml(texte).replace(/```([\w+-]*)\s*\n([\s\S]*?)```/g, function(_, langue, code) {
-    const classe = /^[\w+-]*$/.test(langue) ? langue : '';
-    const bouton = '<button type="button" class="copier-code">Copier le code</button>';
-    blocsCode.push('<div class="bloc-code">' + bouton + '<pre><code' + (classe ? ' class="language-' + classe + '"' : '') + '>' + code.replace(/\n$/, '') + '</code></pre></div>');
-    return '\u0000CODE' + (blocsCode.length - 1) + '\u0000';
-  });
-  html = html
-    .replace(/^###\s+(.+)$/gm, '<h3>$1</h3>')
-    .replace(/^##\s+(.+)$/gm, '<h2>$1</h2>')
-    .replace(/^#\s+(.+)$/gm, '<h1>$1</h1>')
-    .replace(/(?:^|\n)((?:[-*+]\s+.+(?:\n|$))+)/g, function(_, liste) {
-      return '\n<ul>' + liste.trim().split('\n').map(function(ligne) { return '<li>' + ligne.replace(/^[-*+]\s+/, '') + '</li>'; }).join('') + '</ul>';
-    })
-    .replace(/(?:^|\n)((?:\d+\.\s+.+(?:\n|$))+)/g, function(_, liste) {
-      return '\n<ol>' + liste.trim().split('\n').map(function(ligne) { return '<li>' + ligne.replace(/^\d+\.\s+/, '') + '</li>'; }).join('') + '</ol>';
-    })
-    .replace(/`([^`\n]+)`/g, '<code>$1</code>')
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/__(.+?)__/g, '<strong>$1</strong>')
-    .replace(/\*(.+?)\*/g, '<em>$1</em>')
-    .replace(/_(.+?)_/g, '<em>$1</em>')
-    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" rel="noopener noreferrer" target="_blank">$1</a>')
-    .replace(/\n/g, '<br>');
-  return html.replace(/\u0000CODE(\d+)\u0000/g, function(_, index) { return blocsCode[Number(index)]; });
+  const source = String(texte || '');
+  if (!window.marked || !window.DOMPurify) return echapperHtml(source).replace(/\\n/g, '<br>');
+  const brut = window.marked.parse(source, { gfm: true, breaks: true, headerIds: false, mangle: false, sanitize: false });
+  const propre = window.DOMPurify.sanitize(brut, { USE_PROFILES: { html: true }, FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed', 'form', 'input', 'button'] });
+  const conteneur = document.createElement('div'); conteneur.innerHTML = propre;
+  conteneur.querySelectorAll('a').forEach(function(lien) { const href = lien.getAttribute('href') || ''; if (!/^(?:https?:|mailto:|tel:)/i.test(href)) lien.removeAttribute('href'); lien.setAttribute('target', '_blank'); lien.setAttribute('rel', 'noopener noreferrer'); });
+  conteneur.querySelectorAll('pre').forEach(function(pre) { if (pre.parentElement && pre.parentElement.classList.contains('bloc-code')) return; const bloc = document.createElement('div'); bloc.className = 'bloc-code'; const bouton = document.createElement('button'); bouton.type = 'button'; bouton.className = 'copier-code'; bouton.textContent = 'Copier le code'; bouton.setAttribute('aria-label', 'Copier le code'); pre.parentNode.insertBefore(bloc, pre); bloc.appendChild(bouton); bloc.appendChild(pre); });
+  return conteneur.innerHTML;
 }
 
-function afficherMarkdown(message, texte) {
-  message.dataset.markdownSource = String(texte);
-  message.innerHTML = rendreMarkdown(texte);
-}
+function afficherMarkdown(message, texte) { message.dataset.markdownSource = String(texte); message.innerHTML = rendreMarkdown(texte); }
+function afficherMarkdownStreaming(message, texte) { message.dataset.markdownSource = String(texte); message.innerHTML = rendreMarkdown(texte); }
 
-document.querySelectorAll('#chat .msg.bot').forEach(function(message) {
-  afficherMarkdown(message, message.textContent);
-});
-
+document.querySelectorAll('#chat .msg.bot').forEach(function(message) { afficherMarkdown(message, message.textContent); });
 function ajouterMessage(texte, classe) {
   const accueil = document.querySelector('.accueil-vide');
   if (accueil) accueil.remove();
@@ -3281,7 +3280,7 @@ function arreterLecture() {
 
 function nettoyerPourLecture(texte) {
   // Retire les marqueurs Markdown courants (ne modifie PAS le textContent affiché)
-  var propre = texte
+  var propre = texteSansMarqueursMarkdown(texte)
     .replace(/#{1,6}\s*/g, '')
     .replace(/\*{1,3}([^*]*)\*{1,3}/g, '$1')
     .replace(/_{1,3}([^_]*)_{1,3}/g, '$1')
@@ -3748,7 +3747,7 @@ chat.addEventListener('click', async function(e) {
   if (!message) return;
 
   if (bouton.classList.contains('action-copier')) {
-    await navigator.clipboard.writeText(message.dataset.markdownSource || message.innerText || message.textContent);
+    await navigator.clipboard.writeText(texteSansMarqueursMarkdown(message.dataset.markdownSource || message.innerText || message.textContent));
     bouton.classList.add('actif');
     setTimeout(function() { bouton.classList.remove('actif'); }, 1200);
 
@@ -4005,7 +4004,7 @@ form.addEventListener('submit', async function(e) {
         }
         if (ev.morceau) {
           reponseTexte += ev.morceau;
-          messageElement.textContent = reponseTexte;
+          afficherMarkdownStreaming(messageElement, reponseTexte);
           chat.scrollTop = chat.scrollHeight;
         }
         if (ev.termine) {

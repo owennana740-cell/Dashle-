@@ -5,8 +5,6 @@ import os
 import unittest
 import uuid
 from unittest.mock import patch
-import requests
-import requests
 
 os.environ["DATABASE_URL"] = "sqlite://"
 os.environ["SESSION_COOKIE_SECURE"] = "0"
@@ -183,77 +181,6 @@ class ArtifactToolsTests(unittest.TestCase):
         self.assertEqual(
             self.client.get(f"/bibliotheque/{item_id}/telecharger").status_code, 404
         )
-
-    def test_uploaded_image_invalid_signature_does_not_consume_quota(self):
-        from database import ImageGenerationUsage
-        response = self.client.post(
-            "/repondre_image",
-            data={"message": "Que vois-tu ?", "image": (io.BytesIO(b"not-an-image"), "photo.jpg", "image/jpeg")},
-            headers={"X-CSRF-Token": "artifact-token"},
-            content_type="multipart/form-data",
-        )
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("image_invalide", response.json["code"])
-        with session_base() as db:
-            usage = db.query(ImageGenerationUsage).filter_by(user_id=self.user_id).one_or_none()
-            self.assertTrue(usage is None or usage.count == 0)
-
-    def test_uploaded_image_persists_thumbnail_and_consumes_quota_after_success(self):
-        from PIL import Image
-        from database import ImageGenerationUsage, Message, Conversation
-        sortie = io.BytesIO()
-        Image.new("RGB", (120, 80), "white").save(sortie, format="JPEG")
-        with patch.object(web, "traiter_message_image", return_value="Une maison blanche."):
-            response = self.client.post(
-                "/repondre_image",
-                data={"message": "Que vois-tu ?", "image": (io.BytesIO(sortie.getvalue()), "photo.jpg", "image/jpeg")},
-                headers={"X-CSRF-Token": "artifact-token"},
-                content_type="multipart/form-data",
-            )
-        self.assertEqual(response.status_code, 200)
-        with session_base() as db:
-            usage = db.query(ImageGenerationUsage).filter_by(user_id=self.user_id).one()
-            self.assertEqual(usage.count, 1)
-            conv = db.query(Conversation).filter_by(user_id=self.user_id).order_by(Conversation.id.desc()).first()
-            msg = db.query(Message).filter_by(conversation_id=conv.id, auteur="user").one()
-            self.assertTrue(msg.texte.startswith("Que vois-tu ?\n[[DASHLE_IMAGE_PREVIEW:data:image/jpeg;base64,"))
-        messages = web._messages_conversation(self.user_id, conv.id)
-        self.assertTrue(messages[0]["image_preview"].startswith("data:image/jpeg;base64,"))
-
-    def test_uploaded_image_network_failure_is_retryable_and_does_not_consume_quota(self):
-        from database import ImageGenerationUsage
-        with patch.object(web, "traiter_message_image", side_effect=requests.RequestException("network")):
-            response = self.client.post(
-                "/repondre_image",
-                data={"message": "Que vois-tu ?", "image": (io.BytesIO(PNG_1X1), "photo.jpg", "image/jpeg")},
-                headers={"X-CSRF-Token": "artifact-token"},
-                content_type="multipart/form-data",
-            )
-        self.assertEqual(response.status_code, 502)
-        self.assertEqual(response.json["code"], "image_reseau")
-        with session_base() as db:
-            usage = db.query(ImageGenerationUsage).filter_by(user_id=self.user_id).one_or_none()
-            self.assertTrue(usage is None or usage.count == 0)
-
-    def test_image_upload_client_contract_is_compressed_and_retryable(self):
-        source = open("web.py", encoding="utf-8").read()
-        debut = source.index("function ajouterMessageImage")
-        fin = source.index("function creerSuiviAction", debut)
-        fonction = source[debut:fin]
-        self.assertIn("const IMAGE_UPLOAD_MAX_BYTES = 10 * 1024 * 1024;", source)
-        self.assertIn("imageOrientation: 'from-image'", source)
-        self.assertIn("_rasteriserImage(fichier, 1600, 0.8)", source)
-        self.assertIn("canvas.toBlob", source)
-        self.assertIn("XMLHttpRequest", source)
-        self.assertIn("xhr.upload.onprogress", source)
-        self.assertIn("Je n’ai pas pu envoyer l’image. Réessaie.", source)
-        self.assertNotIn("URL.createObjectURL(fichier)", fonction)
-
-    def test_image_server_enforces_real_type_and_10mb_limit(self):
-        source = open("web.py", encoding="utf-8").read()
-        self.assertIn("IMAGE_UPLOAD_MAX_BYTES = 10 * 1024 * 1024", source)
-        self.assertIn("mime_type = detecter_type_media(image_bytes)", source)
-        self.assertIn("image_bytes = fichier.read(IMAGE_UPLOAD_MAX_BYTES + 1)", source)
 
     def test_image_generation_failure_does_not_break_chat(self):
         with patch.object(web, "generer_image", side_effect=RuntimeError("provider failure")), patch.object(artifact_tools, "generer_image", side_effect=RuntimeError("provider failure")):

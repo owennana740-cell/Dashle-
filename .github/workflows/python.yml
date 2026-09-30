@@ -22,6 +22,8 @@ jobs:
         run: npm install --no-audit --no-fund
       - name: Compiler Python
         run: python -m py_compile artifact_tools.py web.py app.py
+      - name: Vérifier le rendu Markdown JavaScript
+        run: node --check static/vendor/marked.min.js && node --check static/vendor/purify.min.js && node tests/test_markdown_jsdom.js
       - name: Tests génération fichiers/images
         run: python -m unittest tests.test_artifact_tools -v
       - name: Tests sécurité connecteurs
