@@ -2084,6 +2084,7 @@ let dernierTranscriptDictee = '';
 let vocalActif          = false;
 let modeActuel          = 'texte';   // 'texte' | 'dictee' | 'vocal'
 let requeteActiveController = null;
+let reponseActiveElement = null;
 let reponseEnCours      = false;
 let interruptionDemandee = false;
 
@@ -2939,6 +2940,10 @@ async function genererPdfTempsReelDansChat(texte) {
 // =====================================================================
 function arreterGeneration() {
   if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+  if (reponseActiveElement && reponseActiveElement.isConnected) {
+    reponseActiveElement.remove();
+  }
+  reponseActiveElement = null;
   if (requeteActiveController) {
     try { requeteActiveController.abort(); } catch(e) {}
     requeteActiveController = null;
@@ -4112,6 +4117,7 @@ form.addEventListener('submit', async function(e) {
     }
 
     reponseElement = ajouterReponse('', '');
+    reponseActiveElement = reponseElement;
     messageElement = reponseElement.querySelector('.msg');
 
     const lecteur  = res.body.getReader();
@@ -4127,6 +4133,7 @@ form.addEventListener('submit', async function(e) {
       if (ev.event === 'action_started') {
         actionArtifactSse = true;
         if (reponseElement) { reponseElement.remove(); reponseElement = null; messageElement = null; }
+        reponseActiveElement = null;
         retirerReflexion();
         suiviActionSse = creerSuiviAction(ev.action);
         suiviActionSse.dataset.prompt = texte;
@@ -4231,6 +4238,7 @@ form.addEventListener('submit', async function(e) {
     }
     reponseEnCours = false;
     requeteActiveController = null;
+    reponseActiveElement = null;
 
     // Lecture vocale si le mode vocal est actif
     const vocal = window._dashleVocal;
@@ -4278,6 +4286,7 @@ form.addEventListener('submit', async function(e) {
     retirerReflexion();
     reponseEnCours = false;
     if (requeteActiveController === controller) requeteActiveController = null;
+    reponseActiveElement = null;
 
     // En cas d'erreur, remettre l'orbe en état écoute (pas bloquée en réflexion).
     if (window._dashleVocal && window._dashleVocal.estActif()) {
