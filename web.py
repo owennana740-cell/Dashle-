@@ -2458,28 +2458,45 @@ function mettreAJourSuiviAction(bloc, action) {
   if (!bloc) return;
   const etapes = bloc.querySelector('.suivi-action-etapes');
   const indicateur = bloc.querySelector('.suivi-action-indicateur');
-  const messages = { preparation: 'Ton idée prend forme…', generation: 'Création d’une première ébauche…', finalisation: 'Finitions…' };
+  const messages = { preparation: 'Préparation de l’image…', generation: 'Génération en cours…', finalisation: 'Finalisation…' };
   const libelle = action.message || messages[action.step] || 'Action en cours…';
   if (action.event === 'action_failed') {
     indicateur.className = 'suivi-action-indicateur echec';
     const ligne = document.createElement('div'); ligne.className = 'suivi-action-etape echec';
-    ligne.textContent = '✕ ' + libelle; etapes.appendChild(ligne);
+    ligne.textContent = '✕ Génération échouée'; etapes.appendChild(ligne);
+    if (!bloc.querySelector('.suivi-action-image-retry') && action.type === 'image') {
+      const bouton = document.createElement('button');
+      bouton.type = 'button'; bouton.className = 'primaire suivi-action-image-retry';
+      bouton.textContent = 'Réessayer';
+      bouton.addEventListener('click', function(){ genererArtifactDansChat(bloc.dataset.prompt || '', 'image'); });
+      etapes.appendChild(bouton);
+    }
+    bloc.dataset.generationState = 'failed';
+    bloc.dataset.generationActive = 'false';
     return;
   }
   if (action.event === 'action_cancelled' || action.step === 'annule') {
     indicateur.className = 'suivi-action-indicateur annule';
     const ligne = document.createElement('div'); ligne.className = 'suivi-action-etape annule';
-    ligne.textContent = '— ' + libelle; etapes.appendChild(ligne); return;
+    ligne.textContent = '— Génération annulée'; etapes.appendChild(ligne);
+    bloc.dataset.generationState = 'cancelled';
+    bloc.dataset.generationActive = 'false';
+    return;
   }
   if (action.event === 'action_completed' || action.step === 'termine') {
     indicateur.className = 'suivi-action-indicateur termine';
     const ligne = document.createElement('div'); ligne.className = 'suivi-action-etape termine';
-    ligne.textContent = '✓ ' + libelle; etapes.appendChild(ligne); return;
+    ligne.textContent = '✓ Image générée'; etapes.appendChild(ligne);
+    bloc.dataset.generationState = 'completed';
+    bloc.dataset.generationActive = 'false';
+    return;
   }
   indicateur.className = 'suivi-action-indicateur actif';
   const precedent = etapes.querySelector('.suivi-action-etape.actif');
   if (precedent) precedent.classList.remove('actif');
   if (action.type === 'image') {
+    bloc.dataset.generationState = action.step || 'generation';
+    bloc.dataset.generationActive = 'true';
     let carte = bloc.querySelector('.suivi-action-image-progress');
     if (!carte) { carte = document.createElement('div'); carte.className = 'suivi-action-image-progress'; etapes.appendChild(carte); }
     carte.innerHTML = '<div class="titre"></div><div class="sous-titre">Une image originale se prépare.</div><div class="barre" aria-hidden="true"></div>';
