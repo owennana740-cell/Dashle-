@@ -450,7 +450,16 @@ class VocalViewTests(unittest.TestCase):
           const fs = require("fs");
           const {JSDOM} = require("jsdom");
           const html = fs.readFileSync(process.argv[1], "utf8");
-          const dom = new JSDOM(html, {runScripts:"dangerously", resources:"usable", url:"http://localhost/"});
+          const dom = new JSDOM(html, {
+            runScripts:"dangerously",
+            url:"http://localhost/",
+            beforeParse(window) {
+              window.matchMedia = () => ({matches:false, addEventListener(){}, removeEventListener(){}});
+              window.requestAnimationFrame = (cb) => setTimeout(() => cb(Date.now()), 0);
+              window.cancelAnimationFrame = (id) => clearTimeout(id);
+              window.scrollTo = () => {};
+            }
+          });
           const w = dom.window;
           let fetches = 0;
           w.fetch = () => {
