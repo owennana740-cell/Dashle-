@@ -194,7 +194,7 @@ class ArtifactToolsTests(unittest.TestCase):
                     }
                 }
 
-        with patch.object(artifact_tools.requests, "post", return_value=FakeResponse()) as appel:
+        with patch.object(artifact_tools, "CLE_API", "test-key"), patch.object(artifact_tools.requests, "post", return_value=FakeResponse()) as appel:
             raw, mime = artifact_tools.generer_image("Crée une image simple.")
 
         self.assertEqual(raw, PNG_1X1)
@@ -212,8 +212,15 @@ class ArtifactToolsTests(unittest.TestCase):
             def json(self):
                 return {"error": {"message": "invalid_request: test provider detail"}}
 
-        with patch.object(artifact_tools.requests, "post", return_value=FakeResponse()):
+        with patch.object(artifact_tools, "CLE_API", "test-key"), patch.object(artifact_tools.requests, "post", return_value=FakeResponse()):
             with self.assertRaisesRegex(RuntimeError, r"HTTP 400.*invalid_request: test provider detail"):
+                artifact_tools.generer_image("Crée une image simple.")
+
+    def test_generer_image_exposes_network_error(self):
+        with patch.object(artifact_tools, "CLE_API", "test-key"), patch.object(
+            artifact_tools.requests, "post", side_effect=requests.RequestException("network down")
+        ):
+            with self.assertRaises(requests.RequestException):
                 artifact_tools.generer_image("Crée une image simple.")
 
     def test_image_generation_failure_does_not_break_chat(self):
