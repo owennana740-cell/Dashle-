@@ -224,7 +224,7 @@ INDICATIFS = {code: indicatif for code, _, indicatif in PAYS_PROFIL}
 
 def _normaliser_telephone(pays, telephone):
     pays = (pays or "").strip().upper()
-    brut = re.sub(r"[^d+]", "", str(telephone or ""))
+    brut = re.sub(r"[^0-9+]", "", str(telephone or ""))
     if pays not in PAYS_CODES or not brut:
         return None, None
     indicatif = INDICATIFS[pays]
@@ -248,9 +248,10 @@ def _normaliser_telephone(pays, telephone):
         e164 = "+" + indicatif + national
     longueurs = {"BF": 8, "SN": 9, "CI": 10, "BJ": 10, "TG": 8, "ML": 8}
     longueur_attendue = longueurs.get(pays)
-    if longueur_attendue is not None and len(national) != longueur_attendue:
+    national_sans_prefixe = national[1:] if national.startswith("0") else national
+    if longueur_attendue is not None and len(national_sans_prefixe) != longueur_attendue:
         return None, None
-    if not 6 <= len(national) <= 14:
+    if not 6 <= len(national_sans_prefixe) <= 14:
         return None, None
     return e164, national
 
@@ -4531,14 +4532,14 @@ p{font-size:14px;color:#555;margin-top:16px}p a{color:#22C55E;font-weight:600;te
 <form method="post">
 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 <label>E-mail<input name="email" type="email" required maxlength="254" autocomplete="email"></label>
-{% if afficher_nom %}<label>Nom<input name="nom" type="text" required maxlength="160" autocomplete="name"></label>
+{% if afficher_nom %}<label>Nom<input name="nom" type="text" required maxlength="160" autocomplete="name" value="{{ inscription_nom|default('') }}"></label>
 <label>Pays
 <select name="pays" id="pays" required autocomplete="country">
 <option value="">Sélectionner un pays</option>
 {% for code, nom_pays, indicatif in pays_profil %}<option value="{{ code }}">{{ nom_pays }} (+{{ indicatif }})</option>{% endfor %}
 </select></label>
 <label>Numéro de téléphone
-<div class="phone"><select id="indicatif" aria-label="Indicatif" disabled><option>+---</option></select><input id="telephone" name="telephone" type="tel" required autocomplete="tel-national" inputmode="tel" placeholder="Numéro national"></div>
+<div class="phone"><select id="indicatif" aria-label="Indicatif" disabled><option>+---</option></select><input type="hidden" id="indicatif-envoye" name="indicatif" value="{{ inscription_indicatif|default('') }}"><input id="telephone" name="telephone" type="tel" required autocomplete="tel-national" inputmode="tel" placeholder="Numéro national" value="{{ inscription_telephone|default('') }}"></div>
 <p class="note">Le numéro est enregistré avec son indicatif international. Le 0 initial est conservé dans ton profil.</p>
 </label>{% endif %}
 <label>Mot de passe<input name="password" type="password" required minlength="8" autocomplete="{{ autocomplete }}"></label>
@@ -4549,7 +4550,7 @@ p{font-size:14px;color:#555;margin-top:16px}p a{color:#22C55E;font-weight:600;te
 {% if afficher_pays %}<script>
 const pays=document.getElementById('pays'), indicatif=document.getElementById('indicatif');
 const indicatifs={% for code, nom_pays, indicatif in pays_profil %}{{ code|tojson }}:{{ ("+"+indicatif)|tojson }},{% endfor %};
-function syncIndicatif(){indicatif.options[0].textContent=indicatifs[pays.value]||'+---';}
+function syncIndicatif(){const valeur=indicatifs[pays.value]||'+---';indicatif.options[0].textContent=valeur;document.getElementById('indicatif-envoye').value=valeur;}
 pays.addEventListener('change',syncIndicatif); syncIndicatif();
 </script>{% endif %}
 </main></body></html>
@@ -7533,6 +7534,13 @@ def inscription():
         password = request.form.get("password", "")
         pays     = request.form.get("pays", "").strip().upper()
         telephone_saisi = request.form.get("telephone", "").strip()
+        indicatif_recu = request.form.get("indicatif", "").strip()
+        app.logger.info(
+            "inscription POST: pays=%s indicatif=%s numero_length=%d",
+            pays or "<vide>",
+            indicatif_recu or "<vide>",
+            len(telephone_saisi),
+        )
         telephone, telephone_national = _normaliser_telephone(pays, telephone_saisi)
         if not nom or len(nom) > 160:
             erreur = "Indique ton nom (160 caractères maximum)."
@@ -7582,6 +7590,11 @@ def inscription():
         afficher_pays=True,
         pays_profil=PAYS_PROFIL,
         csrf_token=jeton_csrf(),
+        inscription_email=email if request.method == "POST" else "",
+        inscription_nom=nom if request.method == "POST" else "",
+        inscription_pays=pays if request.method == "POST" else "",
+        inscription_indicatif=indicatif_recu if request.method == "POST" else "",
+        inscription_telephone=telephone_saisi if request.method == "POST" else "",
     )
 
 
