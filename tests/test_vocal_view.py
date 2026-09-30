@@ -493,18 +493,18 @@ class VocalViewTests(unittest.TestCase):
           champ.value = "premier";
           form.dispatchEvent(new w.Event("submit", {bubbles:true,cancelable:true}));
           setTimeout(() => {
-            if (!fetches) throw new Error("première réponse non démarrée");
+            if (!fetches || !w.document.querySelector(".message-wrap.bot .msg")) throw new Error("première réponse non démarrée");
             champ.value = "second";
             form.dispatchEvent(new w.Event("submit", {bubbles:true,cancelable:true}));
-          }, 20);
+          }, 100);
           setTimeout(() => {
             if (fetches !== 2) throw new Error("le nouveau message n'a pas pris la main");
             const botFinal = w.document.querySelectorAll(".message-wrap.bot .msg").length;
             if (botFinal !== botInitial) throw new Error("message fantôme ou double réponse: initial=" + botInitial + " final=" + botFinal);
             if (w.document.querySelectorAll(".message-wrap.user .msg").length < 2) throw new Error("nouveau message absent");
             console.log("TEXT_RESUBMIT_ABORT_OK");
-          }, 180);
-          setTimeout(() => process.exit(0), 220);
+          }, 300);
+          setTimeout(() => process.exit(0), 360);
         """
         checked = subprocess.run([node, "-e", script, str(path)], cwd=ROOT, text=True, capture_output=True, check=False)
         assert checked.returncode == 0, checked.stderr
