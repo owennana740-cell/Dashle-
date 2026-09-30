@@ -429,6 +429,27 @@ class VocalViewTests(unittest.TestCase):
             assert "VOCAL_VAD_ECHO_OK" in checked.stdout
         ''')
 
+    def test_vocal_diagnostic_and_build_metadata_are_local_and_hidden_by_default(self):
+        source = Path(ROOT / "web.py").read_text(encoding="utf-8")
+        required = [
+            'id="diagnostic-vocal" hidden',
+            "dashle_vocal_diagnostic_v1",
+            "dashle_vocal_diag_open",
+            "navigator.clipboard.writeText",
+            "diagnostic-vocal-effacer",
+            "appuis >= 5",
+            "BUILD_COMMIT = os.environ.get",
+            "BUILD_COMMIT_SHORT = BUILD_COMMIT[:12]",
+            "BUILD_DATE =",
+            "build_commit_short=BUILD_COMMIT_SHORT",
+            "build_commit=BUILD_COMMIT",
+            "build_date=BUILD_DATE",
+        ]
+        for item in required:
+            self.assertIn(item, source, item)
+        self.assertNotIn("ALLOW_EPHEMERAL_DB", source)
+        self.assertNotIn("EPHEMERAL_DB_MODE", source)
+
     def test_vocal_interruption_guards_remain_present(self):
         source = Path(ROOT / "web.py").read_text(encoding="utf-8")
         required = [
