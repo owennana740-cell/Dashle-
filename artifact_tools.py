@@ -305,7 +305,7 @@ Demande: {prompt[:MAX_ARTIFACT_SOURCE_CHARS]}
 Contexte: {str(contexte or '')[:8000]}"""
     body = {
         "model": MODELE_IMAGE,
-        "input": texte,
+        "input": [{"type": "text", "text": texte}],
         "response_format": {"type": "image", "mime_type": "image/png", "aspect_ratio": "16:9", "image_size": "1K"},
     }
     response = requests.post(
@@ -313,7 +313,18 @@ Contexte: {str(contexte or '')[:8000]}"""
         headers={"x-goog-api-key": CLE_API, "Content-Type": "application/json"},
         json=body, timeout=90,
     )
-    response.raise_for_status()
+    if not response.ok:
+        detail = ""
+        try:
+            payload_erreur = response.json()
+            erreur = payload_erreur.get("error", {})
+            detail = str(erreur.get("message") or "").strip()
+        except (ValueError, TypeError):
+            detail = ""
+        suffixe = f": {detail}" if detail else ""
+        raise RuntimeError(
+            f"Le fournisseur de génération d'image a refusé la requête (HTTP {response.status_code}){suffixe}"
+        )
     payload = response.json()
     data = payload.get("output_image", {}).get("data")
     mime = payload.get("output_image", {}).get("mime_type", "image/png")
