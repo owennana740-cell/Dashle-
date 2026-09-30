@@ -1,4 +1,4 @@
-const CACHE = 'dashle-static-v3';
+const CACHE = 'dashle-static-v4';
 const ASSETS = [
   '/static/manifest.json',
   '/static/icons/dashle-icon-1024.png',

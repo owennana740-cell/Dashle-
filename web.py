@@ -43,7 +43,7 @@ from database import (
     AdminAuditLog, Conversation, ImageGenerationUsage, VoiceTranscriptionUsage, LibraryItem, Message, MessageFeedback, ShareLink, SubscriptionPayment, User,
     UserMemory, UserPreference, StatisticalAnalysisUsage, Project, ProjectFile, Reminder, UserPlugin,
     ScheduledTask, ScheduledTaskRun, UserNotification,
-    initialiser_base, session_base,
+    initialiser_base, session_base, EPHEMERAL_DB_MODE,
 )
 from statistiques import analyser_fichier
 from temps_reel import actualites_recentes, meteo_du_jour
@@ -58,6 +58,10 @@ except Exception:
     PIL_DISPONIBLE = False
 
 
+BUILD_COMMIT = (os.environ.get("RENDER_GIT_COMMIT") or os.environ.get("GIT_COMMIT") or "dev").strip()[:40]
+BUILD_COMMIT_SHORT = BUILD_COMMIT[:7]
+BUILD_DATE = (os.environ.get("DASHLE_BUILD_DATE") or datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"))
+
 app = Flask(__name__)
 app.config.update(
     SECRET_KEY=os.environ.get("FLASK_SECRET_KEY") or os.urandom(32),
@@ -69,6 +73,8 @@ app.config.update(
     PERMANENT_SESSION_LIFETIME=timedelta(days=3650),
 )
 initialiser_base()
+if EPHEMERAL_DB_MODE:
+    app.logger.warning("MODE TEST : données temporaires, perdues à chaque redémarrage")
 app.register_blueprint(connectors_bp)
 
 
@@ -1830,6 +1836,11 @@ if ('serviceWorker' in navigator) {
       <div class="orbe-dashle"></div>
     </div>
     <div class="etat-vocal" id="etat-vocal">En attente</div>
+    <div id="secours-audio-vocal" class="secours-audio-vocal" hidden>
+      <p>Je n'arrive pas à t'entendre. Tu peux envoyer un court enregistrement à Dashle pour transcription.</p>
+      <p class="secours-audio-info">Ton audio sera envoyé à Dashle pour transcription et ne sera pas conservé.</p>
+      <button type="button" id="btn-envoyer-audio-vocal">Envoyer mon audio à Dashle</button>
+    </div>
   </div>
 </section>
 <form class="bas" id="form-message" autocomplete="off" method="post" action="">
@@ -1903,6 +1914,8 @@ const btnVocal    = document.getElementById('btn-vocal');
 const statutVocal = document.getElementById('statut-vocal');
 const modeVocalEl = document.getElementById('mode-vocal');
 const etatVocalEl = document.getElementById('etat-vocal');
+const secoursAudioVocalEl = document.getElementById('secours-audio-vocal');
+const btnEnvoyerAudioVocal = document.getElementById('btn-envoyer-audio-vocal');
 const apercuFichierEl = document.getElementById('apercu-fichier');
 let   apercuMedia     = document.getElementById('apercu-fichier-media');
 const apercuNom       = document.getElementById('apercu-fichier-nom');
@@ -1927,6 +1940,8 @@ let recoEnCours = false;
 let recoResultatsAutorises = false;
 let recoDebutEcouteMs = 0;
 let dernierTranscriptDictee = '';
+let dernierModeReconnaissance = 'texte';
+let dernierResultatReconnaissance = '';
 
 // États vocaux
 let vocalActif          = false;
@@ -2021,6 +2036,7 @@ async function demarrerSecoursAudio() {
       if (!blob.size) {
         afficherEtatVocal('erreur', "Je n'arrive pas à t'entendre, réessaie");
         afficherStatutVocal("Je n'arrive pas à t'entendre, réessaie");
+        if (secoursAudioVocalEl) secoursAudioVocalEl.hidden = false;
         return;
       }
       const formAudio = new FormData();
@@ -2101,9 +2117,8 @@ let minuteurRelanceReco = null;
 const DELAI_RELANCE_RECO_INITIAL = 300;
 const DELAI_RELANCE_RECO_MAX = 2000;
 const MAX_PALIERS_RELANCE_RECO = 6;
-let nbFinsImmediatesVocal = 0;
-const DUREE_FIN_IMMEDIATE_VOCAL_MS = 1200;
-const MAX_FINS_IMMEDIATES_VOCAL = 3;
+let nbFinsSansTranscriptionVocal = 0;
+const MAX_FINS_SANS_TRANSCRIPTION_VOCAL = 3;
 
 // Attendre que les résultats finaux se stabilisent avant d'envoyer le tour vocal.
 let transcriptionFinaleVocale = '';
@@ -2855,6 +2870,28 @@ function interrompreDashle() {
   setTimeout(function() { relancerRecoApresInterruption(0); }, reconnaissanceEnCoursAvantInterruption ? 120 : 0);
 }
 
+// Diagnostic vocal visible sans console. Les données restent dans le navigateur.
+const DASHLE_VOCAL_DIAG_KEY = 'dashle_vocal_diagnostic_v1';
+function enregistrerDiagnosticVocal(type, details) {
+  const entree = Object.assign({
+    type: type,
+    time: new Date().toISOString(),
+    mode: modeActuel,
+    lang: reco ? (reco.lang || 'fr-FR') : 'fr-FR'
+  }, details || {});
+  try {
+    const actuel = JSON.parse(localStorage.getItem(DASHLE_VOCAL_DIAG_KEY) || '[]');
+    actuel.push(entree);
+    localStorage.setItem(DASHLE_VOCAL_DIAG_KEY, JSON.stringify(actuel.slice(-40)));
+  } catch(e) {}
+}
+function diagnosticPermissionMicro() {
+  if (!navigator.permissions || !navigator.permissions.query) return Promise.resolve('indisponible');
+  return navigator.permissions.query({name:'microphone'}).then(function(p) {
+    return p.state || 'inconnu';
+  }).catch(function(){ return 'indisponible'; });
+}
+
 // =====================================================================
 // SpeechRecognition
 // =====================================================================
@@ -2875,10 +2912,16 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
     if (recoEnCours) {
       return false;
     }
+    // SpeechRecognition doit être le seul accès micro actif pendant l'écoute.
+    // Le VAD/AnalyserNode n'est jamais lancé en parallèle.
+    arreterVAD();
     journaliserEtatAudioReconnaissance();
-    reco.interimResults = true;
-    reco.continuous = true;
+    // Android Chrome est nettement plus fiable en session phrase par phrase,
+    // comme le mode dictée. On relance nous-mêmes après onend avec backoff.
+    reco.interimResults = false;
+    reco.continuous = false;
     modeActuel = 'vocal';
+    dernierModeReconnaissance = 'vocal';
     ouvrirModeVocal();
     afficherEtatVocal('ecoute', 'Dashle écoute...');
     btnVocal.classList.add('ecoute');
@@ -2888,8 +2931,8 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
     recoResultatsAutorises = false;
     try {
       recoDebutEcouteMs = performance.now();
-      recoDebutEcouteMs = performance.now();
       reco.start();
+      armerWatchdog();
       return true;
     } catch(e) {
       recoEnCours = false;
@@ -2925,6 +2968,10 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
   btnMicro.onclick = function() {
     if (vocalActif) return;
     modeActuel = 'dictee';
+    dernierModeReconnaissance = 'dictee';
+    dernierTranscriptDictee = '';
+    recoEnCours = false;
+    recoResultatsAutorises = false;
     reco.interimResults = false;
     reco.continuous = false;
     btnMicro.classList.add('actif');
@@ -2957,8 +3004,18 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
     }
   };
 
+  reco.onaudiostart = function() { enregistrerDiagnosticVocal('onaudiostart'); };
+  reco.onsoundstart = function() { enregistrerDiagnosticVocal('onsoundstart'); };
+  reco.onspeechstart = function() { enregistrerDiagnosticVocal('onspeechstart'); };
+  reco.onspeechend = function() { enregistrerDiagnosticVocal('onspeechend'); };
+  reco.onsoundend = function() { enregistrerDiagnosticVocal('onsoundend'); };
+  reco.onaudioend = function() { enregistrerDiagnosticVocal('onaudioend'); };
+  reco.onnomatch = function(e) { enregistrerDiagnosticVocal('onnomatch', { message: e && e.message || '' }); };
+
   reco.onstart = function() {
     recoDebutEcouteMs = performance.now();
+    enregistrerDiagnosticVocal('onstart');
+    dernierModeReconnaissance = modeActuel;
     if (modeActuel === 'vocal') journaliserEtatAudioReconnaissance();
     console.log('[DASHLE][SpeechRecognition] onstart', { mode: modeActuel, vocalActif: vocalActif });
     if (!transcriptionFinaleVocale.trim()) dernierIndexFinalVocal = 0;
@@ -2978,8 +3035,10 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
       console.log('[DASHLE][SpeechRecognition][resultat]', {
         index: index, transcript: transcript, confidence: confidence, isFinal: Boolean(r && r.isFinal)
       });
+      enregistrerDiagnosticVocal('onresult', { transcript: transcript, confidence: confidence, isFinal: Boolean(r && r.isFinal) });
       return { transcript: transcript, confidence: confidence, isFinal: Boolean(r && r.isFinal) };
     });
+    desarmerWatchdog();
     console.log('[DASHLE][SpeechRecognition] onresult', {
       mode: modeActuel, resultIndex: e.resultIndex, results: resultatsJournal,
       resultatsAutorises: recoResultatsAutorises
@@ -2994,6 +3053,7 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
       const transcript = (resultat && resultat[0] && resultat[0].transcript || '').trim();
       if (!transcript) return;
       dernierTranscriptDictee = transcript;
+      dernierResultatReconnaissance = transcript;
       champ.value = transcript;
       champ.style.height = 'auto';
       return;
@@ -3005,6 +3065,7 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
       const texte = resultats[i] && resultats[i][0] && resultats[i][0].transcript;
       if (texte && texte.trim()) {
         resultatNonVide = true;
+        dernierResultatReconnaissance = texte.trim();
         if (!resultats[i].isFinal) paroleInterimaire = true;
       }
     }
@@ -3019,7 +3080,7 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
 
     if (resultatNonVide) {
       nbRelancesVocal = 0;
-      nbFinsImmediatesVocal = 0;
+      nbFinsSansTranscriptionVocal = 0;
       if (minuteurRelanceReco !== null) {
         clearTimeout(minuteurRelanceReco);
         minuteurRelanceReco = null;
@@ -3036,7 +3097,32 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
 
   reco.onend = function() {
     const dureeEcouteMs = recoDebutEcouteMs ? Math.max(0, Math.round(performance.now() - recoDebutEcouteMs)) : null;
-    const transcriptionLog = modeActuel === 'dictee' ? dernierTranscriptDictee : transcriptionFinaleVocale;
+    desarmerWatchdog();
+    enregistrerDiagnosticVocal('onend', { dureeMs: recoDebutEcouteMs ? Math.max(0, Math.round(performance.now() - recoDebutEcouteMs)) : null, hasTranscription: Boolean(String((dernierModeReconnaissance === 'dictee' ? dernierTranscriptDictee : transcriptionFinaleVocale) || '').trim()) });
+    const transcriptionLog = dernierModeReconnaissance === 'dictee' ? dernierTranscriptDictee : transcriptionFinaleVocale;
+    const aUneTranscription = Boolean(String(transcriptionLog || '').trim());
+    if (dernierModeReconnaissance === 'vocal') {
+      if (aUneTranscription) {
+        nbFinsSansTranscriptionVocal = 0;
+      } else if (vocalActif && !reponseEnCours && !syntheseEnCours && !recoMutePendantTTS) {
+        nbFinsSansTranscriptionVocal += 1;
+        console.warn('[DASHLE][SpeechRecognition] fin sans transcription', {
+          compteur: nbFinsSansTranscriptionVocal,
+          dureeEcouteMs: dureeEcouteMs
+        });
+        if (nbFinsSansTranscriptionVocal >= MAX_FINS_SANS_TRANSCRIPTION_VOCAL) {
+          nbFinsSansTranscriptionVocal = 0;
+          vocalActif = false;
+          btnVocal.classList.remove('vocal-on', 'ecoute', 'parle');
+          afficherEtatVocal('erreur', "Je n'arrive pas à t'entendre, réessaie");
+          afficherStatutVocal("Je n'arrive pas à t'entendre, réessaie");
+          if (secoursAudioVocalEl) secoursAudioVocalEl.hidden = false;
+          recoResultatsAutorises = false;
+          try { reco.stop(); } catch(e) {}
+          return;
+        }
+      }
+    }
     console.log('[DASHLE][SpeechRecognition] onend', {
       mode: modeActuel, vocalActif: vocalActif, dureeEcouteMs: dureeEcouteMs,
       hasTranscription: Boolean(String(transcriptionLog || '').trim()),
@@ -3052,36 +3138,30 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
     if (recoMutePendantTTS) {
       return;  // TTS prend la main, onend le relancera
     }
+    if (dernierModeReconnaissance === 'dictee') {
+      // Le texte peut déjà être dans la zone de saisie alors que onend arrive
+      // après un changement d'état. Le compteur lit le snapshot du résultat,
+      // jamais une variable remise à zéro par un autre mode.
+      console.log('[DASHLE][SpeechRecognition][dictee]', {
+        hasTranscription: Boolean(String(dernierTranscriptDictee || '').trim()),
+        transcriptionLength: String(dernierTranscriptDictee || '').trim().length
+      });
+      return;
+    }
     if (transcriptionFinaleVocale.trim()) {
       planifierEnvoiFinPhraseVocale();
       return;
     }
     const synthActive = ('speechSynthesis' in window) && window.speechSynthesis.speaking;
-    const finImmediate = modeActuel === 'vocal'
-      && !transcriptionFinaleVocale.trim()
-      && typeof dureeEcouteMs === 'number'
-      && dureeEcouteMs < DUREE_FIN_IMMEDIATE_VOCAL_MS;
-    if (finImmediate) {
-      nbFinsImmediatesVocal += 1;
-      console.warn('[DASHLE][SpeechRecognition] fin immédiate', {
-        compteur: nbFinsImmediatesVocal, dureeEcouteMs: dureeEcouteMs
-      });
-      if (nbFinsImmediatesVocal >= MAX_FINS_IMMEDIATES_VOCAL) {
-        nbFinsImmediatesVocal = 0;
-        if (demarrerSecoursAudio()) return;
-        vocalActif = false;
-        btnVocal.classList.remove('vocal-on', 'ecoute', 'parle');
-        afficherEtatVocal('erreur', "Je n'arrive pas à t'entendre, réessaie");
-        afficherStatutVocal("Je n'arrive pas à t'entendre, réessaie");
-        return;
-      }
-    }
     if (!interruptionDemandee && !reponseEnCours && !syntheseEnCours && !synthActive) {
       planifierRelanceReco();
     }
   };
 
   reco.onerror = function(e) {
+    desarmerWatchdog();
+    enregistrerDiagnosticVocal('onerror', { error: e && e.error || '', message: e && e.message || '' });
+    console.log('[DASHLE][SpeechRecognition][error-detail]', { error: e && e.error, message: e && e.message, name: e && e.name, type: e && e.type });
     console.log('[DASHLE][SpeechRecognition] onerror', {
       error: e && e.error, message: e && e.message, mode: modeActuel, vocalActif: vocalActif
     });
@@ -3401,7 +3481,22 @@ document.getElementById('reduire-vocal').addEventListener('click', function() {
   if (btnRouvrir) btnRouvrir.classList.toggle('actif', vocalActif);
 });
 
+if (btnEnvoyerAudioVocal) {
+  btnEnvoyerAudioVocal.addEventListener('click', async function() {
+    if (secoursAudioVocalEl) secoursAudioVocalEl.hidden = true;
+    afficherEtatVocal('ecoute', 'Enregistrement audio…');
+    afficherStatutVocal('Ton audio sera envoyé à Dashle pour transcription et ne sera pas conservé.');
+    const ok = await demarrerSecoursAudio();
+    if (!ok) {
+      if (secoursAudioVocalEl) secoursAudioVocalEl.hidden = false;
+      afficherEtatVocal('erreur', "Je n'arrive pas à t'entendre, réessaie");
+      afficherStatutVocal("Je n'arrive pas à t'entendre, réessaie");
+    }
+  });
+}
+
 document.getElementById('fermer-vocal').addEventListener('click', function() {
+  if (document.activeElement === this) { try { this.blur(); } catch(e) {} }
   vocalActif = false;
   btnVocal.classList.remove('vocal-on', 'ecoute', 'parle');
   try { reco && reco.stop(); } catch(e) {}
@@ -4222,7 +4317,8 @@ body.theme-sombre label{border-color:#294238}
     </label>
   </section>
   <section class="carte"><h2>À propos de Dashle</h2>
-    <p class="note"><strong>Version :</strong> version du projet non déclarée</p>
+    {% if ephemeral_db_mode %}<p class="note"><strong>MODE TEST :</strong> données temporaires, perdues à chaque redémarrage.</p>{% endif %}
+    <p class="note"><strong>Version :</strong> <code>{{ build_commit_short }}</code> · <strong>build :</strong> {{ build_date }}</p>
     <p class="note"><strong>Modèle IA :</strong> {{ modele_gemini }} (Google AI)</p>
     <p class="note">Dashle est un assistant personnel conçu par Owen. Il mémorise le contexte de tes conversations et s'améliore avec le temps.</p>
     <p><a href="{{ url_for('conditions_utilisation') }}">Conditions d'utilisation</a></p>
@@ -4232,6 +4328,14 @@ body.theme-sombre label{border-color:#294238}
 <form method="post" action="{{ url_for('nouvelle_conv') }}">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <button type="submit" class="secondaire">Commencer une nouvelle conversation</button>
+<section class="carte" id="diagnostic-vocal" hidden>
+  <h2>Diagnostic vocal</h2>
+  <p class="note">Diagnostic local au navigateur. Aucun transcript de ce panneau n'est envoyé au serveur.</p>
+  <p><strong>Micro :</strong> <span id="diag-permission">Vérification…</span> · <strong>Langue :</strong> <span id="diag-lang">fr-FR</span></p>
+  <pre id="diag-evenements" style="max-height:320px;overflow:auto;white-space:pre-wrap;font-size:12px;background:#f7faf8;padding:10px;border-radius:10px"></pre>
+  <button type="button" id="diag-copier">Copier le diagnostic</button>
+  <button type="button" id="diag-effacer" class="secondaire">Effacer</button>
+</section>
 </form>
 <script>
 const sv = document.getElementById('voix-select');
@@ -4315,6 +4419,35 @@ if (largeurSelect) largeurSelect.addEventListener('change', function() {
 if (animationsSelect) animationsSelect.addEventListener('change', function() {
   try { localStorage.setItem('dashle_animations', this.value); } catch(e) {}
 });
+
+// Diagnostic vocal : 5 appuis sur le titre Paramètres.
+(function(){
+  var titre=document.querySelector('.bar h1');
+  var panneau=document.getElementById('diagnostic-vocal');
+  var sortie=document.getElementById('diag-evenements');
+  var permission=document.getElementById('diag-permission');
+  var langue=document.getElementById('diag-lang');
+  var compte=0, dernier=0;
+  function lire(){
+    var data=[]; try{data=JSON.parse(localStorage.getItem('dashle_vocal_diagnostic_v1')||'[]');}catch(e){}
+    sortie.textContent=data.length ? data.map(function(x){return JSON.stringify(x);}).join('\n') : 'Aucun événement enregistré.';
+    langue.textContent=data.length && data[data.length-1].lang ? data[data.length-1].lang : 'fr-FR';
+  }
+  function perm(){
+    if(!navigator.permissions||!navigator.permissions.query){permission.textContent='indisponible';return;}
+    navigator.permissions.query({name:'microphone'}).then(function(p){permission.textContent=p.state;}).catch(function(){permission.textContent='indisponible';});
+  }
+  if(titre) titre.addEventListener('click',function(){
+    var now=Date.now(); if(now-dernier>1600) compte=0; dernier=now; compte++;
+    if(compte>=5){compte=0;panneau.hidden=false;lire();perm();}
+  });
+  if(document.getElementById('diag-copier')) document.getElementById('diag-copier').onclick=function(){
+    var texte=sortie.textContent;
+    navigator.clipboard&&navigator.clipboard.writeText ? navigator.clipboard.writeText(texte) : (function(){var ta=document.createElement('textarea');ta.value=texte;document.body.appendChild(ta);ta.select();document.execCommand('copy');ta.remove();})();
+  };
+  if(document.getElementById('diag-effacer')) document.getElementById('diag-effacer').onclick=function(){localStorage.removeItem('dashle_vocal_diagnostic_v1');lire();};
+  lire(); perm();
+})();
 </script>
 </main></body></html>
 """
@@ -5118,6 +5251,9 @@ def parametres():
         telephone_utilisateur=(user.telephone_national if user else ""),
         preferences=_preferences(user_id),
         modele_gemini=MODELE_GEMINI,
+        build_commit_short=BUILD_COMMIT_SHORT,
+        build_date=BUILD_DATE,
+        ephemeral_db_mode=EPHEMERAL_DB_MODE,
         consignes_personnalisees=reglages.get(cle_consignes, ""),
         longueur_reponse=reglages.get(cle_longueur, "standard"),
         memoires=memoires,

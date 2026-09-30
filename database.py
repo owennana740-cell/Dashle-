@@ -12,10 +12,19 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship,
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_SQLITE_URL = f"sqlite:///{(BASE_DIR / 'dashle.db').as_posix()}"
 DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+ALLOW_EPHEMERAL_DB = os.environ.get("ALLOW_EPHEMERAL_DB", "0").strip() == "1"
+EPHEMERAL_DB_MODE = False
 if os.environ.get("RENDER", "").lower() == "true":
-    if not DATABASE_URL:
+    if DATABASE_URL:
+        # Une vraie base reste toujours prioritaire, même si le drapeau de test est activé.
+        pass
+    elif ALLOW_EPHEMERAL_DB:
+        DATABASE_URL = "sqlite:////tmp/dashle-ephemeral.db"
+        EPHEMERAL_DB_MODE = True
+        print("MODE TEST : données temporaires, perdues à chaque redémarrage", flush=True)
+    else:
         raise RuntimeError("DATABASE_URL must be configured on Render; refusing ephemeral storage.")
-    if DATABASE_URL.startswith("sqlite:"):
+    if DATABASE_URL.startswith("sqlite:") and not EPHEMERAL_DB_MODE:
         raise RuntimeError("Render must use the configured PostgreSQL database, not local SQLite.")
 else:
     DATABASE_URL = DATABASE_URL or DEFAULT_SQLITE_URL
