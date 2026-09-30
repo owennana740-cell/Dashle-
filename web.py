@@ -1956,7 +1956,6 @@ if ('serviceWorker' in navigator) {
   <div class="vocal-entete">
     <strong>Conversation vocale</strong>
     <div class="vocal-commandes">
-      <button type="button" id="btn-interrompre-vocal" title="Interrompre la réponse vocale" aria-label="Interrompre la réponse vocale">Interrompre</button>
       <button type="button" id="reduire-vocal" title="Réduire">Réduire</button>
       <button type="button" id="fermer-vocal" title="Quitter le mode vocal">Fermer</button>
     </div>
@@ -2048,7 +2047,6 @@ const apercuNom       = document.getElementById('apercu-fichier-nom');
 const apercuType      = document.getElementById('apercu-fichier-type');
 const inputImage      = document.getElementById('image-input');
 const btnRouvrirVocal = document.getElementById('btn-rouvrir-vocal');
-const btnInterrompreVocal = document.getElementById('btn-interrompre-vocal');
 
 // CSRF token injecté côté serveur
 document.querySelectorAll('a[href*="/parametres"]').forEach(function(lien) {
@@ -3743,11 +3741,6 @@ document.getElementById('fermer-vocal').addEventListener('click', function() {
   desactiverModeVocal();
 });
 
-if (btnInterrompreVocal) {
-  btnInterrompreVocal.addEventListener('click', function() {
-    interrompreDashle();
-  });
-}
 
 // Bouton rouvrir : ramène l'overlay sans relancer quoi que ce soit —
 // le VAD et la reconnaissance continuent de tourner en arrière-plan.
