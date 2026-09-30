@@ -4547,11 +4547,35 @@ p{font-size:14px;color:#555;margin-top:16px}p a{color:#22C55E;font-weight:600;te
 </form>
 <p>{{ texte_lien }} <a href="{{ url_for(lien) }}">{{ libelle_lien }}</a></p>
 <span class="visiteur">Pas encore prêt ? <a href="{{ url_for('accueil') }}">Continuer sans compte →</a></span>
-{% if afficher_pays %}<script>
+{% if afficher_pays %}<script type="application/json" id="donnees-indicatifs">{{ pays_profil|tojson }}</script>
+<script>
 const pays=document.getElementById('pays'), indicatif=document.getElementById('indicatif');
-const indicatifs={ {% for code, nom_pays, indicatif in pays_profil %}{{ code|tojson }}:{{ ("+"+indicatif)|tojson }},{% endfor %} };
-function syncIndicatif(){const valeur=indicatifs[pays.value]||'+---';indicatif.options[0].textContent=valeur;document.getElementById('indicatif-envoye').value=valeur;}
-pays.addEventListener('change',syncIndicatif); syncIndicatif();
+const indicatifEnvoye=document.getElementById('indicatif-envoye');
+const repliIndicatifs={"BF":"+226"};
+let donneesIndicatifs={};
+try {
+  const donnees=document.getElementById('donnees-indicatifs');
+  const lignes=JSON.parse(donnees ? donnees.textContent : "[]");
+  for (const ligne of lignes) {
+    if (Array.isArray(ligne) && ligne.length >= 3) donneesIndicatifs[String(ligne[0]).toUpperCase()]="+"+String(ligne[2]);
+  }
+} catch (_erreur) {
+  donneesIndicatifs={};
+}
+if (!Object.keys(donneesIndicatifs).length) donneesIndicatifs=repliIndicatifs;
+for (const [code, valeur] of Object.entries(repliIndicatifs)) {
+  if (!donneesIndicatifs[code]) donneesIndicatifs[code]=valeur;
+}
+function syncIndicatif(){
+  const valeur=donneesIndicatifs[pays.value]||donneesIndicatifs.BF||repliIndicatifs.BF;
+  indicatif.options[0].textContent=valeur;
+  indicatifEnvoye.value=valeur;
+}
+if (!Object.keys(donneesIndicatifs).length) {
+  indicatif.options[0].textContent=repliIndicatifs.BF;
+}
+pays.addEventListener('change',syncIndicatif);
+syncIndicatif();
 </script>{% endif %}
 </main></body></html>
 """
