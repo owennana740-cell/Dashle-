@@ -472,6 +472,7 @@ class VocalViewTests(unittest.TestCase):
                     return new Promise((resolve, reject) => {
                       reader.resolve = resolve;
                       reader.reject = reject;
+                      if (fetches === 2) setTimeout(() => reader.resolve({done:true, value:undefined}), 40);
                     });
                   }
                 };
@@ -480,7 +481,6 @@ class VocalViewTests(unittest.TestCase):
                     if (reader.reject) reader.reject(Object.assign(new Error("aborted"), {name:"AbortError"}));
                   });
                 }
-                if (fetches === 2) setTimeout(() => reader.resolve({done:true, value:undefined}), 40);
                 return reader;
               }
             };
