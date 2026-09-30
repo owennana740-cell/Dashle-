@@ -52,7 +52,7 @@ from artifact_tools import (detecter_demande_pdf, detecter_demande_image,
                             structurer_document, rendre_pdf, generer_image, extraire_texte_structure)
 
 try:
-    from PIL import Image
+    from PIL import Image, ImageOps
     PIL_DISPONIBLE = True
 except Exception:
     PIL_DISPONIBLE = False
@@ -61,7 +61,7 @@ except Exception:
 app = Flask(__name__)
 app.config.update(
     SECRET_KEY=os.environ.get("FLASK_SECRET_KEY") or os.urandom(32),
-    MAX_CONTENT_LENGTH=8 * 1024 * 1024,
+    MAX_CONTENT_LENGTH=12 * 1024 * 1024,
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
     # Render définit explicitement 1; le défaut 0 permet les sessions en localhost HTTP.
@@ -81,6 +81,9 @@ def definir_charset_json_utf8(response):
 
 # Nombre maximal de messages conservés en session pour les visiteurs anonymes.
 MAX_HISTORIQUE_VISITEUR = 30
+IMAGE_UPLOAD_MAX_BYTES = 10 * 1024 * 1024
+IMAGE_PREVIEW_MAX_SIDE = 320
+_IMAGE_PREVIEW_PREFIX = "[[DASHLE_IMAGE_PREVIEW:"
 
 # Quotas de génération d'images : compteurs exclusivement côté serveur.
 IMAGE_DAILY_LIMITS = {
@@ -471,19 +474,48 @@ def _maj_resume_visiteur(nouveau_resume: str):
 # ---------------------------------------------------------------------------
 
 def _conv_courante(user_id):
-    """Renvoie l'identifiant d'une conversation active pour l'utilisateur."""
+    """Retourne la conversation sélectionnée ou la dernière, sans en créer."""
+    if session.get("nouvelle_conversation_en_attente"):
+        return None
     conversation_id = session.get("conversation_id")
     with session_base() as db:
-        conversation = db.query(Conversation).filter_by(
-            id=conversation_id, user_id=user_id
-        ).one_or_none()
+        conversation = None
+        if conversation_id:
+            conversation = db.query(Conversation).filter_by(
+                id=conversation_id, user_id=user_id
+            ).one_or_none()
         if conversation is None:
-            conversation = Conversation(user_id=user_id)
-            db.add(conversation)
-            db.flush()
-            conversation_id = conversation.id
+            conversation = (
+                db.query(Conversation)
+                .filter_by(user_id=user_id, archivee=False)
+                .order_by(Conversation.updated_at.desc())
+                .first()
+            )
+        if conversation is None:
+            session.pop("conversation_id", None)
+            return None
+        conversation_id = conversation.id
     session["conversation_id"] = conversation_id
     return conversation_id
+
+
+def _creer_conversation(user_id):
+    with session_base() as db:
+        conversation = Conversation(user_id=user_id)
+        db.add(conversation)
+        db.flush()
+        conversation_id = conversation.id
+    session["conversation_id"] = conversation_id
+    session.pop("nouvelle_conversation_en_attente", None)
+    return conversation_id
+
+
+def _conversation_pour_message(user_id):
+    """Crée une conversation uniquement au premier message si nécessaire."""
+    if session.pop("nouvelle_conversation_en_attente", False):
+        return _creer_conversation(user_id)
+    conversation_id = _conv_courante(user_id)
+    return conversation_id if conversation_id else _creer_conversation(user_id)
 
 
 def _conserver_historique(user_id):
@@ -530,15 +562,17 @@ def _messages_conversation(user_id, conversation_id, limite=None):
             messages.reverse()
         else:
             messages = conv.messages
-        return [
-            {
+        resultat = []
+        for m in messages:
+            texte, apercu = _extraire_apercu_image_message(m.texte)
+            resultat.append({
                 "id": m.id,
                 "auteur": m.auteur,
-                "texte": m.texte,
+                "texte": texte,
+                "image_preview": apercu,
                 "date": m.created_at.isoformat(),
-            }
-            for m in messages
-        ]
+            })
+        return resultat
 
 
 def _resume_conversation(user_id, conversation_id):
@@ -646,6 +680,7 @@ _PREFS_VISITEUR = {
 
 
 def _titre_automatique(texte):
+    titre = re.sub(r"[*_~#\\x60>]+", "", str(texte or ""))
     titre = re.sub(r"\s+", " ", str(texte or "")).strip()
     if re.fullmatch(r"\[(?:image|vidéo) envoyée\]", titre, flags=re.IGNORECASE):
         return ""
@@ -658,20 +693,101 @@ def _titre_automatique(texte):
     return titre or ""
 
 
-def ajouter_message(user_id, conversation_id, texte, auteur):
+
+
+def _titre_fallback_six_mots(texte):
+    nettoye = re.sub(r"[*_~#\\x60>]+", "", str(texte or ""))
+    nettoye = nettoye.replace(chr(96), "")
+    nettoye = re.sub(r"\\s+", " ", nettoye).strip()
+    if not nettoye or nettoye.lower() in {"image", "image envoyée", "photo"}:
+        return ""
+    return " ".join(nettoye.split()[:6])[:58].rstrip(" ,.;:-")
+
+
+def _titre_premier_echange(user_id, conversation_id):
+    with session_base() as db:
+        messages = (
+            db.query(Message)
+            .filter_by(conversation_id=conversation_id)
+            .order_by(Message.id.asc())
+            .limit(2)
+            .all()
+        )
+    if len(messages) < 2 or messages[0].auteur != "user" or messages[1].auteur != "bot":
+        return ""
+    historique = [{"auteur": m.auteur, "texte": m.texte} for m in messages]
+    try:
+        resume = resumer_conversation(historique, "", user_id=user_id)
+    except Exception:
+        resume = ""
+    titre = _titre_fallback_six_mots(resume)
+    if titre:
+        return titre
+    source = messages[1].texte if not _titre_fallback_six_mots(messages[0].texte) else messages[0].texte
+    return _titre_fallback_six_mots(source)
+
+def _extraire_apercu_image_message(texte):
+    brut = str(texte or "")
+    marqueur = "\n" + _IMAGE_PREVIEW_PREFIX
+    if marqueur not in brut:
+        return brut, ""
+    propre, suffixe = brut.rsplit(marqueur, 1)
+    apercu = suffixe[:-2] if suffixe.endswith("]]") else ""
+    if apercu.startswith("data:image/jpeg;base64,"):
+        return propre.rstrip(), apercu
+    return brut, ""
+
+
+def _texte_persistant_message(texte, image_preview=""):
+    propre = str(texte or "").strip()
+    apercu = str(image_preview or "")
+    if apercu.startswith("data:image/jpeg;base64,"):
+        return propre + "\n" + _IMAGE_PREVIEW_PREFIX + apercu + "]]"
+    return propre
+
+
+def _miniature_image_data_uri(image_bytes):
+    if not PIL_DISPONIBLE:
+        return ""
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as image:
+            image = ImageOps.exif_transpose(image).convert("RGB")
+            image.thumbnail((IMAGE_PREVIEW_MAX_SIDE, IMAGE_PREVIEW_MAX_SIDE), Image.Resampling.LANCZOS)
+            sortie = io.BytesIO()
+            image.save(sortie, format="JPEG", quality=72, optimize=True)
+        return "data:image/jpeg;base64," + base64.b64encode(sortie.getvalue()).decode("ascii")
+    except Exception:
+        return ""
+
+
+def ajouter_message(user_id, conversation_id, texte, auteur, image_preview=""):
     with session_base() as db:
         conv = db.query(Conversation).filter_by(
             id=conversation_id, user_id=user_id
         ).one_or_none()
         if conv is None:
             raise LookupError("Conversation introuvable")
-        msg = Message(conversation_id=conv.id, auteur=auteur, texte=texte)
+        texte_propre = str(texte or "").strip()
+        msg = Message(
+            conversation_id=conv.id,
+            auteur=auteur,
+            texte=_texte_persistant_message(texte_propre, image_preview),
+        )
         db.add(msg)
         db.flush()
-        if auteur == "user" and conv.title == "Nouvelle conversation":
-            conv.title = _titre_automatique(texte) or conv.title
         conv.updated_at = datetime.utcnow()
-        return msg.id
+        message_id = msg.id
+        doit_titrer = auteur == "bot" and conv.title == "Nouvelle conversation"
+    if doit_titrer:
+        titre = _titre_premier_echange(user_id, conversation_id)
+        if titre:
+            with session_base() as db:
+                conv = db.query(Conversation).filter_by(
+                    id=conversation_id, user_id=user_id
+                ).one_or_none()
+                if conv is not None and conv.title == "Nouvelle conversation":
+                    conv.title = titre
+    return message_id
 
 
 # ---------------------------------------------------------------------------
@@ -1505,6 +1621,13 @@ video#apercu-fichier-media { object-fit: contain; }
 .message-wrap { max-width:min(95%,var(--largeur-conversation)); }
 .message-wrap { margin-bottom:22px; }
 .msg { padding:14px 17px; border:1px solid var(--bordure); box-shadow:0 3px 12px rgba(17,51,39,.045); }
+.message-image-persistante { margin:0 0 8px; max-width:min(320px,100%); }
+.msg table { display:block; max-width:100%; overflow-x:auto; border-collapse:collapse; }
+.msg th, .msg td { padding:6px 8px; border:1px solid rgba(127,127,127,.25); text-align:left; }
+.msg thead th { background:rgba(127,127,127,.08); }
+.msg ul, .msg ol { padding-left:1.4rem; }
+
+.message-image-persistante img { display:block; width:auto; max-width:100%; max-height:260px; border-radius:14px; object-fit:contain; cursor:zoom-in; }
 .msg.user { border-color:rgba(34,197,94,.18); }
 .msg.bot { background:var(--fond-secondaire); }
 .actions-reponse { gap:4px; padding:6px 4px; }
@@ -1657,6 +1780,8 @@ PAGE = _HEADER_USER_MACRO + """
 <script type="application/ld+json">
 {"@context":"https://schema.org","@type":"WebApplication","name":"Dashle","url":"https://dashle.onrender.com/","description":"Dashle est une intelligence artificielle personnelle accessible depuis un navigateur pour échanger par écrit et demander l’analyse d’images ou de vidéos."}
 </script>
+<script src="{{ url_for('static', filename='vendor/marked.min.js') }}"></script>
+<script src="{{ url_for('static', filename='vendor/purify.min.js') }}"></script>
 <link rel="manifest" href="/static/manifest.json">
 <link rel="icon" type="image/png" sizes="1024x1024" href="/static/icons/dashle-icon-1024.png">
 <link rel="icon" type="image/png" sizes="512x512" href="/static/icons/dashle-icon-512.png">
@@ -1795,6 +1920,11 @@ if ('serviceWorker' in navigator) {
   {% endif %}
   {% for m in messages %}
     <div class="message-wrap {{ 'user' if m.auteur == 'user' else 'bot' }}">
+      {% if m.get('image_preview') %}
+      <div class="message-image-persistante">
+        <img src="{{ m.get('image_preview') }}" alt="Image envoyée" loading="lazy">
+      </div>
+      {% endif %}
       <div class="msg {{ 'user' if m.auteur == 'user' else 'bot' }}" data-message-id="{{ m.get('id','') }}">{{ m.texte }}</div>
       {% if m.auteur == 'bot' %}
       <div class="actions-reponse">
@@ -2126,6 +2256,33 @@ function reinitialiserTranscriptionVocale() {
   dernierIndexFinalVocal = 0;
 }
 
+function ajouterTexteFinalVocalUnique(texte) {
+  const candidat = String(texte || '').trim().replace(/\s+/g, ' ');
+  if (!candidat) return;
+  const courant = transcriptionFinaleVocale.trim().replace(/\s+/g, ' ');
+  if (!courant) {
+    transcriptionFinaleVocale = candidat;
+    return;
+  }
+  if (courant === candidat || courant.endsWith(' ' + candidat)) return;
+  if (candidat.startsWith(courant + ' ')) {
+    transcriptionFinaleVocale = candidat;
+    return;
+  }
+  const motsCourant = courant.split(' ');
+  const motsCandidat = candidat.split(' ');
+  let chevauchement = 0;
+  const maximum = Math.min(motsCourant.length, motsCandidat.length);
+  for (let taille = maximum; taille > 0; taille -= 1) {
+    if (motsCourant.slice(-taille).join(' ') === motsCandidat.slice(0, taille).join(' ')) {
+      chevauchement = taille;
+      break;
+    }
+  }
+  const suffixe = motsCandidat.slice(chevauchement).join(' ');
+  if (suffixe) transcriptionFinaleVocale = courant + ' ' + suffixe;
+}
+
 function planifierEnvoiFinPhraseVocale() {
   annulerFinPhraseVocale();
   minuteurFinPhraseVocale = setTimeout(function() {
@@ -2296,43 +2453,34 @@ function echapperHtml(texte) {
   });
 }
 
+function texteSansMarqueursMarkdown(texte) {
+  return String(texte || '')
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/\x60\x60\x60[\w+-]*\n?([\s\S]*?)\x60\x60\x60/g, '$1')
+    .replace(/\x60([^\x60\n]+)\x60/g, '$1')
+    .replace(/[*_~#>]/g, '')
+    .replace(/^[-+*]\s+/gm, '')
+    .replace(/^\d+[.)]\s+/gm, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+}
 function rendreMarkdown(texte) {
-  const blocsCode = [];
-  let html = echapperHtml(texte).replace(/```([\w+-]*)\s*\n([\s\S]*?)```/g, function(_, langue, code) {
-    const classe = /^[\w+-]*$/.test(langue) ? langue : '';
-    const bouton = '<button type="button" class="copier-code">Copier le code</button>';
-    blocsCode.push('<div class="bloc-code">' + bouton + '<pre><code' + (classe ? ' class="language-' + classe + '"' : '') + '>' + code.replace(/\n$/, '') + '</code></pre></div>');
-    return '\u0000CODE' + (blocsCode.length - 1) + '\u0000';
-  });
-  html = html
-    .replace(/^###\s+(.+)$/gm, '<h3>$1</h3>')
-    .replace(/^##\s+(.+)$/gm, '<h2>$1</h2>')
-    .replace(/^#\s+(.+)$/gm, '<h1>$1</h1>')
-    .replace(/(?:^|\n)((?:[-*+]\s+.+(?:\n|$))+)/g, function(_, liste) {
-      return '\n<ul>' + liste.trim().split('\n').map(function(ligne) { return '<li>' + ligne.replace(/^[-*+]\s+/, '') + '</li>'; }).join('') + '</ul>';
-    })
-    .replace(/(?:^|\n)((?:\d+\.\s+.+(?:\n|$))+)/g, function(_, liste) {
-      return '\n<ol>' + liste.trim().split('\n').map(function(ligne) { return '<li>' + ligne.replace(/^\d+\.\s+/, '') + '</li>'; }).join('') + '</ol>';
-    })
-    .replace(/`([^`\n]+)`/g, '<code>$1</code>')
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/__(.+?)__/g, '<strong>$1</strong>')
-    .replace(/\*(.+?)\*/g, '<em>$1</em>')
-    .replace(/_(.+?)_/g, '<em>$1</em>')
-    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" rel="noopener noreferrer" target="_blank">$1</a>')
-    .replace(/\n/g, '<br>');
-  return html.replace(/\u0000CODE(\d+)\u0000/g, function(_, index) { return blocsCode[Number(index)]; });
+  const source = String(texte || '');
+  if (!window.marked || !window.DOMPurify) return echapperHtml(source).replace(/\\n/g, '<br>');
+  const brut = window.marked.parse(source, { gfm: true, breaks: true, headerIds: false, mangle: false, sanitize: false });
+  const propre = window.DOMPurify.sanitize(brut, { USE_PROFILES: { html: true }, FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed', 'form', 'input', 'button'] });
+  const conteneur = document.createElement('div'); conteneur.innerHTML = propre;
+  conteneur.querySelectorAll('a').forEach(function(lien) { const href = lien.getAttribute('href') || ''; if (!/^(?:https?:|mailto:|tel:)/i.test(href)) lien.removeAttribute('href'); lien.setAttribute('target', '_blank'); lien.setAttribute('rel', 'noopener noreferrer'); });
+  conteneur.querySelectorAll('pre').forEach(function(pre) { if (pre.parentElement && pre.parentElement.classList.contains('bloc-code')) return; const bloc = document.createElement('div'); bloc.className = 'bloc-code'; const bouton = document.createElement('button'); bouton.type = 'button'; bouton.className = 'copier-code'; bouton.textContent = 'Copier le code'; bouton.setAttribute('aria-label', 'Copier le code'); pre.parentNode.insertBefore(bloc, pre); bloc.appendChild(bouton); bloc.appendChild(pre); });
+  return conteneur.innerHTML;
 }
 
-function afficherMarkdown(message, texte) {
-  message.dataset.markdownSource = String(texte);
-  message.innerHTML = rendreMarkdown(texte);
-}
+function afficherMarkdown(message, texte) { message.dataset.markdownSource = String(texte); message.innerHTML = rendreMarkdown(texte); }
+function afficherMarkdownStreaming(message, texte) { message.dataset.markdownSource = String(texte); message.innerHTML = rendreMarkdown(texte); }
 
-document.querySelectorAll('#chat .msg.bot').forEach(function(message) {
-  afficherMarkdown(message, message.textContent);
-});
-
+document.querySelectorAll('#chat .msg.bot').forEach(function(message) { afficherMarkdown(message, message.textContent); });
 function ajouterMessage(texte, classe) {
   const accueil = document.querySelector('.accueil-vide');
   if (accueil) accueil.remove();
@@ -2347,22 +2495,22 @@ function ajouterMessage(texte, classe) {
   return div;
 }
 
-function ajouterMessageImage(texte, fichier) {
+function ajouterMessageImage(texte, fichier, miniature) {
   if (!fichier || !fichier.type.startsWith('image/')) {
     return ajouterMessage(texte || '📎 Fichier envoyé', 'user');
   }
   const message = ajouterMessage(texte, 'user');
-  const url = URL.createObjectURL(fichier);
   const lien = document.createElement('a');
   lien.className = 'image-message-lien';
-  lien.href = url;
+  lien.href = miniature || '#';
   lien.target = '_blank';
   lien.rel = 'noopener noreferrer';
   lien.setAttribute('aria-label', 'Ouvrir l’image envoyée');
   const image = document.createElement('img');
   image.className = 'image-message';
-  image.src = url;
+  image.src = miniature || '';
   image.alt = fichier.name ? 'Image envoyée : ' + fichier.name : 'Image envoyée';
+  image.addEventListener('error', function(){ lien.replaceWith(document.createTextNode('Image envoyée : ' + (fichier.name || 'fichier image'))); });
   lien.appendChild(image);
   message.appendChild(lien);
   return message;
@@ -3066,7 +3214,7 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
       const resultat = resultats[i];
       const texte = (resultat && resultat[0] && resultat[0].transcript || '').trim();
       if (!resultat || !resultat.isFinal || !texte) continue;
-      transcriptionFinaleVocale += (transcriptionFinaleVocale ? ' ' : '') + texte;
+      ajouterTexteFinalVocalUnique(texte);
       dernierIndexFinalVocal = i + 1;
     }
 
@@ -3230,7 +3378,7 @@ function arreterLecture() {
 
 function nettoyerPourLecture(texte) {
   // Retire les marqueurs Markdown courants (ne modifie PAS le textContent affiché)
-  var propre = texte
+  var propre = texteSansMarqueursMarkdown(texte)
     .replace(/#{1,6}\s*/g, '')
     .replace(/\*{1,3}([^*]*)\*{1,3}/g, '$1')
     .replace(/_{1,3}([^_]*)_{1,3}/g, '$1')
@@ -3253,15 +3401,20 @@ function nettoyerPourLecture(texte) {
   return propre;
 }
 
-function lireReponse(bouton, texteForce) {
+const lecturesAutomatiquesEffectuees = new Set();
+
+function lireReponse(bouton, texteForce, lectureAutomatique) {
   if (!('speechSynthesis' in window)) {
     bouton.closest('.actions-reponse').querySelector('.lecture-etat').textContent = 'Voix indisponible';
     return;
   }
+  const messageWrap = bouton.closest('.message-wrap');
+  const messageId = messageWrap ? messageWrap.dataset.messageId : '';
+  if (lectureAutomatique && messageId && lecturesAutomatiquesEffectuees.has(messageId)) return;
   const texte = typeof texteForce === 'string'
     ? texteForce
-    : (bouton.closest('.message-wrap').querySelector('.msg').dataset.markdownSource
-        || bouton.closest('.message-wrap').querySelector('.msg').textContent);
+    : (messageWrap.querySelector('.msg').dataset.markdownSource
+        || messageWrap.querySelector('.msg').textContent);
   if (lectureActuelle === bouton && window.speechSynthesis.speaking) {
     if (window.speechSynthesis.paused) {
       window.speechSynthesis.resume();
@@ -3355,6 +3508,7 @@ function lireReponse(bouton, texteForce) {
   // d'attente mais l'audio peut démarrer avec un délai. C'est onstart
   // qui marque le vrai début du son.
   window.speechSynthesis.speak(utteranceActuelle);
+  if (lectureAutomatique && messageId) lecturesAutomatiquesEffectuees.add(messageId);
 }
 
 // =====================================================================
@@ -3395,32 +3549,103 @@ function afficherApercuFichier(fichier) {
 }
 
 let fichierImage = null;
+const IMAGE_UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
+
+async function _rasteriserImage(fichier, coteMax, qualite) {
+  const bitmap = await createImageBitmap(fichier, { imageOrientation: 'from-image' });
+  const echelle = Math.min(1, coteMax / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(bitmap.width * echelle));
+  canvas.height = Math.max(1, Math.round(bitmap.height * echelle));
+  const contexte = canvas.getContext('2d', { alpha: false });
+  contexte.fillStyle = '#fff';
+  contexte.fillRect(0, 0, canvas.width, canvas.height);
+  contexte.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close();
+  return new Promise(function(resolve, reject) {
+    canvas.toBlob(function(blob) {
+      if (!blob) reject(new Error('Compression de l’image indisponible.'));
+      else resolve(blob);
+    }, 'image/jpeg', qualite);
+  });
+}
+
 async function preparerImagePourEnvoi(fichier) {
-  if (!fichier || !fichier.type.startsWith('image/') || fichier.size <= 5 * 1024 * 1024) return fichier;
+  if (!fichier || !fichier.type.startsWith('image/')) return fichier;
+  if (fichier.size > IMAGE_UPLOAD_MAX_BYTES) {
+    throw new Error('L’image dépasse 10 Mo. Réduis-la puis réessaie.');
+  }
   try {
-    const bitmap = await createImageBitmap(fichier);
-    const echelle = Math.min(1, 2048 / Math.max(bitmap.width, bitmap.height));
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.max(1, Math.round(bitmap.width * echelle));
-    canvas.height = Math.max(1, Math.round(bitmap.height * echelle));
-    const contexte = canvas.getContext('2d');
-    contexte.fillStyle = '#fff';
-    contexte.fillRect(0, 0, canvas.width, canvas.height);
-    contexte.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-    bitmap.close();
-    const blob = await new Promise(function(resolve) { canvas.toBlob(resolve, 'image/jpeg', 0.84); });
-    if (!blob || blob.size >= fichier.size) return fichier;
+    const blob = await _rasteriserImage(fichier, 1600, 0.8);
     const nom = (fichier.name || 'image').replace(/\.[^.]+$/, '') + '.jpg';
     return new File([blob], nom, { type: 'image/jpeg', lastModified: Date.now() });
   } catch (erreur) {
-    console.warn('[DASHLE] Compression de l’image impossible, envoi de l’originale :', erreur);
-    return fichier;
+    throw new Error('Je n’ai pas pu préparer cette image. Réessaie.');
+  }
+}
+
+async function creerMiniatureImage(fichier) {
+  if (!fichier || !fichier.type.startsWith('image/')) return '';
+  try {
+    const blob = await _rasteriserImage(fichier, 320, 0.72);
+    return await new Promise(function(resolve, reject) {
+      const lecteur = new FileReader();
+      lecteur.onload = function(){ resolve(String(lecteur.result || '')); };
+      lecteur.onerror = reject;
+      lecteur.readAsDataURL(blob);
+    });
+  } catch (erreur) {
+    return '';
   }
 }
 inputImage.addEventListener('change', function(e) {
   fichierImage = e.target.files[0] || null;
   afficherApercuFichier(fichierImage);
 });
+function envoyerImageAvecProgression(fd, headers, onProgress) {
+  return new Promise(function(resolve, reject) {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', urlImage, true);
+    xhr.responseType = 'json';
+    Object.keys(headers || {}).forEach(function(cle) { xhr.setRequestHeader(cle, headers[cle]); });
+    xhr.upload.onprogress = function(e) {
+      if (e.lengthComputable && typeof onProgress === 'function') {
+        onProgress(Math.round((e.loaded / e.total) * 100));
+      }
+    };
+    xhr.onload = function() {
+      let data = xhr.response;
+      if (!data) {
+        try { data = JSON.parse(xhr.responseText || '{}'); } catch(e) { data = {}; }
+      }
+      resolve({ ok: xhr.status >= 200 && xhr.status < 300, status: xhr.status, message: data.reponse || data.erreur || '', ...data });
+    };
+    xhr.onerror = function() {
+      reject(new Error('Je n’ai pas pu envoyer l’image. Réessaie.'));
+    };
+    xhr.ontimeout = function() {
+      reject(new Error('Je n’ai pas pu envoyer l’image. Réessaie.'));
+    };
+    xhr.send(fd);
+  });
+}
+
+function afficherEchecEnvoiImage(texte, fichier, message) {
+  const zone = ajouterMessage(message || 'Je n’ai pas pu envoyer l’image. Réessaie.', 'bot');
+  const bouton = document.createElement('button');
+  bouton.type = 'button';
+  bouton.className = 'primaire';
+  bouton.textContent = 'Réessayer';
+  bouton.addEventListener('click', function() {
+    fichierImage = fichier;
+    champ.value = texte || '';
+    afficherApercuFichier(fichier);
+    zone.appendChild(bouton);
+    form.requestSubmit();
+  });
+  zone.appendChild(bouton);
+}
+
 document.getElementById('retirer-fichier').addEventListener('click', effacerApercuFichier);
 
 const feuilleFichiers = document.getElementById('feuille-fichiers');
@@ -3626,7 +3851,7 @@ chat.addEventListener('click', async function(e) {
   if (!message) return;
 
   if (bouton.classList.contains('action-copier')) {
-    await navigator.clipboard.writeText(message.dataset.markdownSource || message.innerText || message.textContent);
+    await navigator.clipboard.writeText(texteSansMarqueursMarkdown(message.dataset.markdownSource || message.innerText || message.textContent));
     bouton.classList.add('actif');
     setTimeout(function() { bouton.classList.remove('actif'); }, 1200);
 
@@ -3707,7 +3932,8 @@ form.addEventListener('submit', async function(e) {
 
     try {
       const imageEnvoyee = await preparerImagePourEnvoi(imageOriginale);
-      ajouterMessageImage(texte, imageEnvoyee);
+      const miniature = await creerMiniatureImage(imageEnvoyee);
+      ajouterMessageImage(texte, imageEnvoyee, miniature);
       const fd = new FormData();
       fd.append('message', texte);
       fd.append('image', imageEnvoyee, imageEnvoyee.name);
@@ -3716,15 +3942,17 @@ form.addEventListener('submit', async function(e) {
       }
       const headers = {};
       if (estConnecte) headers['X-CSRF-Token'] = csrfToken;
-      const res  = await fetch(urlImage, { method: 'POST', headers, body: fd });
-      const data = await res.json().catch(function() { return {}; });
+      const data = await envoyerImageAvecProgression(fd, headers, function(pourcentage) {
+        const reflexion = document.getElementById('reflexion-active');
+        if (reflexion) reflexion.setAttribute('aria-label', 'Envoi de l’image : ' + pourcentage + '%');
+      });
       retirerReflexion();
-      if (!res.ok) throw new Error(data.erreur || data.reponse || 'Erreur image (' + res.status + '). Réessaie.');
+      if (!data.ok) throw new Error(data.message || 'Je n’ai pas pu envoyer l’image. Réessaie.');
       ajouterReponse(data.reponse, data.message_id);
     } catch(err) {
       retirerReflexion();
-      console.warn('[DASHLE] Échec envoi image :', err);
-      ajouterMessage(err.message || "Erreur d'envoi de l'image. Réessaie.", 'bot');
+      console.warn('[DASHLE] Échec envoi image (%s)', err && err.name ? err.name : 'erreur');
+      afficherEchecEnvoiImage(texte, imageOriginale, err && err.message);
     }
     fichierImage = null;
     effacerApercuFichier();
@@ -3880,7 +4108,7 @@ form.addEventListener('submit', async function(e) {
         }
         if (ev.morceau) {
           reponseTexte += ev.morceau;
-          messageElement.textContent = reponseTexte;
+          afficherMarkdownStreaming(messageElement, reponseTexte);
           chat.scrollTop = chat.scrollHeight;
         }
         if (ev.termine) {
@@ -3929,11 +4157,11 @@ form.addEventListener('submit', async function(e) {
     const vocal = window._dashleVocal;
     if (!actionArtifactSse && vocal && vocal.estActif() && reponseTexte) {
       vocal.marquerParle();
-      lireReponse(reponseElement.querySelector('.action-lire'));
+      lireReponse(reponseElement.querySelector('.action-lire'), undefined, true);
       // L'écoute reprendra via utteranceActuelle.onend (après la synthèse)
     } else if (preferencesVocales.voix_active && preferencesVocales.lecture_automatique
         && reponseTexte && reponseElement) {
-      lireReponse(reponseElement.querySelector('.action-lire'));
+      lireReponse(reponseElement.querySelector('.action-lire'), undefined, true);
     }
 
     if (reponseTexte) {
@@ -4814,7 +5042,7 @@ def accueil():
                 conversation_id=conversation_id,
                 preferences=preferences,
             )
-        # Utilisateur connecté — comportement existant
+        # Utilisateur connecté : l'ouverture ne crée aucune conversation.
         conversation_id = _conv_courante(user_id)
         return _rendre_page(
             messages=_messages_conversation(user_id, conversation_id),
@@ -4849,12 +5077,18 @@ def nouvelle_conv():
         return redirect(url_for("accueil"))
     if not _conserver_historique(user_id):
         session.pop("conversation_id", None)
+        session.pop("nouvelle_conversation_en_attente", None)
         return redirect(url_for("accueil"))
-    with session_base() as db:
-        conv = Conversation(user_id=user_id)
-        db.add(conv)
-        db.flush()
-        session["conversation_id"] = conv.id
+    conversation_id = session.get("conversation_id")
+    if conversation_id:
+        with session_base() as db:
+            conv = db.query(Conversation).filter_by(
+                id=conversation_id, user_id=user_id
+            ).one_or_none()
+            if conv is not None and not conv.messages:
+                return redirect(url_for("accueil"))
+    session.pop("conversation_id", None)
+    session["nouvelle_conversation_en_attente"] = True
     return redirect(url_for("accueil"))
 
 
@@ -5407,7 +5641,7 @@ def repondre_flux():
     if user_id:
         conserver = _conserver_historique(user_id)
         if conserver:
-            conversation_id = _conv_courante(user_id)
+            conversation_id = _conversation_pour_message(user_id)
             historique = _messages_conversation(
                 user_id, conversation_id, limite=MAX_MESSAGES_CONTEXTE
             )
@@ -5739,7 +5973,7 @@ def repondre_image():
     if user_id:
         conserver = _conserver_historique(user_id)
         if conserver:
-            conversation_id = _conv_courante(user_id)
+            conversation_id = _conversation_pour_message(user_id)
             historique = _messages_conversation(
                 user_id, conversation_id, limite=MAX_MESSAGES_CONTEXTE
             )
@@ -5763,37 +5997,78 @@ def repondre_image():
     if not fichier:
         return jsonify({"reponse": "Aucune image reçue."})
 
-    image_bytes = fichier.read()
+    image_bytes = fichier.read(IMAGE_UPLOAD_MAX_BYTES + 1)
+    if len(image_bytes) > IMAGE_UPLOAD_MAX_BYTES:
+        return jsonify({
+            "reponse": "L’image est trop volumineuse. La limite avant compression est de 10 Mo. Réduis-la puis réessaie.",
+            "code": "image_trop_volumineuse",
+            "retryable": True,
+        }), 413
     if not image_bytes:
-        return jsonify({"reponse": "L'image reçue est vide."}), 400
+        return jsonify({"reponse": "L'image reçue est vide.", "retryable": True}), 400
 
     mime_type = detecter_type_media(image_bytes)
     if not mime_type:
-        return jsonify({"reponse": "Le fichier envoyé n'est pas une image ou une vidéo valide."}), 400
+        return jsonify({
+            "reponse": "Je n’ai pas pu reconnaître cette image. Choisis un JPEG, PNG, GIF, BMP ou WebP valide.",
+            "code": "image_invalide",
+            "retryable": True,
+        }), 400
 
     if mime_type.startswith("image/") and PIL_DISPONIBLE:
         try:
             with Image.open(io.BytesIO(image_bytes)) as img:
                 img.verify()
         except Exception:
-            return jsonify({"reponse": "Le fichier envoyé n'est pas une image valide."}), 400
+            return jsonify({
+                "reponse": "Je n’ai pas pu lire cette image. Vérifie le fichier puis réessaie.",
+                "code": "image_invalide",
+                "retryable": True,
+            }), 400
+
+    bloque, quota = _quota_image_bloque(user_id) if mime_type.startswith("image/") else (False, None)
+    if bloque:
+        return jsonify({"reponse": quota["message"], "quota": quota}), 429
 
     image_b64 = base64.b64encode(image_bytes).decode("utf-8")
     type_media = "Vidéo" if mime_type.startswith("video/") else "Image"
     texte_msg = message or f"[{type_media} envoyée]"
 
+    apercu_persistant = _miniature_image_data_uri(image_bytes) if mime_type.startswith("image/") else ""
     if user_id and conserver:
-        ajouter_message(user_id, conversation_id, texte_msg, "user")
+        ajouter_message(
+            user_id, conversation_id, texte_msg, "user",
+            image_preview=apercu_persistant,
+        )
     elif not user_id:
         _ajouter_message_visiteur(texte_msg, "user")
 
     contexte_projet = (
         _arguments_contexte_projet(user_id, conversation_id) if user_id else {}
     )
-    reponse = traiter_message_image(
-        message, image_b64, mime_type, historique, resume,
-        user_id=user_id, **contexte_projet,
-    )
+    try:
+        reponse = traiter_message_image(
+            message, image_b64, mime_type, historique, resume,
+            user_id=user_id, **contexte_projet,
+        )
+    except requests.RequestException:
+        app.logger.warning("Échec réseau lors de l’analyse d’image")
+        return jsonify({
+            "reponse": "Je n’ai pas pu envoyer l’image. Réessaie.",
+            "code": "image_reseau",
+            "retryable": True,
+        }), 502
+    except Exception as exc:
+        app.logger.warning("Échec analyse image (%s)", type(exc).__name__)
+        return jsonify({
+            "reponse": "Je n’ai pas pu analyser l’image. Réessaie.",
+            "code": "image_analyse",
+            "retryable": True,
+        }), 502
+
+    if mime_type.startswith("image/") and not _consommer_quota_image(user_id):
+        bloque, quota = _quota_image_bloque(user_id)
+        return jsonify({"reponse": quota["message"], "quota": quota}), 429
 
     if user_id and conserver:
         mid = ajouter_message(user_id, conversation_id, reponse, "bot")
@@ -5816,7 +6091,11 @@ def repondre_image():
 
 @app.errorhandler(413)
 def fichier_trop_volumineux(_erreur):
-    return jsonify({"reponse": "Le fichier est trop volumineux (maximum : 8 Mo)."}), 413
+    return jsonify({
+        "reponse": "L’image est trop volumineuse. La limite avant compression est de 10 Mo. Réduis-la puis réessaie.",
+        "code": "image_trop_volumineuse",
+        "retryable": True,
+    }), 413
 
 
 # ---------------------------------------------------------------------------
@@ -7714,7 +7993,7 @@ def transferer_conversation():
     if not hist:
         return jsonify({"ok": True, "transfere": 0})
 
-    conversation_id = _conv_courante(user_id)
+    conversation_id = _conv_courante(user_id) or _creer_conversation(user_id)
     # Ne transférer que si la conversation cible est vide
     existants = _messages_conversation(user_id, conversation_id)
     if existants:
