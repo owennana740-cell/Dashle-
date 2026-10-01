@@ -5,7 +5,7 @@ Dernière mise à jour : 2026-10-01
 ## État de référence
 
 - Branche principale : `main`
-- SHA actuel de `main` : `2bfd7382debac472d18b88cc4557f46d867c7bd7`
+- SHA actuel de `main` : `c2dcdbb7f391d418b992e2e176e30d83fbe65f78`
 - PR #9 D2 vocal : fusionnée
 - PR #10 génération d’image Gemini : fusionnée
 - PR #11 stabilisation vocale utile : fusionnée
@@ -146,7 +146,7 @@ Dernière mise à jour : 2026-10-01
 
 - mémoire améliorée : C2 terminée et fusionnée via PR #21 ; sélection bornée de souvenirs pertinents (chevauchement lexical), injectée dans les chemins synchrone et SSE ; mémoire désactivée respectée ; 6 éléments / 3000 caractères maximum ; CI #235 verte ; aucune migration de base ; la validation production HTTP reste limitée par le problème Render documenté en C1
 - conversations longues : C3 validée via PR #23 ; preuve automatisée sur 100 messages et message unique de 100 000 caractères ; historique borné à 24 messages / 24 000 caractères et dernier message courant conservé ; CI #239 verte ; aucun changement de production nécessaire ; smoke production reste limité par Render comme documenté en C1
-- multimodal : C4 audit réussi sans modification de code ; analyse image/vidéo existante dans `brain.py`, génération d'image centralisée dans `artifact_tools.py`, cycle SSE `action_started` / progression / `action_completed`, MIME, bibliothèque, téléchargement et erreurs/réseau couverts par les tests existants ; abstraction fournisseur/retry/safety complète non introduite car aucun gain réel démontré à ce stade
+- multimodal : C4 validée sans modification de production ; analyse image/vidéo existante dans `brain.py`, génération d'image centralisée dans `artifact_tools.py`, cycle SSE `action_started` / progression / `action_completed`, MIME, bibliothèque, téléchargement et erreurs/réseau couverts ; PR #27 ajoute des tests de contrat pour absence de média, taille maximale, MIME invalide, transmission image base64 et vidéo ; CI #246 — succès ; abstraction fournisseur/retry/safety complète non introduite car aucun gain réel démontré à ce stade
 - recherche/Web : non commencée
 - outils/agents : non commencés
 
