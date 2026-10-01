@@ -36,13 +36,14 @@ class SeoCrawlTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.mimetype, "text/plain")
         robots = response.get_data(as_text=True)
+        rules = {line.strip() for line in robots.splitlines() if line.strip()}
 
-        self.assertIn("User-agent: *", robots)
-        self.assertIn("Allow: /", robots)
+        self.assertIn("User-agent: *", rules)
+        self.assertIn("Allow: /", rules)
         for public_path in ("/", "/actualites", "/conditions", "/temps-reel", "/tarifs"):
-            self.assertNotIn(f"Disallow: {public_path}", robots)
+            self.assertNotIn(f"Disallow: {public_path}", rules)
         for private_prefix in ("/connexion", "/inscription", "/parametres", "/securite", "/admin", "/api/"):
-            self.assertIn(f"Disallow: {private_prefix}", robots)
+            self.assertIn(f"Disallow: {private_prefix}", rules)
         self.assertIn("Sitemap: https://dashle.onrender.com/sitemap.xml", robots)
 
     def test_sitemap_is_valid_xml_and_contains_only_canonical_public_urls(self):
