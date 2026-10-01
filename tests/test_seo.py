@@ -2,6 +2,7 @@
 
 import os
 import unittest
+from unittest import mock
 import xml.etree.ElementTree as ET
 from urllib.parse import urlparse
 
@@ -70,9 +71,10 @@ class SeoCrawlTests(unittest.TestCase):
             self.assertFalse(parsed.fragment)
 
     def test_public_sitemap_pages_are_not_redirected_to_login(self):
-        for path in ("/", "/actualites", "/conditions", "/temps-reel", "/tarifs"):
-            response = self.client.get(path, follow_redirects=False)
-            self.assertEqual(response.status_code, 200, path)
+        with mock.patch.object(web, "_taux_indicatifs", return_value={"eur": 655.957, "usd": 0.90}):
+            for path in ("/", "/actualites", "/conditions", "/temps-reel", "/tarifs"):
+                response = self.client.get(path, follow_redirects=False)
+                self.assertEqual(response.status_code, 200, path)
 
     def test_private_route_remains_protected(self):
         response = self.client.get("/parametres", follow_redirects=False)
