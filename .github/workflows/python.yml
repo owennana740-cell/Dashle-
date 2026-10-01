@@ -37,5 +37,7 @@ jobs:
         run: python -m unittest tests.test_registration_phone -v
       - name: Tests mode vocal D2
         run: python -m unittest tests.test_vocal_view -v
+      - name: Tests observabilité
+        run: python -m unittest tests.test_observability -v
       - name: Vérifier le diff
         run: git diff --check
