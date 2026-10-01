@@ -385,6 +385,7 @@ def streamer_a_lia(
         "generationConfig": _gen_config(longueur),
     }
 
+    rep = None
     try:
         rep = _session.post(
             _url("streamGenerateContent") + "&alt=sse",
@@ -427,6 +428,9 @@ def streamer_a_lia(
     except Exception as exc:
         print(f"ERREUR Gemini inattendue [streamer_a_lia] : {exc!r}")
         yield "Impossible de joindre le service IA. Vérifie la connexion puis réessaie."
+    finally:
+        if rep is not None:
+            rep.close()
 
 
 def demander_a_lia_image(
