@@ -147,8 +147,8 @@ Dernière mise à jour : 2026-10-01
 - mémoire améliorée : C2 terminée et fusionnée via PR #21 ; sélection bornée de souvenirs pertinents (chevauchement lexical), injectée dans les chemins synchrone et SSE ; mémoire désactivée respectée ; 6 éléments / 3000 caractères maximum ; CI #235 verte ; aucune migration de base ; la validation production HTTP reste limitée par le problème Render documenté en C1
 - conversations longues : C3 validée via PR #23 ; preuve automatisée sur 100 messages et message unique de 100 000 caractères ; historique borné à 24 messages / 24 000 caractères et dernier message courant conservé ; CI #239 verte ; aucun changement de production nécessaire ; smoke production reste limité par Render comme documenté en C1
 - multimodal : C4 validée sans modification de production ; analyse image/vidéo existante dans `brain.py`, génération d'image centralisée dans `artifact_tools.py`, cycle SSE `action_started` / progression / `action_completed`, MIME, bibliothèque, téléchargement et erreurs/réseau couverts ; PR #27 ajoute des tests de contrat pour absence de média, taille maximale, MIME invalide, transmission image base64 et vidéo ; CI #246 — succès ; abstraction fournisseur/retry/safety complète non introduite car aucun gain réel démontré à ce stade
-- recherche/Web : non commencée
-- outils/agents : non commencés
+- recherche/Web : audit effectué ; données externes météo/actualité déjà présentes, mais aucune recherche Web générique utilisateur. Implémentation volontairement bloquée tant qu’un fournisseur de recherche, son contrat/coût, les limites serveur et une politique SSRF de sortie ne sont pas définis ; aucun nouveau secret ou fournisseur ajouté.
+- outils/agents : audit effectué ; couche d’outils/connecteurs déjà présente avec permissions par ressource, confirmations d’actions d’écriture/interdites, jetons à expiration et audit serveur ; préflight Gemini et exécution d’outils existent. Aucun agent général autonome ajouté car aucun besoin concret ni périmètre d’action sûr n’est défini.
 
 ## Phase D
 
