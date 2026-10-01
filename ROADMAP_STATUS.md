@@ -5,7 +5,7 @@ Dernière mise à jour : 2026-10-01
 ## État de référence
 
 - Branche principale : `main`
-- SHA actuel de `main` : `c2dcdbb7f391d418b992e2e176e30d83fbe65f78`
+- SHA actuel de `main` : `e5222ef52c34e47e217bcae939fbe434cfc5d733`
 - PR #9 D2 vocal : fusionnée
 - PR #10 génération d’image Gemini : fusionnée
 - PR #11 stabilisation vocale utile : fusionnée
@@ -152,10 +152,10 @@ Dernière mise à jour : 2026-10-01
 
 ## Phase D
 
-- Android : non commencé
+- Android : D1 première passe terminée ; shell WebView existant conservé et pont micro/caméra ajouté avec permissions Android à la demande, limité à `dashle.onrender.com` ; PR #30 fusionnée ; Python CI #252 et Android build #24 — succès ; aucune validation appareil Android réel encore effectuée.
 - notifications : non commencées
 - partage Android : non commencé
-- fichiers/caméra : non commencés
+- fichiers/caméra : caméra WebView autorisée en D1, fonctions natives dédiées non commencées
 - fonctionnalités natives : non commencées
 
 ## Limitations réelles
