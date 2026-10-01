@@ -14,8 +14,8 @@ class PwaAssetTests(unittest.TestCase):
         worker = (ROOT / "static/service-worker.js").read_text(encoding="utf-8")
 
         self.assertEqual(manifest["display"], "standalone")
-        self.assertIn('"/static/vendor/marked.min.js"', worker)
-        self.assertIn('"/static/vendor/purify.min.js"', worker)
+        self.assertIn("'/static/vendor/marked.min.js'", worker)
+        self.assertIn("'/static/vendor/purify.min.js'", worker)
         self.assertIn("dashle-static-v5", worker)
         self.assertNotIn("'/repondre_flux'", worker)
         self.assertNotIn("'/repondre'", worker)
