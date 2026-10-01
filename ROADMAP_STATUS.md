@@ -13,6 +13,16 @@ Dernière mise à jour : 2026-10-01
 
 ## Phase A
 
+### A2 — Fiabilisation SSE
+- État : terminée
+- PR : #14
+- Branche : `sse/a2-provider-cleanup`
+- Merge commit : `1a8119e829f197ee7f16f9812571b4526a0f8791`
+- CI PR : workflow `Python validation` #205 — succès
+- Correction : fermeture explicite de la réponse HTTP Gemini lorsque le générateur SSE est annulé
+- Test : `tests.test_sse_resilience` — succès
+- Non-modifié : timeout fournisseur de 90 s, logique vocale, données, secrets, fournisseur IA
+
 ### A1 — Observabilité
 - État : terminée
 - PR : #13
