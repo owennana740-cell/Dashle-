@@ -20,7 +20,8 @@ class ProviderLoggingSecurityTests(unittest.TestCase):
             def raise_for_status(self):
                 raise requests.HTTPError("provider failure", response=self)
 
-        with patch.object(brain, "CLE_API", "test-key"),
+        with (
+                patch.object(brain, "CLE_API", "test-key"),
                 patch.object(brain, "contexte_temps_reel", return_value=""),
                 patch.object(brain, "_plugins_actifs", return_value=[]),
                 patch.object(brain, "_instruction_systeme", return_value=""),
@@ -28,7 +29,8 @@ class ProviderLoggingSecurityTests(unittest.TestCase):
                 patch.object(brain, "_construire_contents", return_value=[]),
                 patch.object(brain, "_gen_config", return_value={}),
                 patch.object(brain._session, "post", return_value=FakeResponse()),
-                self.assertLogs(brain.logger, level="ERROR") as captured:
+                self.assertLogs(brain.logger, level="ERROR") as captured,
+        ):
             brain.demander_a_lia("bonjour")
 
         logs = "\n".join(captured.output)
