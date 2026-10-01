@@ -13,6 +13,20 @@ Dernière mise à jour : 2026-10-01
 
 ## Phase A
 
+### A4 — Sécurité, première passe
+- État : première passe terminée ; audit quotas/rate limiting chat texte encore ouvert
+- PR : #16
+- Merge commit : `abe0509f515819e98c110172589eefb1d1d71cab`
+- CI PR : workflow `Python validation` #214 — succès
+- Correction : les erreurs Gemini ne journalisent plus les corps bruts ni `repr(exc)` ; seuls code HTTP/type d’exception sont journalisés
+- Test : `tests.test_provider_logging_security` — succès
+- Risque résiduel vérifié : aucun quota DASHLE serveur dédié au chat texte n’a été trouvé. Des quotas serveur existent pour images, transcription et certaines fonctions. Ne pas inventer de plafonds texte sans règle produit ; à traiter avec une politique de quota explicite.
+
+### A5 — Intégration / E2E, état actuel
+- État : couverture d’intégration backend déjà présente et verte dans la CI ; E2E navigateur réel/Android non exécuté dans cet environnement
+- CI #214 conserve verts : génération fichiers/images, conversations, vocal jsdom, sécurité/connecteurs, inscription/téléphones, D2, observabilité, résilience SSE, performance
+- Limitation : aucun test matériel Chrome Android, microphone, haut-parleur ou réseau mobile réel n’est déclaré réussi
+
 ### A3 — Performance mobile, première passe
 - État : première passe terminée ; mesure mobile réelle encore requise
 - PR : #15
