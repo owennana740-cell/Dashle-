@@ -22,6 +22,7 @@ import re
 import requests
 import threading
 import unicodedata
+from time import perf_counter
 from datetime import datetime, timedelta, timezone
 import calendar
 from html import escape as html_escape
@@ -29,7 +30,7 @@ from urllib.parse import urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from flask import (
     Flask, Response, request, render_template, render_template_string,
-    redirect, stream_with_context, url_for, session, jsonify, send_file,
+    redirect, stream_with_context, url_for, session, jsonify, send_file, g,
 )
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
@@ -66,6 +67,66 @@ except Exception:
 
 
 app = Flask(__name__)
+
+
+def _observabilite_identite_utilisateur():
+    """Retourne un identifiant utilisateur non réversible pour les logs."""
+    user_id = session.get("user_id")
+    if user_id is None:
+        return None
+    return hashlib.sha256(str(user_id).encode("utf-8")).hexdigest()[:12]
+
+
+@app.before_request
+def _observabilite_debut():
+    """Initialise la corrélation et le chronométrage sans journaliser le contenu."""
+    request_id = (request.headers.get("X-Request-ID") or "").strip()[:128]
+    if not request_id:
+        request_id = secrets.token_hex(12)
+    g.dashle_observabilite = {
+        "request_id": request_id,
+        "started_at": perf_counter(),
+        "user_ref": _observabilite_identite_utilisateur(),
+    }
+
+
+@app.after_request
+def _observabilite_fin(response):
+    contexte = getattr(g, "dashle_observabilite", None)
+    if contexte is None:
+        return response
+    response.headers["X-Request-ID"] = contexte["request_id"]
+    duree_ms = round((perf_counter() - contexte["started_at"]) * 1000, 1)
+    if request.endpoint != "static":
+        app.logger.info(
+            "dashle.request request_id=%s endpoint=%s user_ref=%s provider=gemini model=%s duration_ms=%s status=%s",
+            contexte["request_id"], request.endpoint or "unknown", contexte["user_ref"] or "anonymous",
+            MODELE_GEMINI, duree_ms, response.status_code,
+        )
+    return response
+
+
+def _journaliser_sse(contexte, debut_sse, ttfb_at, resultat):
+    if contexte is None:
+        return
+    maintenant = perf_counter()
+    app.logger.info(
+        "dashle.sse request_id=%s endpoint=repondre_flux user_ref=%s provider=gemini model=%s duration_ms=%s ttfb_ms=%s result=%s",
+        contexte["request_id"], contexte["user_ref"] or "anonymous", MODELE_GEMINI,
+        round((maintenant - debut_sse) * 1000, 1),
+        round((ttfb_at - debut_sse) * 1000, 1) if ttfb_at is not None else None,
+        resultat,
+    )
+
+
+def _journaliser_image(contexte, debut_image, resultat):
+    if contexte is None:
+        return
+    app.logger.info(
+        "dashle.image request_id=%s endpoint=repondre_flux user_ref=%s provider=gemini model=%s duration_ms=%s result=%s",
+        contexte["request_id"], contexte["user_ref"] or "anonymous", MODELE_GEMINI,
+        round((perf_counter() - debut_image) * 1000, 1), resultat,
+    )
 app.config.update(
     SECRET_KEY=os.environ.get("FLASK_SECRET_KEY") or os.urandom(32),
     MAX_CONTENT_LENGTH=12 * 1024 * 1024,
@@ -5800,6 +5861,10 @@ def repondre_flux():
         morceaux = []
         action_id = secrets.token_hex(12)
         action_type = _demande_action_longue(message)
+        observabilite = getattr(g, "dashle_observabilite", None)
+        debut_sse = perf_counter()
+        ttfb_at = None
+        resultat_sse = "success"
         try:
             if action_type:
                 yield _evenement_action(
@@ -5825,7 +5890,13 @@ def repondre_flux():
                         "action_progress", action_id, "image", "generation",
                         "Création d'une première ébauche…",
                     )
-                    raw, mime = generer_image(message, contexte_action)
+                    debut_image = perf_counter()
+                    try:
+                        raw, mime = generer_image(message, contexte_action)
+                    except Exception:
+                        _journaliser_image(observabilite, debut_image, "error")
+                        raise
+                    _journaliser_image(observabilite, debut_image, "success")
                     yield _evenement_action(
                         "action_progress", action_id, "image", "finalisation",
                         "Finitions…",
@@ -5962,9 +6033,15 @@ def repondre_flux():
         except GeneratorExit:
             # Navigateur a fermé la connexion (interruption utilisateur).
             # On ne sauvegarde PAS une réponse incomplète.
+            resultat_sse = "cancelled"
             return
         except Exception as err:
-            print("ERREUR /repondre_flux :", repr(err))
+            resultat_sse = "error"
+            app.logger.exception(
+                "dashle.sse_error request_id=%s endpoint=repondre_flux error_type=%s",
+                observabilite["request_id"] if observabilite else "unknown",
+                type(err).__name__,
+            )
             if action_type:
                 yield _evenement_action(
                     "action_failed", action_id, action_type, "echec",
@@ -5981,8 +6058,16 @@ def repondre_flux():
                     ensure_ascii=False,
                 ) + "\n\n"
 
+    def flux_observe():
+        nonlocal ttfb_at
+        for donnees in generer():
+            if ttfb_at is None:
+                ttfb_at = perf_counter()
+            yield donnees
+        _journaliser_sse(observabilite, debut_sse, ttfb_at, resultat_sse)
+
     return Response(
-        generer(),
+        flux_observe(),
         mimetype="text/event-stream",
         headers={
             "Cache-Control": "no-cache, no-store, must-revalidate",
