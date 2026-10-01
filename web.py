@@ -2152,6 +2152,8 @@ let requeteActiveController = null;
 let reponseActiveElement = null;
 let reponseEnCours      = false;
 let interruptionDemandee = false;
+let texteGenerationEnCours = '';
+let generationInterrompueParReseau = false;
 
 // VAD (Voice Activity Detection) — interruption pendant que Dashle parle
 let vadStream       = null;
@@ -2950,7 +2952,11 @@ async function genererArtifactDansChat(texte, type) {
   } catch (erreur) {
     if (erreur.name !== 'AbortError') ajouterMessage(erreur.message || 'La génération a échoué. Réessaie.', 'bot');
   } finally {
-    requeteActiveController = null; reponseEnCours = false;
+    if (requeteActiveController === controller) {
+      requeteActiveController = null;
+      reponseEnCours = false;
+      texteGenerationEnCours = '';
+    }
   }
 }
 
@@ -3022,6 +3028,39 @@ function arreterGeneration() {
   }
   reponseEnCours = false;
 }
+
+function gererPerteReseau() {
+  const texteAReprendre = texteGenerationEnCours;
+  const generationActive = reponseEnCours || Boolean(requeteActiveController);
+  if (!generationActive) return;
+
+  generationInterrompueParReseau = true;
+  arreterGeneration();
+
+  if (texteAReprendre && !champ.value.trim()) {
+    champ.value = texteAReprendre;
+    champ.style.height = 'auto';
+    champ.style.height = Math.min(champ.scrollHeight, 120) + 'px';
+  }
+  champ.placeholder = 'Connexion perdue — réessaie quand le réseau revient';
+  if (vocalActif) {
+    afficherEtatVocal('erreur', 'Connexion perdue. Réessaie quand le réseau revient.');
+    afficherStatutVocal('Connexion perdue. Aucun renvoi automatique n’a été effectué.');
+  }
+}
+
+function gererRetourReseau() {
+  if (!generationInterrompueParReseau) return;
+  generationInterrompueParReseau = false;
+  const placeholder = champ.dataset.placeholderReseauInitial || '';
+  champ.placeholder = placeholder;
+  if (vocalActif) {
+    afficherStatutVocal('Connexion rétablie. Tu peux renvoyer ton message.');
+  }
+}
+
+window.addEventListener('offline', gererPerteReseau);
+window.addEventListener('online', gererRetourReseau);
 
 // =====================================================================
 // VAD — détection de voix pendant que Dashle parle
@@ -4063,12 +4102,19 @@ champ.addEventListener('keydown', function(e) {
 champ.addEventListener('input', function() {
   this.style.height = 'auto';
   this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+  if (generationInterrompueParReseau) {
+    generationInterrompueParReseau = false;
+    this.placeholder = this.dataset.placeholderReseauInitial || '';
+  }
 });
 
 form.addEventListener('submit', async function(e) {
   e.preventDefault();
   const texte = champ.value.trim();
   if (!texte && !fichierImage) return;
+  if (!champ.dataset.placeholderReseauInitial) {
+    champ.dataset.placeholderReseauInitial = champ.placeholder || '';
+  }
 
   // Un nouvel envoi prend la main : annuler immédiatement le SSE et le TTS précédents.
   if (reponseEnCours || requeteActiveController) {
@@ -4151,6 +4197,8 @@ form.addEventListener('submit', async function(e) {
   requeteActiveController = controller;
   reponseEnCours  = true;
   interruptionDemandee = false;
+  generationInterrompueParReseau = false;
+  texteGenerationEnCours = texte;
 
   let reponseElement = null;
   let messageElement = null;

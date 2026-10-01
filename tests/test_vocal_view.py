@@ -554,3 +554,67 @@ class VocalViewTests(unittest.TestCase):
         ]
         for marker in required:
             self.assertIn(marker, source, marker)
+
+
+    def test_network_loss_aborts_sse_and_preserves_prompt_without_retry(self):
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("Node.js indisponible")
+        import tempfile
+        import web
+
+        html = web.app.test_client().get("/").get_data(as_text=True)
+        with tempfile.NamedTemporaryFile("w", suffix=".html", encoding="utf-8", delete=False) as handle:
+            handle.write(html)
+            path = handle.name
+
+        script = r"""
+          const fs = require("fs");
+          const {JSDOM} = require("jsdom");
+          const html = fs.readFileSync(process.argv[1], "utf8");
+          const dom = new JSDOM(html, {
+            runScripts: "dangerously",
+            url: "https://dashle.test/",
+            beforeParse(window) {
+              window.matchMedia = () => ({matches:false, addEventListener(){}, removeEventListener(){}});
+              window.requestAnimationFrame = (cb) => setTimeout(() => cb(Date.now()), 0);
+              window.cancelAnimationFrame = (id) => clearTimeout(id);
+              window.scrollTo = () => {};
+            }
+          });
+          const w = dom.window;
+          const champ = w.document.getElementById("message");
+          if (!champ) throw new Error("champ absent");
+
+          const placeholderInitial = champ.placeholder;
+          champ.value = "";
+          w.eval("reponseEnCours = true; texteGenerationEnCours = 'question à reprendre'; generationInterrompueParReseau = false; requeteActiveController = new AbortController();");
+          w.eval("requeteActiveController.signal.addEventListener('abort', () => { window.__networkAbortObserved = true; });");
+          champ.dataset.placeholderReseauInitial = placeholderInitial;
+
+          if (typeof w.gererPerteReseau !== "function") throw new Error("gestionnaire réseau absent");
+          w.gererPerteReseau();
+
+          if (!w.__networkAbortObserved) throw new Error("le contrôleur SSE n'a pas été annulé");
+          if (w.eval("reponseEnCours || Boolean(requeteActiveController)")) {
+            throw new Error("la génération reste active après la coupure réseau");
+          }
+          if (champ.value !== "question à reprendre") throw new Error("le texte n'a pas été conservé");
+          if (!champ.placeholder.includes("Connexion perdue")) throw new Error("le champ n'indique pas la perte réseau");
+          if (!w.eval("generationInterrompueParReseau")) throw new Error("l'état de coupure réseau n'est pas mémorisé");
+
+          w.gererRetourReseau();
+          if (champ.placeholder !== placeholderInitial) throw new Error("le placeholder initial n'est pas restauré");
+          if (w.eval("generationInterrompueParReseau")) throw new Error("l'état réseau n'est pas réinitialisé");
+          console.log("NETWORK_LOSS_SSE_SAFE_OK");
+          setTimeout(() => process.exit(0), 100);
+        """
+        checked = subprocess.run(
+            [node, "-e", script, str(path)],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert checked.returncode == 0, checked.stderr
+        assert "NETWORK_LOSS_SSE_SAFE_OK" in checked.stdout
