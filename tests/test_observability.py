@@ -20,7 +20,7 @@ class ObservabilityTests(unittest.TestCase):
         request_id = "obs-test-123"
         prompt = "PROMPT-NE-DOIT-PAS-APPARAITRE-DANS-LES-LOGS"
 
-        with patch.object(web, "streamer_message", return_value=iter(["réponse test"])), \\
+        with patch.object(web, "streamer_message", return_value=iter(["réponse test"])),\
                 self.assertLogs(web.app.logger, level="INFO") as captured:
             response = client.post(
                 "/repondre_flux",
