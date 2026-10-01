@@ -615,9 +615,10 @@ class VocalViewTests(unittest.TestCase):
           champ.value = "question à reprendre";
           form.dispatchEvent(new w.Event("submit", {bubbles:true,cancelable:true}));
 
+          if (typeof w.gererPerteReseau !== "function") throw new Error("gestionnaire offline absent");
           setTimeout(() => {
             if (fetches !== 1) throw new Error("SSE non démarré");
-            w.dispatchEvent(new w.Event("offline"));
+            w.gererPerteReseau();
           }, 80);
 
           setTimeout(() => {
