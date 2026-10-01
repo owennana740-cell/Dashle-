@@ -144,7 +144,7 @@ Dernière mise à jour : 2026-10-01
 - Sécurité : aucun secret, donnée utilisateur, fournisseur IA ou variable d'environnement modifié
 - Limitation production vérifiée : les smoke tests #23 et sa relance échouent avant l'analyse HTML ; les `curl` vers `https://dashle.onrender.com` expirent et Render ne rapporte aucune requête HTTP récente, alors que le deploy `2bfd7382...` est marqué `live`. Aucune conclusion de fonctionnement HTTP public ne doit être tirée de ces smoke tests.
 
-- mémoire améliorée : audit de base effectué ; garde-fous actuels conservés
+- mémoire améliorée : C2 terminée et fusionnée via PR #21 ; sélection bornée de souvenirs pertinents (chevauchement lexical), injectée dans les chemins synchrone et SSE ; mémoire désactivée respectée ; 6 éléments / 3000 caractères maximum ; CI #235 verte ; aucune migration de base ; la validation production HTTP reste limitée par le problème Render documenté en C1
 - conversations longues : non commencée
 - multimodal : non commencé
 - recherche/Web : non commencée
