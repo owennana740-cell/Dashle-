@@ -121,9 +121,19 @@ Dernière mise à jour : 2026-10-01
 - génération d’images : abstraction progressive à évaluer, fournisseur Gemini conservé
 - résilience réseau : non commencée
 
+### B3 — Vocal, audit sans modification
+- État : audit effectué ; aucune modification nécessaire dans cette passe
+- Tests existants couvrent `continuous=false`, déduplication, TTS single-flight, VAD/anti-écho, interruption et reprise
+- Aucune validation matérielle Android/micro/haut-parleur n’est déclarée
+
+### B4 — Génération d’images, audit sans modification
+- État : couche `generer_image()` déjà centralisée côté serveur ; Gemini conservé
+- Pas de retry automatique ajouté : un retry aveugle d’une génération d’image pourrait augmenter le coût ou créer un doublon fournisseur
+- Timeout et validation du résultat image existent déjà
+
 ## Phase C
 
-- mémoire améliorée : non commencée
+- mémoire améliorée : audit de base effectué ; garde-fous actuels conservés
 - conversations longues : non commencée
 - multimodal : non commencé
 - recherche/Web : non commencée
