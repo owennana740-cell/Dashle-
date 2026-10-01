@@ -1,4 +1,4 @@
-const CACHE = 'dashle-static-v4';
+const CACHE = 'dashle-static-v5';
 const ASSETS = [
   '/static/manifest.json',
   '/static/icons/dashle-icon-1024.png',
@@ -6,7 +6,9 @@ const ASSETS = [
   '/static/icons/dashle-icon-192.png',
   '/static/icons/dashle-icon-48.png',
   '/static/icons/dashle-logo-header.png',
-  '/static/icon-attach.png'
+  '/static/icon-attach.png',
+  '/static/vendor/marked.min.js',
+  '/static/vendor/purify.min.js'
 ];
 
 self.addEventListener('install', (event) => {
