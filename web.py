@@ -80,7 +80,7 @@ def _observabilite_identite_utilisateur():
 @app.before_request
 def _observabilite_debut():
     """Initialise la corrélation et le chronométrage sans journaliser le contenu."""
-    request_id = (request.headers.get("X-Request-ID") or "").strip()[:128]
+    request_id = re.sub(r"[^A-Za-z0-9._:-]", "", (request.headers.get("X-Request-ID") or "").strip())[:64]
     if not request_id:
         request_id = secrets.token_hex(12)
     g.dashle_observabilite = {
@@ -6037,7 +6037,7 @@ def repondre_flux():
             return
         except Exception as err:
             resultat_sse = "error"
-            app.logger.exception(
+            app.logger.error(
                 "dashle.sse_error request_id=%s endpoint=repondre_flux error_type=%s",
                 observabilite["request_id"] if observabilite else "unknown",
                 type(err).__name__,
