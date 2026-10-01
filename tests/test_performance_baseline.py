@@ -42,6 +42,9 @@ class PerformanceBaselineTests(unittest.TestCase):
         self.assertIn('/static/vendor/purify.min.js', html)
         self.assertEqual(html.count('/static/vendor/marked.min.js'), 1)
         self.assertEqual(html.count('/static/vendor/purify.min.js'), 1)
+        self.assertRegex(html, r"<script defer src=\"[^\"]*vendor/marked\\.min\\.js\"></script>")
+        self.assertRegex(html, r"<script defer src=\"[^\"]*vendor/purify\\.min\\.js\"></script>")
+        self.assertIn("document.addEventListener('DOMContentLoaded', afficherMarkdownInitial)", html)
 
 
 if __name__ == "__main__":
