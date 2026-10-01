@@ -13,6 +13,17 @@ Dernière mise à jour : 2026-10-01
 
 ## Phase A
 
+### A3 — Performance mobile, première passe
+- État : première passe terminée ; mesure mobile réelle encore requise
+- PR : #15
+- Branche : `performance/a3-mobile-baseline`
+- Merge commit : `7a0d31e9d8fe928e50626722b7accf3b51ad1ce9`
+- CI PR : workflow `Python validation` #211 — succès
+- Baseline CI avant optimisation : HTML `/` = 150 215 octets ; JavaScript inline = 105 108 octets ; CSS inline = 34 550 octets ; `marked.min.js` = 46 706 octets ; `purify.min.js` = 22 305 octets
+- Optimisation validée : `marked.min.js` et `purify.min.js` chargés avec `defer`, rendu Markdown initial déplacé à `DOMContentLoaded`
+- Non-modifié : comportement Markdown streaming, vocal, SSE, fournisseurs IA, données, secrets
+- Limitation : la CI ne mesure pas FCP/LCP/INP réels ni un téléphone Android/4G physique
+
 ### A2 — Fiabilisation SSE
 - État : terminée
 - PR : #14
