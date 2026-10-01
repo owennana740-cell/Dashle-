@@ -5,7 +5,7 @@ Dernière mise à jour : 2026-10-01
 ## État de référence
 
 - Branche principale : `main`
-- SHA actuel après A1 : `bc5503d55350d4821bf874f7e1f1394f97a95c17`
+- SHA actuel de `main` : `2bfd7382debac472d18b88cc4557f46d867c7bd7`
 - PR #9 D2 vocal : fusionnée
 - PR #10 génération d’image Gemini : fusionnée
 - PR #11 stabilisation vocale utile : fusionnée
@@ -132,6 +132,17 @@ Dernière mise à jour : 2026-10-01
 - Timeout et validation du résultat image existent déjà
 
 ## Phase C
+
+### C1 — Résilience réseau / SSE
+- État : implémentation terminée et fusionnée ; validation production externe limitée par la disponibilité du service Render
+- PR : #19
+- Merge commit : `2bfd7382debac472d18b88cc4557f46d867c7bd7`
+- CI PR : workflow `Python validation` #230 — succès
+- Comportement ajouté : lors d'une perte réseau pendant une génération SSE active, le contrôleur est annulé, la réponse partielle est supprimée, le texte du tour est conservé dans la zone de saisie et aucun POST n'est rejoué automatiquement
+- Retour réseau : le champ est restauré et l'utilisateur peut renvoyer explicitement le message
+- Tests : contrat JSDOM de perte réseau + non-régression SSE/vocal — succès
+- Sécurité : aucun secret, donnée utilisateur, fournisseur IA ou variable d'environnement modifié
+- Limitation production vérifiée : les smoke tests #23 et sa relance échouent avant l'analyse HTML ; les `curl` vers `https://dashle.onrender.com` expirent et Render ne rapporte aucune requête HTTP récente, alors que le deploy `2bfd7382...` est marqué `live`. Aucune conclusion de fonctionnement HTTP public ne doit être tirée de ces smoke tests.
 
 - mémoire améliorée : audit de base effectué ; garde-fous actuels conservés
 - conversations longues : non commencée
