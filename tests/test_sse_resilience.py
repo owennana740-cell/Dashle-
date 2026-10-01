@@ -24,14 +24,14 @@ class SseResilienceTests(unittest.TestCase):
                 self.closed = True
 
         response = FakeResponse()
-        with patch.object(brain, "CLE_API", "test-key"), \\
-                patch.object(brain, "preflight_connector", return_value=None), \\
-                patch.object(brain, "_reglages_reponse", return_value=("", 1000, "free", "")), \\
-                patch.object(brain, "contexte_temps_reel", return_value=""), \\
-                patch.object(brain, "_plugins_actifs", return_value=[]), \\
-                patch.object(brain, "_instruction_systeme", return_value=""), \\
-                patch.object(brain, "_construire_contents", return_value=[]), \\
-                patch.object(brain, "_gen_config", return_value={}), \\
+        with patch.object(brain, "CLE_API", "test-key"), \
+                patch.object(brain, "preflight_connector", return_value=None), \
+                patch.object(brain, "_reglages_reponse", return_value=("", 1000, "free", "")), \
+                patch.object(brain, "contexte_temps_reel", return_value=""), \
+                patch.object(brain, "_plugins_actifs", return_value=[]), \
+                patch.object(brain, "_instruction_systeme", return_value=""), \
+                patch.object(brain, "_construire_contents", return_value=[]), \
+                patch.object(brain, "_gen_config", return_value={}), \
                 patch.object(brain._session, "post", return_value=response):
             flux = brain.streamer_a_lia("bonjour", [], user_id=1)
             self.assertEqual(next(flux), "bonjour")
