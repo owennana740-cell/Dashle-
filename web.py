@@ -6059,9 +6059,11 @@ def repondre_flux():
                     ensure_ascii=False,
                 ) + "\n\n"
 
+    flux = generer()
+
     def flux_observe():
         nonlocal ttfb_at
-        for donnees in generer():
+        for donnees in flux:
             if ttfb_at is None:
                 ttfb_at = perf_counter()
             yield donnees
