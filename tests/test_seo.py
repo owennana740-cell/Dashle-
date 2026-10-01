@@ -34,7 +34,7 @@ class SeoCrawlTests(unittest.TestCase):
             headers={"User-Agent": "Googlebot/2.1"},
         )
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.mimetype, "text")
+        self.assertEqual(response.mimetype, "text/plain")
         robots = response.get_data(as_text=True)
 
         self.assertIn("User-agent: *", robots)
