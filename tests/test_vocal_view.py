@@ -607,6 +607,7 @@ class VocalViewTests(unittest.TestCase):
           if (champ.placeholder !== placeholderInitial) throw new Error("le placeholder initial n'est pas restauré");
           if (w.eval("generationInterrompueParReseau")) throw new Error("l'état réseau n'est pas réinitialisé");
           console.log("NETWORK_LOSS_SSE_SAFE_OK");
+          setTimeout(() => process.exit(0), 100);
         """
         checked = subprocess.run(
             [node, "-e", script, str(path)],
