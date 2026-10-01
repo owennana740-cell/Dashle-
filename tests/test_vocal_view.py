@@ -618,6 +618,8 @@ class VocalViewTests(unittest.TestCase):
           if (typeof w.gererPerteReseau !== "function") throw new Error("gestionnaire offline absent");
           setTimeout(() => {
             if (fetches !== 1) throw new Error("SSE non démarré");
+            const active = w.eval("Boolean(reponseEnCours || requeteActiveController)");
+            if (!active) throw new Error("génération déjà inactive avant la simulation réseau");
             w.gererPerteReseau();
           }, 80);
 
