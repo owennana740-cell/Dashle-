@@ -554,3 +554,98 @@ class VocalViewTests(unittest.TestCase):
         ]
         for marker in required:
             self.assertIn(marker, source, marker)
+
+
+    def test_network_loss_aborts_sse_and_preserves_prompt_without_retry(self):
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("Node.js indisponible")
+        import tempfile
+        import web
+
+        html = web.app.test_client().get("/").get_data(as_text=True)
+        with tempfile.NamedTemporaryFile("w", suffix=".html", encoding="utf-8", delete=False) as handle:
+            handle.write(html)
+            path = handle.name
+
+        script = r"""
+          const fs = require("fs");
+          const {JSDOM} = require("jsdom");
+          const html = fs.readFileSync(process.argv[1], "utf8");
+          const dom = new JSDOM(html, {
+            runScripts: "dangerously",
+            url: "https://dashle.test/",
+            beforeParse(window) {
+              window.matchMedia = () => ({matches:false, addEventListener(){}, removeEventListener(){}});
+              window.requestAnimationFrame = (cb) => setTimeout(() => cb(Date.now()), 0);
+              window.cancelAnimationFrame = (id) => clearTimeout(id);
+              window.scrollTo = () => {};
+            }
+          });
+          const w = dom.window;
+          let fetches = 0;
+          let aborted = false;
+          w.fetch = (url, options) => {
+            fetches += 1;
+            let rejectRead;
+            const body = {
+              getReader() {
+                return {
+                  read() {
+                    return new Promise((resolve, reject) => {
+                      rejectRead = reject;
+                    });
+                  }
+                };
+              }
+            };
+            if (options && options.signal) {
+              options.signal.addEventListener("abort", () => {
+                aborted = true;
+                if (rejectRead) rejectRead(Object.assign(new Error("aborted"), {name:"AbortError"}));
+              });
+            }
+            return Promise.resolve({ok:true, body});
+          };
+
+          const form = w.document.getElementById("form-message");
+          const champ = w.document.getElementById("message");
+          if (!form || !champ) throw new Error("formulaire absent");
+          const placeholderInitial = champ.placeholder;
+          champ.value = "question à reprendre";
+          form.dispatchEvent(new w.Event("submit", {bubbles:true,cancelable:true}));
+
+          setTimeout(() => {
+            if (fetches !== 1) throw new Error("SSE non démarré");
+            w.dispatchEvent(new w.Event("offline"));
+          }, 80);
+
+          setTimeout(() => {
+            if (!aborted) throw new Error("le SSE n'a pas été annulé à la perte réseau");
+            if (fetches !== 1) throw new Error("un retry automatique dangereux a été lancé");
+            if (champ.value !== "question à reprendre") throw new Error("le texte n'a pas été conservé");
+            if (w.document.querySelectorAll(".message-wrap.bot .msg").length !== 0) {
+              throw new Error("une réponse fantôme reste après la coupure réseau");
+            }
+            if (!champ.placeholder.includes("Connexion perdue")) {
+              throw new Error("le champ n'indique pas la perte réseau");
+            }
+            w.dispatchEvent(new w.Event("online"));
+          }, 180);
+
+          setTimeout(() => {
+            if (champ.placeholder !== placeholderInitial) throw new Error("le placeholder initial n'est pas restauré");
+            console.log("NETWORK_LOSS_SSE_SAFE_OK");
+          }, 260);
+
+          setTimeout(() => process.exit(0), 320);
+        """
+        checked = subprocess.run(
+            [node, "-e", script, str(path)],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert checked.returncode == 0, checked.stderr
+        assert "NETWORK_LOSS_SSE_SAFE_OK" in checked.stdout
