@@ -11,6 +11,16 @@ Dernière mise à jour : 2026-10-01
 - PR #11 stabilisation vocale utile : fusionnée
 - PR #12 retrait du bouton « Interrompre » : fusionnée
 
+## SEO / Google Search Console — audit du 1er octobre 2026
+
+- État : audit et couverture de non-régression terminés ; aucune correction applicative SEO forcée car le problème signalé n'est pas reproductible sur l'état de production observé.
+- Production Render : déploiement live sur `main` ; les logs du service ont enregistré `GET /` en HTTP 200 et `GET /sitemap.xml` en HTTP 200 le 1er octobre 2026.
+- Code vérifié : `/robots.txt` est une route publique, contient `Allow: /`, bloque les routes privées/sensibles, et déclare `https://dashle.onrender.com/sitemap.xml`.
+- Sitemap vérifié : XML statique valide contenant uniquement les cinq URL canoniques publiques HTTPS `/`, `/actualites`, `/conditions`, `/temps-reel` et `/tarifs`.
+- Meta robots : aucune occurrence `noindex` ni en-tête `X-Robots-Tag` bloquant n'a été trouvée dans `web.py`.
+- Tests : PR #32 ajoute `tests/test_seo.py` et son exécution obligatoire dans la CI ; CI #260 — succès.
+- Limitation : les captures GSC signalent des erreurs historiques/temporaires (5xx et blocage robots), mais aucune requête Googlebot correspondante en échec n'a pu être établie dans les journaux Render disponibles. L'indexation Google n'est pas déclarée comme acquise. Une nouvelle inspection en direct dans Search Console reste nécessaire après le dernier déploiement.
+
 ## Phase A
 
 ### A4 — Sécurité, première passe
