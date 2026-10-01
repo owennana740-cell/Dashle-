@@ -1,12 +1,15 @@
 package com.dashle.app
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
+import android.webkit.PermissionRequest
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
@@ -32,6 +35,11 @@ class MainActivity : FragmentActivity() {
     private var webView:WebView?=null
     private var pendingHandoff:String?=null
     private lateinit var uiExecutor:Executor
+    private var pendingWebPermissionRequest:PermissionRequest?=null
+
+    companion object {
+        private const val MEDIA_PERMISSION_REQUEST_CODE=7401
+    }
 
     override fun onCreate(savedInstanceState:Bundle?) {
         super.onCreate(savedInstanceState)
@@ -45,8 +53,18 @@ class MainActivity : FragmentActivity() {
 
     override fun onNewIntent(intent:Intent){super.onNewIntent(intent);setIntent(intent);pendingHandoff=intent.data?.getQueryParameter("handoff");pendingHandoff?.let{token->webView?.loadUrl(BuildConfig.DASHLE_BASE_URL+"api/oauth/mobile/consume?handoff="+Uri.encode(token))}}
 
+    override fun onRequestPermissionsResult(requestCode:Int,permissions:Array<out String>,grantResults:IntArray){
+        super.onRequestPermissionsResult(requestCode,permissions,grantResults)
+        if(requestCode!=MEDIA_PERMISSION_REQUEST_CODE)return
+        val request=pendingWebPermissionRequest
+        pendingWebPermissionRequest=null
+        if(request==null)return
+        val granted=grantResults.isNotEmpty() && grantResults.all{it==PackageManager.PERMISSION_GRANTED}
+        if(granted)request.grant(request.resources) else request.deny()
+    }
+
     override fun onResume(){super.onResume();CookieManager.getInstance().flush()}
-    override fun onDestroy(){webView?.apply{stopLoading();webViewClient=WebViewClient();destroy()};webView=null;super.onDestroy()}
+    override fun onDestroy(){pendingWebPermissionRequest?.deny();pendingWebPermissionRequest=null;webView?.apply{stopLoading();webViewClient=WebViewClient();destroy()};webView=null;super.onDestroy()}
 
     @SuppressLint("SetJavaScriptEnabled")
     @Composable
@@ -64,7 +82,24 @@ class MainActivity : FragmentActivity() {
                 settings.userAgentString=settings.userAgentString+" DASHLE-Android/1.0"
                 CookieManager.getInstance().setAcceptCookie(true)
                 CookieManager.getInstance().setAcceptThirdPartyCookies(this,true)
-                webChromeClient=WebChromeClient()
+                webChromeClient=object:WebChromeClient(){
+                    override fun onPermissionRequest(request:PermissionRequest){
+                        val host=request.origin.host.orEmpty()
+                        if(host!=DASHLE_HOST){request.deny();return}
+                        val required=mutableListOf<String>()
+                        if(request.resources.contains(PermissionRequest.RESOURCE_AUDIO_CAPTURE))required.add(Manifest.permission.RECORD_AUDIO)
+                        if(request.resources.contains(PermissionRequest.RESOURCE_VIDEO_CAPTURE))required.add(Manifest.permission.CAMERA)
+                        if(required.isEmpty()){request.grant(request.resources);return}
+                        val missing=required.filter{checkSelfPermission(it)!=PackageManager.PERMISSION_GRANTED}
+                        if(missing.isEmpty()){
+                            request.grant(request.resources)
+                        }else{
+                            pendingWebPermissionRequest?.deny()
+                            pendingWebPermissionRequest=request
+                            requestPermissions(missing.toTypedArray(),MEDIA_PERMISSION_REQUEST_CODE)
+                        }
+                    }
+                }
                 addJavascriptInterface(DashleBridge(),"DashleAndroid")
                 webViewClient=object:WebViewClient(){
                     override fun shouldOverrideUrlLoading(view:WebView,request:WebResourceRequest):Boolean{
