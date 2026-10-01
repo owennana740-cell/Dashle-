@@ -31,7 +31,7 @@ class ObservabilityTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.headers.get("X-Request-ID"), request_id)
-        logs = "\\n".join(captured.output)
+        logs = "\n".join(captured.output)
         self.assertIn("dashle.request", logs)
         self.assertIn("dashle.sse", logs)
         self.assertIn(request_id, logs)
