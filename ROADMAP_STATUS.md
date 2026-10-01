@@ -94,6 +94,17 @@ Dernière mise à jour : 2026-10-01
 
 ## Phase B
 
+### B2 — Interface mobile, première passe
+- État : terminée
+- PR : #18
+- Merge commit : `6e18ca967ea96550a0851e00633415b4cce99b11`
+- CI PR : workflow `Python validation` #221 — succès
+- `100dvh` avec fallback `100vh`
+- safe-area pour la barre de saisie
+- `touch-action: manipulation` pour les contrôles interactifs
+- Test : `tests.test_mobile_ui` — succès
+- Validation matérielle Android réelle : non effectuée
+
 ### B1 — PWA, première passe
 - État : première passe terminée
 - PR : #17
