@@ -1848,8 +1848,8 @@ PAGE = _HEADER_USER_MACRO + """
 <script type="application/ld+json">
 {"@context":"https://schema.org","@type":"WebApplication","name":"Dashle","url":"https://dashle.onrender.com/","description":"Dashle est une intelligence artificielle personnelle accessible depuis un navigateur pour échanger par écrit et demander l’analyse d’images ou de vidéos."}
 </script>
-<script src="{{ url_for('static', filename='vendor/marked.min.js') }}"></script>
-<script src="{{ url_for('static', filename='vendor/purify.min.js') }}"></script>
+<script defer src="{{ url_for('static', filename='vendor/marked.min.js') }}"></script>
+<script defer src="{{ url_for('static', filename='vendor/purify.min.js') }}"></script>
 <link rel="manifest" href="/static/manifest.json">
 <link rel="icon" type="image/png" sizes="1024x1024" href="/static/icons/dashle-icon-1024.png">
 <link rel="icon" type="image/png" sizes="512x512" href="/static/icons/dashle-icon-512.png">
@@ -2575,7 +2575,8 @@ function rendreMarkdown(texte) {
 function afficherMarkdown(message, texte) { message.dataset.markdownSource = String(texte); message.innerHTML = rendreMarkdown(texte); }
 function afficherMarkdownStreaming(message, texte) { message.dataset.markdownSource = String(texte); message.innerHTML = rendreMarkdown(texte); }
 
-document.querySelectorAll('#chat .msg.bot').forEach(function(message) { afficherMarkdown(message, message.textContent); });
+function afficherMarkdownInitial() { document.querySelectorAll('#chat .msg.bot').forEach(function(message) { afficherMarkdown(message, message.textContent); }); }
+document.addEventListener('DOMContentLoaded', afficherMarkdownInitial);
 function ajouterMessage(texte, classe) {
   const accueil = document.querySelector('.accueil-vide');
   if (accueil) accueil.remove();
