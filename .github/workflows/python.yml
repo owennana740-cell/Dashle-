@@ -47,5 +47,7 @@ jobs:
         run: python -m unittest tests.test_provider_logging_security -v
       - name: Tests PWA
         run: python -m unittest tests.test_pwa_assets -v
+      - name: Tests interface mobile
+        run: python -m unittest tests.test_mobile_ui -v
       - name: Vérifier le diff
         run: git diff --check

@@ -865,6 +865,8 @@ def ajouter_message(user_id, conversation_id, texte, auteur, image_preview=""):
 _CSS = """
 * { box-sizing: border-box; }
 
+button, a, [role="button"] { touch-action: manipulation; }
+
 :root {
   --accent-vert: #22C55E;
   --accent-bleu: #3B82F6;
@@ -904,6 +906,7 @@ body {
   background: var(--fond);
   color: var(--texte);
   height: 100vh;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -1083,6 +1086,7 @@ header button.icon-btn:hover { background: rgba(255,255,255,0.18); }
   width: 82%;
   max-width: 320px;
   height: 100%;
+  height: 100dvh;
   background: var(--sidebar-bg);
   z-index: 6;
   overflow-y: auto;
@@ -1280,7 +1284,7 @@ body.theme-sombre .msg.bot pre { border:1px solid #31483e; }
 form.bas {
   display: flex;
   gap: 6px;
-  padding: 10px 12px;
+  padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
   border-top: 1px solid var(--bordure);
   align-items: flex-end;
   background: var(--fond);
