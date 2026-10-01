@@ -180,10 +180,70 @@ def _historique_recent(historique) -> list:
     return list(reversed(selection))
 
 
+MEMOIRE_CONTEXT_MAX_ITEMS = 6
+MEMOIRE_CONTEXT_MAX_CHARS = 3000
+MEMOIRE_QUERY_MIN_TOKEN_LEN = 3
+MEMOIRE_REQUEST_HINTS = (
+    "souviens", "souvenir", "mémoire", "memoire", "rappelle", "rappelles",
+    "ce que tu sais de moi", "mes préférences", "mes preferences",
+)
+
+
+def _tokens_memoire(texte: str) -> set[str]:
+    normalise = unicodedata.normalize("NFD", str(texte or "")).encode(
+        "ascii", "ignore"
+    ).decode("ascii").lower()
+    return {
+        token for token in re.findall(r"[a-z0-9]{3,}", normalise)
+        if len(token) >= MEMOIRE_QUERY_MIN_TOKEN_LEN
+    }
+
+
+def _memoire_pertinente(message: str, user_id=None) -> str:
+    """Sélectionne un petit sous-ensemble de mémoire utilisateur pertinent au tour."""
+    if not user_id or not memoire_active(user_id):
+        return ""
+
+    souvenirs = se_souvenir_tout(user_id)
+    if not isinstance(souvenirs, dict):
+        return ""
+
+    requete = _tokens_memoire(message)
+    demande_memoire = any(indice in str(message or "").lower() for indice in MEMOIRE_REQUEST_HINTS)
+    candidats = []
+    for cle, valeur in souvenirs.items():
+        cle = str(cle)
+        if cle.startswith("__dashle_"):
+            continue
+        valeur = str(valeur or "").strip()
+        if not valeur:
+            continue
+        cle_tokens = _tokens_memoire(cle)
+        valeur_tokens = _tokens_memoire(valeur)
+        score = (len(requete & cle_tokens) * 4) + len(requete & valeur_tokens)
+        if demande_memoire:
+            score += 1
+        if score <= 0:
+            continue
+        candidats.append((score, cle, valeur))
+
+    candidats.sort(key=lambda item: (-item[0], item[1]))
+    lignes = []
+    total = 0
+    for _, cle, valeur in candidats[:MEMOIRE_CONTEXT_MAX_ITEMS]:
+        ligne = f"- {cle[:100]} : {valeur[:500]}"
+        if total + len(ligne) > MEMOIRE_CONTEXT_MAX_CHARS:
+            break
+        lignes.append(ligne)
+        total += len(ligne)
+    return "\n".join(lignes)
+
+
 def _instruction_systeme(
     resume: str = "", consignes: str = "", niveau: str = "free",
     contexte_live: str = "", nom_utilisateur: str | None = None,
     instructions_projet: str = "", fichiers_projet: str = "",
+    memoire_pertinente: str = "",
 ) -> str:
     instruction = (
         "Tu es Dashle, une IA personnelle. "
@@ -242,6 +302,12 @@ def _instruction_systeme(
         )
     if resume:
         instruction += "\nRésumé fiable des échanges précédents :\n" + resume
+    if memoire_pertinente:
+        instruction += (
+            "\nSouvenirs personnels pertinents pour ce tour :\n"
+            + memoire_pertinente
+            + "\nUtilise-les seulement s'ils sont pertinents et ne les invente pas."
+        )
     if consignes:
         instruction += (
             "\nConsignes personnalisées de l'utilisateur (à suivre si elles restent "
@@ -326,10 +392,11 @@ def demander_a_lia(message: str, historique=None, resume: str = "",
         return "La clé Gemini n'est pas configurée. Ajoute GEMINI_API_KEY dans le fichier .env."
 
     contexte_live = contexte_temps_reel(message, _plugins_actifs(user_id))
+    memoire_pertinente = _memoire_pertinente(message, user_id)
     corps = {
         "system_instruction": {"parts": [{"text": _instruction_systeme(
             resume, consignes, niveau, contexte_live, _nom_utilisateur(user_id),
-            instructions_projet, fichiers_projet,
+            instructions_projet, fichiers_projet, memoire_pertinente,
         )}]},
         "contents": _construire_contents(message, historique),
         "generationConfig": _gen_config(longueur),
@@ -378,10 +445,11 @@ def streamer_a_lia(
 
     consignes, longueur, niveau, nom_utilisateur = _reglages_reponse(user_id)
     contexte_live = contexte_temps_reel(message, _plugins_actifs(user_id))
+    memoire_pertinente = _memoire_pertinente(message, user_id)
     corps = {
         "system_instruction": {"parts": [{"text": _instruction_systeme(
             resume, consignes, niveau, contexte_live, nom_utilisateur,
-            instructions_projet, fichiers_projet,
+            instructions_projet, fichiers_projet, memoire_pertinente,
         )}]},
         "contents": _construire_contents(message, historique),
         "generationConfig": _gen_config(longueur),
