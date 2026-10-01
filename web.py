@@ -5855,16 +5855,17 @@ def repondre_flux():
     contexte_projet = (
         _arguments_contexte_projet(user_id, conversation_id) if user_id else {}
     )
+    observabilite = getattr(g, "dashle_observabilite", None)
+    debut_sse = perf_counter()
+    ttfb_at = None
+    resultat_sse = "success"
 
     @stream_with_context
     def generer():
+        nonlocal resultat_sse
         morceaux = []
         action_id = secrets.token_hex(12)
         action_type = _demande_action_longue(message)
-        observabilite = getattr(g, "dashle_observabilite", None)
-        debut_sse = perf_counter()
-        ttfb_at = None
-        resultat_sse = "success"
         try:
             if action_type:
                 yield _evenement_action(
