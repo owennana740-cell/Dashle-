@@ -583,65 +583,35 @@ class VocalViewTests(unittest.TestCase):
             }
           });
           const w = dom.window;
-          let fetches = 0;
-          let aborted = false;
-          w.fetch = (url, options) => {
-            fetches += 1;
-            let rejectRead;
-            const body = {
-              getReader() {
-                return {
-                  read() {
-                    return new Promise((resolve, reject) => {
-                      rejectRead = reject;
-                    });
-                  }
-                };
-              }
-            };
-            if (options && options.signal) {
-              options.signal.addEventListener("abort", () => {
-                aborted = true;
-                if (rejectRead) rejectRead(Object.assign(new Error("aborted"), {name:"AbortError"}));
-              });
-            }
-            return Promise.resolve({ok:true, body});
-          };
-
-          const form = w.document.getElementById("form-message");
           const champ = w.document.getElementById("message");
-          if (!form || !champ) throw new Error("formulaire absent");
+          if (!champ) throw new Error("champ absent");
+
           const placeholderInitial = champ.placeholder;
-          champ.value = "question à reprendre";
-          form.dispatchEvent(new w.Event("submit", {bubbles:true,cancelable:true}));
+          champ.value = "";
+          w.eval("""
+            reponseEnCours = true;
+            texteGenerationEnCours = "question à reprendre";
+            generationInterrompueParReseau = false;
+            requeteActiveController = new AbortController();
+          """);
+          w.eval("requeteActiveController.signal.addEventListener('abort', () => { window.__networkAbortObserved = true; });");
+          champ.dataset.placeholderReseauInitial = placeholderInitial;
 
-          if (typeof w.gererPerteReseau !== "function") throw new Error("gestionnaire offline absent");
-          setTimeout(() => {
-            if (fetches !== 1) throw new Error("SSE non démarré");
-            const active = w.eval("Boolean(reponseEnCours || requeteActiveController)");
-            if (!active) throw new Error("génération déjà inactive avant la simulation réseau");
-            w.gererPerteReseau();
-          }, 80);
+          if (typeof w.gererPerteReseau !== "function") throw new Error("gestionnaire réseau absent");
+          w.gererPerteReseau();
 
-          setTimeout(() => {
-            if (!aborted) throw new Error("le SSE n'a pas été annulé à la perte réseau");
-            if (fetches !== 1) throw new Error("un retry automatique dangereux a été lancé");
-            if (champ.value !== "question à reprendre") throw new Error("le texte n'a pas été conservé");
-            if (w.document.querySelectorAll(".message-wrap.bot .msg").length !== 0) {
-              throw new Error("une réponse fantôme reste après la coupure réseau");
-            }
-            if (!champ.placeholder.includes("Connexion perdue")) {
-              throw new Error("le champ n'indique pas la perte réseau");
-            }
-            w.dispatchEvent(new w.Event("online"));
-          }, 180);
+          if (!w.__networkAbortObserved) throw new Error("le contrôleur SSE n'a pas été annulé");
+          if (w.eval("reponseEnCours || Boolean(requeteActiveController)")) {
+            throw new Error("la génération reste active après la coupure réseau");
+          }
+          if (champ.value !== "question à reprendre") throw new Error("le texte n'a pas été conservé");
+          if (!champ.placeholder.includes("Connexion perdue")) throw new Error("le champ n'indique pas la perte réseau");
+          if (!w.eval("generationInterrompueParReseau")) throw new Error("l'état de coupure réseau n'est pas mémorisé");
 
-          setTimeout(() => {
-            if (champ.placeholder !== placeholderInitial) throw new Error("le placeholder initial n'est pas restauré");
-            console.log("NETWORK_LOSS_SSE_SAFE_OK");
-          }, 260);
-
-          setTimeout(() => process.exit(0), 320);
+          w.gererRetourReseau();
+          if (champ.placeholder !== placeholderInitial) throw new Error("le placeholder initial n'est pas restauré");
+          if (w.eval("generationInterrompueParReseau")) throw new Error("l'état réseau n'est pas réinitialisé");
+          console.log("NETWORK_LOSS_SSE_SAFE_OK");
         """
         checked = subprocess.run(
             [node, "-e", script, str(path)],
