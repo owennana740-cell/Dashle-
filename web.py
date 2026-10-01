@@ -1956,7 +1956,6 @@ if ('serviceWorker' in navigator) {
   <div class="vocal-entete">
     <strong>Conversation vocale</strong>
     <div class="vocal-commandes">
-      <button type="button" id="btn-interrompre-vocal" title="Interrompre la réponse vocale" aria-label="Interrompre la réponse vocale">Interrompre</button>
       <button type="button" id="reduire-vocal" title="Réduire">Réduire</button>
       <button type="button" id="fermer-vocal" title="Quitter le mode vocal">Fermer</button>
     </div>
@@ -1966,7 +1965,7 @@ if ('serviceWorker' in navigator) {
       <div class="orbite" style="--taille:58%;--vitesse:11s"><span class="planete" style="--diametre:9px;--couleur:#b8ffe5"></span></div>
       <div class="orbite" style="--taille:78%;--vitesse:17s"><span class="planete" style="--diametre:13px;--couleur:#62dcb0"></span></div>
       <div class="orbite" style="--taille:98%;--vitesse:25s"><span class="planete" style="--diametre:7px;--couleur:#d5fff0"></span></div>
-      <div class="orbe-dashle"></div>
+      <div class="orbe-dashle" id="orbe-dashle" role="button" tabindex="0" aria-label="Appuie pour interrompre Dashle"></div>
     </div>
     <div class="etat-vocal" id="etat-vocal">En attente</div>
   </div>
@@ -2037,6 +2036,7 @@ const chat        = document.getElementById('chat');
 const form        = document.getElementById('form-message');
 const champ       = document.getElementById('message');
 const btnEnvoyer  = document.getElementById('btn-envoyer');
+const orbeDashle = document.getElementById('orbe-dashle');
 const btnMicro    = document.getElementById('btn-micro');
 const btnVocal    = document.getElementById('btn-vocal');
 const statutVocal = document.getElementById('statut-vocal');
@@ -2048,7 +2048,6 @@ const apercuNom       = document.getElementById('apercu-fichier-nom');
 const apercuType      = document.getElementById('apercu-fichier-type');
 const inputImage      = document.getElementById('image-input');
 const btnRouvrirVocal = document.getElementById('btn-rouvrir-vocal');
-const btnInterrompreVocal = document.getElementById('btn-interrompre-vocal');
 
 // CSRF token injecté côté serveur
 document.querySelectorAll('a[href*="/parametres"]').forEach(function(lien) {
@@ -2085,6 +2084,7 @@ let dernierTranscriptDictee = '';
 let vocalActif          = false;
 let modeActuel          = 'texte';   // 'texte' | 'dictee' | 'vocal'
 let requeteActiveController = null;
+let reponseActiveElement = null;
 let reponseEnCours      = false;
 let interruptionDemandee = false;
 
@@ -2939,6 +2939,17 @@ async function genererPdfTempsReelDansChat(texte) {
 // Gestion des générations SSE
 // =====================================================================
 function arreterGeneration() {
+  if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+  if (reponseActiveElement && reponseActiveElement.isConnected) {
+    reponseActiveElement.remove();
+  }
+  reponseActiveElement = null;
+  const messagesActifs = Array.from(document.querySelectorAll('.message-wrap.bot .msg'))
+    .filter(function(message) { return !message.dataset.messageId; });
+  const dernierMessageActif = messagesActifs[messagesActifs.length - 1];
+  if (dernierMessageActif && dernierMessageActif.parentElement) {
+    dernierMessageActif.parentElement.remove();
+  }
   if (requeteActiveController) {
     try { requeteActiveController.abort(); } catch(e) {}
     requeteActiveController = null;
@@ -3057,6 +3068,18 @@ function surveillerParole() {
 // =====================================================================
 // Mode vocal — interruption et séquencement
 // =====================================================================
+if (orbeDashle) {
+  orbeDashle.addEventListener('click', function() {
+    interrompreDashle();
+  });
+  orbeDashle.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      interrompreDashle();
+    }
+  });
+}
+
 function interrompreDashle() {
   if (!vocalActif) return;
   interruptionDemandee = true;
@@ -3743,11 +3766,6 @@ document.getElementById('fermer-vocal').addEventListener('click', function() {
   desactiverModeVocal();
 });
 
-if (btnInterrompreVocal) {
-  btnInterrompreVocal.addEventListener('click', function() {
-    interrompreDashle();
-  });
-}
 
 // Bouton rouvrir : ramène l'overlay sans relancer quoi que ce soit —
 // le VAD et la reconnaissance continuent de tourner en arrière-plan.
@@ -3986,6 +4004,12 @@ form.addEventListener('submit', async function(e) {
   const texte = champ.value.trim();
   if (!texte && !fichierImage) return;
 
+  // Un nouvel envoi prend la main : annuler immédiatement le SSE et le TTS précédents.
+  if (reponseEnCours || requeteActiveController) {
+    arreterGeneration();
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+  }
+
   // Couper toute lecture en cours si l'utilisateur envoie manuellement
   if ('speechSynthesis' in window && window.speechSynthesis.speaking) arreterLecture();
 
@@ -4099,6 +4123,7 @@ form.addEventListener('submit', async function(e) {
     }
 
     reponseElement = ajouterReponse('', '');
+    reponseActiveElement = reponseElement;
     messageElement = reponseElement.querySelector('.msg');
 
     const lecteur  = res.body.getReader();
@@ -4114,6 +4139,7 @@ form.addEventListener('submit', async function(e) {
       if (ev.event === 'action_started') {
         actionArtifactSse = true;
         if (reponseElement) { reponseElement.remove(); reponseElement = null; messageElement = null; }
+        reponseActiveElement = null;
         retirerReflexion();
         suiviActionSse = creerSuiviAction(ev.action);
         suiviActionSse.dataset.prompt = texte;
@@ -4218,6 +4244,7 @@ form.addEventListener('submit', async function(e) {
     }
     reponseEnCours = false;
     requeteActiveController = null;
+    reponseActiveElement = null;
 
     // Lecture vocale si le mode vocal est actif
     const vocal = window._dashleVocal;
@@ -4265,6 +4292,7 @@ form.addEventListener('submit', async function(e) {
     retirerReflexion();
     reponseEnCours = false;
     if (requeteActiveController === controller) requeteActiveController = null;
+    reponseActiveElement = null;
 
     // En cas d'erreur, remettre l'orbe en état écoute (pas bloquée en réflexion).
     if (window._dashleVocal && window._dashleVocal.estActif()) {
