@@ -588,12 +588,7 @@ class VocalViewTests(unittest.TestCase):
 
           const placeholderInitial = champ.placeholder;
           champ.value = "";
-          w.eval("""
-            reponseEnCours = true;
-            texteGenerationEnCours = "question à reprendre";
-            generationInterrompueParReseau = false;
-            requeteActiveController = new AbortController();
-          """);
+          w.eval("reponseEnCours = true; texteGenerationEnCours = 'question à reprendre'; generationInterrompueParReseau = false; requeteActiveController = new AbortController();");
           w.eval("requeteActiveController.signal.addEventListener('abort', () => { window.__networkAbortObserved = true; });");
           champ.dataset.placeholderReseauInitial = placeholderInitial;
 
