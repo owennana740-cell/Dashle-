@@ -43,5 +43,7 @@ jobs:
         run: python -m unittest tests.test_sse_resilience -v
       - name: Mesure performance serveur
         run: python -m unittest tests.test_performance_baseline -v
+      - name: Tests sécurité des logs fournisseur
+        run: python -m unittest tests.test_provider_logging_security -v
       - name: Vérifier le diff
         run: git diff --check

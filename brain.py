@@ -13,9 +13,11 @@ Corrections apportées :
 
 import json
 import os
+import logging
 import re
 import requests
 from urllib.parse import urlparse
+logger = logging.getLogger(__name__)
 from core.utils import BASE_DIR, lire_json
 from memory import memoire_active, se_souvenir_tout
 from config import CLE_API, MODELE_GEMINI, MAX_MESSAGES_CONTEXTE
@@ -347,12 +349,12 @@ def demander_a_lia(message: str, historique=None, resume: str = "",
                 retry_after = int(e.response.headers.get("Retry-After", 0))
             except (ValueError, TypeError):
                 retry_after = 0
-        print(f"ERREUR Gemini HTTP {code} [demander_a_lia] : {detail}")
+        logger.error("Gemini HTTP error endpoint=demander_a_lia code=%s", code)
         return _message_erreur_http(code, detail, retry_after)
     except requests.exceptions.Timeout:
         return "Le service IA a mis trop de temps à répondre. Réessaie dans quelques instants."
     except Exception as exc:
-        print(f"ERREUR Gemini inattendue [demander_a_lia] : {exc!r}")
+        logger.error("Gemini unexpected error endpoint=demander_a_lia type=%s", type(exc).__name__)
         return "Impossible de joindre le service IA. Vérifie la connexion puis réessaie."
 
 
@@ -421,12 +423,12 @@ def streamer_a_lia(
                 retry_after = int(e.response.headers.get("Retry-After", 0))
             except (ValueError, TypeError):
                 retry_after = 0
-        print(f"ERREUR Gemini HTTP {code} [streamer_a_lia] : {detail}")
+        logger.error("Gemini HTTP error endpoint=streamer_a_lia code=%s", code)
         yield _message_erreur_http(code, detail, retry_after)
     except requests.exceptions.Timeout:
         yield "Le service IA a mis trop de temps à répondre. Réessaie dans quelques instants."
     except Exception as exc:
-        print(f"ERREUR Gemini inattendue [streamer_a_lia] : {exc!r}")
+        logger.error("Gemini unexpected error endpoint=streamer_a_lia type=%s", type(exc).__name__)
         yield "Impossible de joindre le service IA. Vérifie la connexion puis réessaie."
     finally:
         if rep is not None:
@@ -501,12 +503,12 @@ def demander_a_lia_image(
                 retry_after = int(e.response.headers.get("Retry-After", 0))
             except (ValueError, TypeError):
                 retry_after = 0
-        print(f"ERREUR Gemini HTTP {code} [demander_a_lia_image] : {detail}")
+        logger.error("Gemini HTTP error endpoint=demander_a_lia_image code=%s", code)
         return _message_erreur_http(code, detail, retry_after)
     except requests.exceptions.Timeout:
         return "Le service IA a mis trop de temps à répondre. Réessaie dans quelques instants."
     except Exception as exc:
-        print(f"ERREUR Gemini inattendue [demander_a_lia_image] : {exc!r}")
+        logger.error("Gemini unexpected error endpoint=demander_a_lia_image type=%s", type(exc).__name__)
         return "Impossible de joindre le service IA. Vérifie la connexion puis réessaie."
 
 
@@ -553,7 +555,7 @@ def resumer_conversation(
         texte = rep.json()["candidates"][0]["content"]["parts"][0]["text"]
         return nettoyer_reponse(texte) or resume_existant
     except Exception as exc:
-        print("ERREUR Gemini pendant le résumé de conversation :", type(exc).__name__)
+        logger.error("Gemini summary error type=%s", type(exc).__name__)
         return resume_existant
 
 
