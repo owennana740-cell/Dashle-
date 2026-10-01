@@ -94,7 +94,17 @@ Dernière mise à jour : 2026-10-01
 
 ## Phase B
 
-- PWA : non commencée
+### B1 — PWA, première passe
+- État : première passe terminée
+- PR : #17
+- Merge commit : `f68da7723f7b0bf11512e6f7fe8726306584c897`
+- CI PR : workflow `Python validation` #218 — succès
+- Service Worker : cache v5 avec `marked.min.js` et `purify.min.js`
+- Aucun cache ajouté pour `/repondre_flux` ou `/repondre`
+- Test : `tests.test_pwa_assets` — succès
+- Reste à valider sur Android réel : installation, retour, reprise, mise à jour du SW et comportement hors-ligne réel
+
+- PWA : première passe terminée
 - interface mobile : non commencée
 - formalisation supplémentaire du vocal : non commencée
 - génération d’images : abstraction progressive à évaluer, fournisseur Gemini conservé
