@@ -5,6 +5,8 @@ import os
 import unittest
 import uuid
 
+from openpyxl import Workbook
+
 os.environ["DATABASE_URL"] = "sqlite://"
 os.environ["SESSION_COOKIE_SECURE"] = "0"
 
@@ -105,6 +107,31 @@ class ProjectRouteTests(unittest.TestCase):
             f"/projets/999999/fichiers/{file_id}/telecharger"
         )
         self.assertEqual(foreign_download.status_code, 404)
+
+    def test_project_accepts_and_extracts_xlsx_documents(self):
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = "Budget"
+        sheet.append(["Région", "Montant"])
+        sheet.append(["Centre", 250000])
+        output = io.BytesIO()
+        workbook.save(output)
+
+        response = self.client.post(
+            f"/projets/{self.project_id}/fichiers",
+            data={"file": (io.BytesIO(output.getvalue()), "budget.xlsx")},
+            headers=self.post_headers(),
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(response.status_code, 302)
+        with session_base() as db:
+            saved = db.query(ProjectFile).filter_by(project_id=self.project_id).one()
+            self.assertEqual(
+                saved.mime_type,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+            self.assertIn("Centre", saved.extracted_text)
+            self.assertIn("250000", saved.extracted_text)
 
     def test_deleting_project_keeps_conversation_and_removes_project_files(self):
         with session_base() as db:

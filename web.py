@@ -7159,7 +7159,7 @@ def ajouter_fichier_projet(project_id):
     fichier = request.files.get("file")
     nom = secure_filename(fichier.filename or "") if fichier else ""
     if not fichier or not nom:
-        return redirect(url_for("projets", erreur="Choisis un fichier CSV, PDF, TXT ou Markdown."))
+        return redirect(url_for("projets", erreur="Choisis un fichier CSV, Excel XLSX, PDF, TXT ou Markdown."))
     with session_base() as db:
         projet = db.query(Project.id).filter_by(id=project_id, user_id=user_id).one_or_none()
         if projet is None:

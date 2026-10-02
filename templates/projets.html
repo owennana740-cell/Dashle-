@@ -69,7 +69,7 @@
 
     <form method="post" enctype="multipart/form-data" action="{{ url_for('ajouter_fichier_projet', project_id=projet.id) }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <label>Ajouter un fichier<input type="file" name="file" accept=".csv,.pdf,.txt,.md" required></label>
+      <label>Ajouter un fichier<input type="file" name="file" accept=".csv,.xlsx,.pdf,.txt,.md" required></label>
       <button type="submit">Joindre au projet</button>
     </form>
 
