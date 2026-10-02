@@ -82,7 +82,10 @@ class RegistrationPhoneTests(unittest.TestCase):
                     script_type = (attrs.get("type") or "").lower()
                     if script_type in {"application/json", "application/ld+json"}:
                         continue
-                    checked = subprocess.run([node, "--check"], input=script, text=True, capture_output=True, check=False)
+                    checked = subprocess.run(
+                        [node, "--check"], input=script, text=True, encoding="utf-8",
+                        capture_output=True, check=False,
+                    )
                     assert checked.returncode == 0, f"{path}: {checked.stderr}"
 
             inscription = pages["/inscription"].get_data(as_text=True)
