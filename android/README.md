@@ -1,22 +1,15 @@
 # DASHLE Android
 
-Projet Android natif isolé du backend Flask. Il utilise Kotlin et Jetpack Compose.
-Cette étape pose uniquement la structure et l’écran de démarrage : aucune connexion
-au backend ou fonctionnalité de chat n’est encore implémentée.
+Client Android officiel de DASHLE connecté au backend HTTPS Render.
 
-## Configuration
+Fonctionnalités : session HTTPS, chat, inscription/connexion, profil pays+téléphone,
+paramètres, tarifs, factures et parcours de paiement existants. Les pages PayDunya et
+CinetPay restent accessibles dans le WebView pour conserver le parcours de paiement.
 
-- Application ID : `com.dashle.app`
-- Minimum Android : API 26
-- Compilation : API 37
-- Cible : API 36
-- URL backend par défaut : `https://dashle.onrender.com/`
+Application ID : com.dashle.app
+Minimum : API 26
+Target : API 36
+Version : 1.0.0
 
-L’URL, qui est publique et ne contient aucun secret, peut être remplacée par la
-propriété Gradle `dashleBaseUrl`, par exemple :
-
-```text
-gradle :app:assembleDebug -PdashleBaseUrl=https://serveur-de-test.example/
-```
-
-Aucune clé Gemini ni autre secret n’est stocké dans ce projet.
+Aucun secret n'est embarqué. La clé de signature Android doit rester hors du dépôt.
+Pour Google Play, le livrable release est un Android App Bundle (.aab) signé.

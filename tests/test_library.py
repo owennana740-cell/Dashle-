@@ -83,7 +83,11 @@ class LibraryTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.mimetype, "application/pdf")
         with session_base() as db:
-            item = db.query(LibraryItem).filter_by(user_id=self.user_id, type="pdf").one()
+            item = db.query(LibraryItem).filter(
+                LibraryItem.user_id == self.user_id,
+                LibraryItem.type == "pdf",
+                LibraryItem.title != "Rapport Burkina",
+            ).one()
             self.assertIn(b"PDF", item.content)
 
     def test_statistical_analysis_and_chart_are_saved_automatically(self):

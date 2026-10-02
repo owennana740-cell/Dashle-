@@ -2,10 +2,10 @@
 
 import os
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, date
 from pathlib import Path
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, LargeBinary, String, Text, UniqueConstraint, create_engine, inspect, text
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, LargeBinary, String, Text, UniqueConstraint, create_engine, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
 
 
@@ -84,6 +84,35 @@ class StatisticalAnalysisUsage(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+class VoiceTranscriptionUsage(Base):
+    __tablename__ = "voice_transcription_usage"
+    __table_args__ = (
+        UniqueConstraint("user_id", "usage_date", name="uq_voice_usage_user_day"),
+        UniqueConstraint("visitor_key", "usage_date", name="uq_voice_usage_visitor_day"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=True)
+    visitor_key: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    usage_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class ImageGenerationUsage(Base):
+    __tablename__ = "image_generation_usage"
+    __table_args__ = (
+        UniqueConstraint("user_id", "usage_date", name="uq_image_usage_user_day"),
+        UniqueConstraint("visitor_key", "usage_date", name="uq_image_usage_visitor_day"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=True)
+    visitor_key: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    usage_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
 
 class Project(Base):
@@ -263,6 +292,75 @@ class UserMemory(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
     cle: Mapped[str] = mapped_column(String(100), nullable=False)
     valeur: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class ConnectorCredential(Base):
+    __tablename__ = "connector_credentials"
+    __table_args__ = (UniqueConstraint("user_id", "provider", name="uq_connector_credential_user_provider"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
+    provider: Mapped[str] = mapped_column(String(30), nullable=False)
+    secret_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+    scopes: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    expiration: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class ConnectorPermission(Base):
+    __tablename__ = "connector_permissions"
+    __table_args__ = (UniqueConstraint("user_id", "provider", name="uq_connector_permission_user_provider"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
+    provider: Mapped[str] = mapped_column(String(30), nullable=False)
+    access_level: Mapped[str] = mapped_column(String(30), default="read_only", nullable=False)
+    resources: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    actions: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    write_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class ConnectorAuditLog(Base):
+    __tablename__ = "connector_audit_logs"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
+    plugin: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    action: Mapped[str] = mapped_column(String(60), nullable=False)
+    target: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+    date: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    result: Mapped[str] = mapped_column(String(30), nullable=False)
+
+
+class OAuthState(Base):
+    __tablename__ = "oauth_states"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
+    provider: Mapped[str] = mapped_column(String(30), nullable=False)
+    state_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    used: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+
+class ConnectorActionConfirmation(Base):
+    __tablename__ = "connector_action_confirmations"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
+    provider: Mapped[str] = mapped_column(String(30), nullable=False)
+    action: Mapped[str] = mapped_column(String(60), nullable=False)
+    parameters: Mapped[str] = mapped_column(Text, nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    consumed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+
+class MobileOAuthHandoff(Base):
+    __tablename__ = "mobile_oauth_handoffs"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
+    provider: Mapped[str] = mapped_column(String(30), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    used: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
 
 class AdminAuditLog(Base):

@@ -1,4 +1,4 @@
-const CACHE = 'dashle-static-v3';
+const CACHE = 'dashle-static-v5';
 const ASSETS = [
   '/static/manifest.json',
   '/static/icons/dashle-icon-1024.png',
@@ -6,7 +6,9 @@ const ASSETS = [
   '/static/icons/dashle-icon-192.png',
   '/static/icons/dashle-icon-48.png',
   '/static/icons/dashle-logo-header.png',
-  '/static/icon-attach.png'
+  '/static/icon-attach.png',
+  '/static/vendor/marked.min.js',
+  '/static/vendor/purify.min.js'
 ];
 
 self.addEventListener('install', (event) => {
@@ -23,7 +25,17 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
+const AUTH_PATHS = new Set(['/inscription', '/connexion']);
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
+  const url = new URL(event.request.url);
+  if (AUTH_PATHS.has(url.pathname)) {
+    event.respondWith(
+      fetch(event.request, { cache: 'no-store' })
+        .then((response) => response)
+        .catch(() => caches.match(event.request))
+    );
+    return;
+  }
   event.respondWith(caches.match(event.request).then((cached) => cached || fetch(event.request)));
 });

@@ -1,106 +1,147 @@
 package com.dashle.app
 
+import android.Manifest
+import android.annotation.SuppressLint
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Bundle
-import androidx.activity.ComponentActivity
+import android.webkit.CookieManager
+import android.webkit.JavascriptInterface
+import android.webkit.WebChromeClient
+import android.webkit.PermissionRequest
+import android.webkit.WebResourceRequest
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
-import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
+import androidx.browser.customtabs.CustomTabsIntent
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.fragment.app.FragmentActivity
+import androidx.biometric.BiometricPrompt
+import java.util.concurrent.Executor
 
-private val DashleNavy = Color(0xFF050B16)
-private val DashleGreen = Color(0xFF1FE05A)
-private val DashleBlue = Color(0xFF0878FF)
+private const val PAYMENT_HOST="app.paydunya.com"
+private const val CINETPAY_HOST="checkout.cinetpay.com"
+private const val DASHLE_HOST="dashle.onrender.com"
+private val OAUTH_HOSTS=setOf("github.com","accounts.google.com","api.notion.com")
 
-class MainActivity : ComponentActivity() {
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
-        setContent {
-            MaterialTheme(colorScheme = darkColorScheme(
-                primary = DashleGreen,
-                secondary = DashleBlue,
-                background = DashleNavy,
-                surface = DashleNavy,
-            )) {
-                EcranInitial()
-            }
-        }
+class MainActivity : FragmentActivity() {
+    private var webView:WebView?=null
+    private var pendingHandoff:String?=null
+    private lateinit var uiExecutor:Executor
+    private var pendingWebPermissionRequest:PermissionRequest?=null
+
+    companion object {
+        private const val MEDIA_PERMISSION_REQUEST_CODE=7401
     }
-}
 
-@Composable
-private fun EcranInitial() {
-    Surface(modifier = Modifier.fillMaxSize(), color = DashleNavy) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(
-                    Brush.verticalGradient(
-                        colors = listOf(Color(0xFF0D1B2B), DashleNavy, Color(0xFF071325)),
-                    ),
-                )
-                .padding(28.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-            ) {
-                Image(
-                    painter = painterResource(R.drawable.dashle_icon),
-                    contentDescription = "Logo DASHLE",
-                    modifier = Modifier.size(184.dp),
-                )
-                Spacer(Modifier.height(12.dp))
-                Text(
-                    text = "DASHLE",
-                    color = Color.White,
-                    fontSize = 30.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 5.sp,
-                )
-                Spacer(Modifier.height(10.dp))
-                Box(
-                    modifier = Modifier
-                        .width(76.dp)
-                        .height(3.dp)
-                        .background(
-                            Brush.horizontalGradient(listOf(DashleGreen, DashleBlue)),
-                            RoundedCornerShape(50),
-                        ),
-                )
-                Spacer(Modifier.height(22.dp))
-                Text(
-                    text = "La base de l’application Android est prête.",
-                    color = Color(0xFFC3CFDD),
-                    fontSize = 16.sp,
-                    textAlign = TextAlign.Center,
-                )
+    override fun onCreate(savedInstanceState:Bundle?) {
+        super.onCreate(savedInstanceState)
+        uiExecutor=mainExecutor
+        pendingHandoff=intent?.data?.getQueryParameter("handoff")
+        setContent{Surface(modifier=Modifier.fillMaxSize()){DashleWebApp{webView=it}}}
+        onBackPressedDispatcher.addCallback(this,object:OnBackPressedCallback(true){
+            override fun handleOnBackPressed(){if(webView?.canGoBack()==true)webView?.goBack() else finish()}
+        })
+    }
+
+    override fun onNewIntent(intent:Intent){super.onNewIntent(intent);setIntent(intent);pendingHandoff=intent.data?.getQueryParameter("handoff");pendingHandoff?.let{token->webView?.loadUrl(BuildConfig.DASHLE_BASE_URL+"api/oauth/mobile/consume?handoff="+Uri.encode(token))}}
+
+    override fun onRequestPermissionsResult(requestCode:Int,permissions:Array<out String>,grantResults:IntArray){
+        super.onRequestPermissionsResult(requestCode,permissions,grantResults)
+        if(requestCode!=MEDIA_PERMISSION_REQUEST_CODE)return
+        val request=pendingWebPermissionRequest
+        pendingWebPermissionRequest=null
+        if(request==null)return
+        val granted=grantResults.isNotEmpty() && grantResults.all{it==PackageManager.PERMISSION_GRANTED}
+        if(granted)request.grant(request.resources) else request.deny()
+    }
+
+    override fun onResume(){super.onResume();CookieManager.getInstance().flush()}
+    override fun onDestroy(){pendingWebPermissionRequest?.deny();pendingWebPermissionRequest=null;webView?.apply{stopLoading();webViewClient=WebViewClient();destroy()};webView=null;super.onDestroy()}
+
+    @SuppressLint("SetJavaScriptEnabled")
+    @Composable
+    private fun DashleWebApp(onReady:(WebView)->Unit){
+        AndroidView(modifier=Modifier.fillMaxSize(),factory={context->
+            WebView(context).apply{
+                settings.javaScriptEnabled=true
+                settings.domStorageEnabled=true
+                settings.databaseEnabled=true
+                settings.cacheMode=WebSettings.LOAD_DEFAULT
+                settings.allowFileAccess=false
+                settings.allowContentAccess=true
+                settings.javaScriptCanOpenWindowsAutomatically=true
+                settings.mediaPlaybackRequiresUserGesture=false
+                settings.userAgentString=settings.userAgentString+" DASHLE-Android/1.0"
+                CookieManager.getInstance().setAcceptCookie(true)
+                CookieManager.getInstance().setAcceptThirdPartyCookies(this,true)
+                webChromeClient=object:WebChromeClient(){
+                    override fun onPermissionRequest(request:PermissionRequest){
+                        val host=request.origin.host.orEmpty()
+                        if(host!=DASHLE_HOST){request.deny();return}
+                        val required=mutableListOf<String>()
+                        if(request.resources.contains(PermissionRequest.RESOURCE_AUDIO_CAPTURE))required.add(Manifest.permission.RECORD_AUDIO)
+                        if(request.resources.contains(PermissionRequest.RESOURCE_VIDEO_CAPTURE))required.add(Manifest.permission.CAMERA)
+                        if(required.isEmpty()){request.grant(request.resources);return}
+                        val missing=required.filter{checkSelfPermission(it)!=PackageManager.PERMISSION_GRANTED}
+                        if(missing.isEmpty()){
+                            request.grant(request.resources)
+                        }else{
+                            pendingWebPermissionRequest?.deny()
+                            pendingWebPermissionRequest=request
+                            requestPermissions(missing.toTypedArray(),MEDIA_PERMISSION_REQUEST_CODE)
+                        }
+                    }
+                }
+                addJavascriptInterface(DashleBridge(),"DashleAndroid")
+                webViewClient=object:WebViewClient(){
+                    override fun shouldOverrideUrlLoading(view:WebView,request:WebResourceRequest):Boolean{
+                        val uri=request.url;val scheme=uri.scheme.orEmpty();val host=uri.host.orEmpty()
+                        if((scheme=="http"||scheme=="https")&&host in OAUTH_HOSTS){
+                            CustomTabsIntent.Builder().build().launchUrl(this@MainActivity,uri);return true
+                        }
+                        if(scheme=="http"||scheme=="https"){
+                            val internal=host==DASHLE_HOST||host==PAYMENT_HOST||host==CINETPAY_HOST
+                            if(internal)return false
+                            return try{startActivity(Intent(Intent.ACTION_VIEW,uri));true}catch(_:Exception){false}
+                        }
+                        return try{startActivity(Intent(Intent.ACTION_VIEW,uri));true}catch(_:Exception){true}
+                    }
+                }
+                loadUrl(BuildConfig.DASHLE_BASE_URL)
+                pendingHandoff?.let{token->postDelayed({loadUrl(BuildConfig.DASHLE_BASE_URL+"api/oauth/mobile/consume?handoff="+Uri.encode(token));pendingHandoff=null},800)}
+                onReady(this)
             }
+        },update={})
+    }
+
+    inner class DashleBridge{
+        @JavascriptInterface fun confirmAction(token:String){
+            val current=webView?.url?.let{Uri.parse(it).host}
+            if(current!=DASHLE_HOST)return
+            val prompt=BiometricPrompt(this@MainActivity,uiExecutor,object:BiometricPrompt.AuthenticationCallback(){
+                override fun onAuthenticationSucceeded(result:BiometricPrompt.AuthenticationResult){
+                    super.onAuthenticationSucceeded(result)
+                    webView?.post{webView?.evaluateJavascript("window.DashleAndroidBiometricResult && window.DashleAndroidBiometricResult(true,"+org.json.JSONObject.quote(token)+");",null)}
+                }
+                override fun onAuthenticationError(code:Int,message:CharSequence){
+                    webView?.post{webView?.evaluateJavascript("window.DashleAndroidBiometricResult && window.DashleAndroidBiometricResult(false);",null)}
+                }
+            })
+            val info=BiometricPrompt.PromptInfo.Builder()
+                .setTitle("Confirmer l’action Dashle")
+                .setSubtitle("Action sur ton compte externe")
+                .setDescription("Confirme cette action précise pour continuer.")
+                .setNegativeButtonText("Annuler")
+                .build()
+            prompt.authenticate(info)
         }
     }
 }

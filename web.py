@@ -21,6 +21,8 @@ import hmac
 import re
 import requests
 import threading
+import unicodedata
+from time import perf_counter
 from datetime import datetime, timedelta, timezone
 import calendar
 from html import escape as html_escape
@@ -28,7 +30,7 @@ from urllib.parse import urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from flask import (
     Flask, Response, request, render_template, render_template_string,
-    redirect, stream_with_context, url_for, session, jsonify, send_file,
+    redirect, stream_with_context, url_for, session, jsonify, send_file, g,
 )
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
@@ -36,27 +38,98 @@ from sqlalchemy import func, text
 from sqlalchemy.exc import IntegrityError
 from app import streamer_message, traiter_message, traiter_message_image
 from brain import OFFRES_DASHLE, emails_owner, niveau_abonnement, resumer_conversation
-from config import MAX_MESSAGES_CONTEXTE, MODELE_GEMINI
+from config import CLE_API, MAX_MESSAGES_CONTEXTE, MODELE_GEMINI
+from connectors.web import bp as connectors_bp
 from database import (
-    AdminAuditLog, Conversation, LibraryItem, Message, MessageFeedback, ShareLink, SubscriptionPayment, User,
+    AdminAuditLog, Conversation, ImageGenerationUsage, VoiceTranscriptionUsage, LibraryItem, Message, MessageFeedback, ShareLink, SubscriptionPayment, User,
     UserMemory, UserPreference, StatisticalAnalysisUsage, Project, ProjectFile, Reminder, UserPlugin,
     ScheduledTask, ScheduledTaskRun, UserNotification,
     initialiser_base, session_base,
 )
 from statistiques import analyser_fichier
 from temps_reel import actualites_recentes, meteo_du_jour
+from artifact_tools import (detecter_demande_pdf, detecter_demande_image,
+                            demande_illustration_pedagogique, extraire_contenu_fourni,
+                            structurer_document, rendre_pdf, generer_image, extraire_texte_structure)
+
+BUILD_COMMIT = os.environ.get("RENDER_GIT_COMMIT") or os.environ.get("DASHLE_BUILD_COMMIT") or "inconnu"
+BUILD_COMMIT_SHORT = BUILD_COMMIT[:12] if BUILD_COMMIT != "inconnu" else BUILD_COMMIT
+try:
+    BUILD_DATE = os.environ.get("DASHLE_BUILD_DATE") or datetime.fromtimestamp(os.path.getmtime(__file__), timezone.utc).isoformat()
+except OSError:
+    BUILD_DATE = "non déclarée"
 
 try:
-    from PIL import Image
+    from PIL import Image, ImageOps
     PIL_DISPONIBLE = True
 except Exception:
     PIL_DISPONIBLE = False
 
 
 app = Flask(__name__)
+
+
+def _observabilite_identite_utilisateur():
+    """Retourne un identifiant utilisateur non réversible pour les logs."""
+    user_id = session.get("user_id")
+    if user_id is None:
+        return None
+    return hashlib.sha256(str(user_id).encode("utf-8")).hexdigest()[:12]
+
+
+@app.before_request
+def _observabilite_debut():
+    """Initialise la corrélation et le chronométrage sans journaliser le contenu."""
+    request_id = re.sub(r"[^A-Za-z0-9._:-]", "", (request.headers.get("X-Request-ID") or "").strip())[:64]
+    if not request_id:
+        request_id = secrets.token_hex(12)
+    g.dashle_observabilite = {
+        "request_id": request_id,
+        "started_at": perf_counter(),
+        "user_ref": _observabilite_identite_utilisateur(),
+    }
+
+
+@app.after_request
+def _observabilite_fin(response):
+    contexte = getattr(g, "dashle_observabilite", None)
+    if contexte is None:
+        return response
+    response.headers["X-Request-ID"] = contexte["request_id"]
+    duree_ms = round((perf_counter() - contexte["started_at"]) * 1000, 1)
+    if request.endpoint != "static":
+        app.logger.info(
+            "dashle.request request_id=%s endpoint=%s user_ref=%s provider=gemini model=%s duration_ms=%s status=%s",
+            contexte["request_id"], request.endpoint or "unknown", contexte["user_ref"] or "anonymous",
+            MODELE_GEMINI, duree_ms, response.status_code,
+        )
+    return response
+
+
+def _journaliser_sse(contexte, debut_sse, ttfb_at, resultat):
+    if contexte is None:
+        return
+    maintenant = perf_counter()
+    app.logger.info(
+        "dashle.sse request_id=%s endpoint=repondre_flux user_ref=%s provider=gemini model=%s duration_ms=%s ttfb_ms=%s result=%s",
+        contexte["request_id"], contexte["user_ref"] or "anonymous", MODELE_GEMINI,
+        round((maintenant - debut_sse) * 1000, 1),
+        round((ttfb_at - debut_sse) * 1000, 1) if ttfb_at is not None else None,
+        resultat,
+    )
+
+
+def _journaliser_image(contexte, debut_image, resultat):
+    if contexte is None:
+        return
+    app.logger.info(
+        "dashle.image request_id=%s endpoint=repondre_flux user_ref=%s provider=gemini model=%s duration_ms=%s result=%s",
+        contexte["request_id"], contexte["user_ref"] or "anonymous", MODELE_GEMINI,
+        round((perf_counter() - debut_image) * 1000, 1), resultat,
+    )
 app.config.update(
     SECRET_KEY=os.environ.get("FLASK_SECRET_KEY") or os.urandom(32),
-    MAX_CONTENT_LENGTH=8 * 1024 * 1024,
+    MAX_CONTENT_LENGTH=12 * 1024 * 1024,
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
     # Render définit explicitement 1; le défaut 0 permet les sessions en localhost HTTP.
@@ -64,6 +137,7 @@ app.config.update(
     PERMANENT_SESSION_LIFETIME=timedelta(days=3650),
 )
 initialiser_base()
+app.register_blueprint(connectors_bp)
 
 
 @app.after_request
@@ -75,6 +149,90 @@ def definir_charset_json_utf8(response):
 
 # Nombre maximal de messages conservés en session pour les visiteurs anonymes.
 MAX_HISTORIQUE_VISITEUR = 30
+IMAGE_UPLOAD_MAX_BYTES = 10 * 1024 * 1024
+IMAGE_PREVIEW_MAX_SIDE = 320
+_IMAGE_PREVIEW_PREFIX = "[[DASHLE_IMAGE_PREVIEW:"
+
+# Quotas de génération d'images : compteurs exclusivement côté serveur.
+IMAGE_DAILY_LIMITS = {
+    "visitor": int(os.environ.get("DASHLE_IMAGE_DAILY_LIMIT_VISITOR", "2")),
+    "free": int(os.environ.get("DASHLE_IMAGE_DAILY_LIMIT_FREE", "5")),
+    "pro": int(os.environ.get("DASHLE_IMAGE_DAILY_LIMIT_PRO", "20")),
+    "prime": int(os.environ.get("DASHLE_IMAGE_DAILY_LIMIT_PRIME", "50")),
+}
+
+def _debut_jour_suivant_utc():
+    maintenant = datetime.now(timezone.utc)
+    return maintenant.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+
+def _cle_visiteur_image():
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    ip = (forwarded.split(",")[0].strip() if forwarded else request.remote_addr) or "inconnu"
+    secret = app.config.get("SECRET_KEY", "dashle")
+    return hashlib.sha256((str(secret) + "|image-quota|" + ip).encode("utf-8")).hexdigest()
+
+def _quota_image_info(user_id=None):
+    aujourd_hui = datetime.utcnow().date()
+    if user_id:
+        with session_base() as db:
+            user = db.get(User, user_id)
+            if user and user.email.strip().lower() in emails_owner():
+                return {"niveau": "prime", "limite": None, "utilise": 0, "illimite": True,
+                        "reset_at": _debut_jour_suivant_utc().isoformat()}
+            niveau = niveau_abonnement(user) if user else "free"
+            limite = IMAGE_DAILY_LIMITS.get(niveau, IMAGE_DAILY_LIMITS["free"])
+            usage = db.query(ImageGenerationUsage).filter_by(user_id=user_id, usage_date=aujourd_hui).one_or_none()
+            return {"niveau": niveau, "limite": limite, "utilise": usage.count if usage else 0, "illimite": False,
+                    "reset_at": _debut_jour_suivant_utc().isoformat(),
+                    "message": "Tu as utilisé tes images du jour. Elles reviennent à HH:MM",
+                    "action": "voir_forfaits"}
+    with session_base() as db:
+        usage = db.query(ImageGenerationUsage).filter_by(visitor_key=_cle_visiteur_image(), usage_date=aujourd_hui).one_or_none()
+        utilise = usage.count if usage else 0
+    return {"niveau": "visitor", "limite": IMAGE_DAILY_LIMITS["visitor"], "utilise": utilise, "illimite": False,
+            "reset_at": _debut_jour_suivant_utc().isoformat(),
+            "message": "Tu as utilisé tes images du jour. Elles reviennent à HH:MM",
+            "action": "creer_compte"}
+
+def _quota_image_bloque(user_id=None):
+    info = _quota_image_info(user_id)
+    return (not info["illimite"] and info["utilise"] >= info["limite"], info)
+
+def _consommer_quota_image(user_id=None):
+    if user_id:
+        with session_base() as db:
+            user = db.get(User, user_id)
+            if user and user.email.strip().lower() in emails_owner():
+                return True
+            niveau = niveau_abonnement(user) if user else "free"
+            limite = IMAGE_DAILY_LIMITS.get(niveau, IMAGE_DAILY_LIMITS["free"])
+            aujourd_hui = datetime.utcnow().date()
+            usage = db.query(ImageGenerationUsage).filter_by(user_id=user_id, usage_date=aujourd_hui).one_or_none()
+            if usage is None:
+                usage = ImageGenerationUsage(user_id=user_id, usage_date=aujourd_hui, count=0)
+                db.add(usage); db.flush()
+            if usage.count >= limite:
+                return False
+            usage.count += 1
+            return True
+    with session_base() as db:
+        aujourd_hui = datetime.utcnow().date()
+        cle = _cle_visiteur_image()
+        usage = db.query(ImageGenerationUsage).filter_by(visitor_key=cle, usage_date=aujourd_hui).one_or_none()
+        if usage is None:
+            usage = ImageGenerationUsage(visitor_key=cle, usage_date=aujourd_hui, count=0)
+            db.add(usage); db.flush()
+        if usage.count >= IMAGE_DAILY_LIMITS["visitor"]:
+            return False
+        usage.count += 1
+        return True
+
+def _reponse_quota_image(user_id=None):
+    info = _quota_image_info(user_id)
+    return {"quota": True, "niveau": info["niveau"], "utilise": info["utilise"], "limite": info["limite"],
+            "reset_at": info["reset_at"],
+            "message": "Tu as utilisé tes images du jour. Elles reviennent à HH:MM",
+            "action": "creer_compte" if info["niveau"] == "visitor" else "voir_forfaits"}
 
 # Profil international et règles de paiement. Le pays choisi par l'utilisateur
 # est la source de vérité : aucune déduction par adresse IP n'est utilisée.
@@ -137,7 +295,7 @@ INDICATIFS = {code: indicatif for code, _, indicatif in PAYS_PROFIL}
 
 def _normaliser_telephone(pays, telephone):
     pays = (pays or "").strip().upper()
-    brut = re.sub(r"[^d+]", "", str(telephone or ""))
+    brut = re.sub(r"[^0-9+]", "", str(telephone or ""))
     if pays not in PAYS_CODES or not brut:
         return None, None
     indicatif = INDICATIFS[pays]
@@ -161,9 +319,10 @@ def _normaliser_telephone(pays, telephone):
         e164 = "+" + indicatif + national
     longueurs = {"BF": 8, "SN": 9, "CI": 10, "BJ": 10, "TG": 8, "ML": 8}
     longueur_attendue = longueurs.get(pays)
-    if longueur_attendue is not None and len(national) != longueur_attendue:
+    national_sans_prefixe = national[1:] if national.startswith("0") else national
+    if longueur_attendue is not None and len(national_sans_prefixe) != longueur_attendue:
         return None, None
-    if not 6 <= len(national) <= 14:
+    if not 6 <= len(national_sans_prefixe) <= 14:
         return None, None
     return e164, national
 
@@ -281,7 +440,7 @@ _ROUTES_PUBLIQUES = {
     "confirmer_message", "nouvelle_conv", "conditions_utilisation",
     "health", "robots_txt", "sitemap_xml", "tarifs", "paiement_retour",
     "cinetpay_notification", "paydunya_callback", "stripe_webhook", "temps_reel", "api_temps_reel",
-    "telecharger_pdf_temps_reel", "admin", "executer_taches_cron",
+    "telecharger_pdf_temps_reel", "generer_image_endpoint", "generer_pdf_endpoint", "admin", "executer_taches_cron",
 }
 
 
@@ -383,19 +542,48 @@ def _maj_resume_visiteur(nouveau_resume: str):
 # ---------------------------------------------------------------------------
 
 def _conv_courante(user_id):
-    """Renvoie l'identifiant d'une conversation active pour l'utilisateur."""
+    """Retourne la conversation sélectionnée ou la dernière, sans en créer."""
+    if session.get("nouvelle_conversation_en_attente"):
+        return None
     conversation_id = session.get("conversation_id")
     with session_base() as db:
-        conversation = db.query(Conversation).filter_by(
-            id=conversation_id, user_id=user_id
-        ).one_or_none()
+        conversation = None
+        if conversation_id:
+            conversation = db.query(Conversation).filter_by(
+                id=conversation_id, user_id=user_id
+            ).one_or_none()
         if conversation is None:
-            conversation = Conversation(user_id=user_id)
-            db.add(conversation)
-            db.flush()
-            conversation_id = conversation.id
+            conversation = (
+                db.query(Conversation)
+                .filter_by(user_id=user_id, archivee=False)
+                .order_by(Conversation.updated_at.desc())
+                .first()
+            )
+        if conversation is None:
+            session.pop("conversation_id", None)
+            return None
+        conversation_id = conversation.id
     session["conversation_id"] = conversation_id
     return conversation_id
+
+
+def _creer_conversation(user_id):
+    with session_base() as db:
+        conversation = Conversation(user_id=user_id)
+        db.add(conversation)
+        db.flush()
+        conversation_id = conversation.id
+    session["conversation_id"] = conversation_id
+    session.pop("nouvelle_conversation_en_attente", None)
+    return conversation_id
+
+
+def _conversation_pour_message(user_id):
+    """Crée une conversation uniquement au premier message si nécessaire."""
+    if session.pop("nouvelle_conversation_en_attente", False):
+        return _creer_conversation(user_id)
+    conversation_id = _conv_courante(user_id)
+    return conversation_id if conversation_id else _creer_conversation(user_id)
 
 
 def _conserver_historique(user_id):
@@ -442,15 +630,17 @@ def _messages_conversation(user_id, conversation_id, limite=None):
             messages.reverse()
         else:
             messages = conv.messages
-        return [
-            {
+        resultat = []
+        for m in messages:
+            texte, apercu = _extraire_apercu_image_message(m.texte)
+            resultat.append({
                 "id": m.id,
                 "auteur": m.auteur,
-                "texte": m.texte,
+                "texte": texte,
+                "image_preview": apercu,
                 "date": m.created_at.isoformat(),
-            }
-            for m in messages
-        ]
+            })
+        return resultat
 
 
 def _resume_conversation(user_id, conversation_id):
@@ -558,6 +748,7 @@ _PREFS_VISITEUR = {
 
 
 def _titre_automatique(texte):
+    titre = re.sub(r"[*_~#\\x60>]+", "", str(texte or ""))
     titre = re.sub(r"\s+", " ", str(texte or "")).strip()
     if re.fullmatch(r"\[(?:image|vidéo) envoyée\]", titre, flags=re.IGNORECASE):
         return ""
@@ -570,20 +761,101 @@ def _titre_automatique(texte):
     return titre or ""
 
 
-def ajouter_message(user_id, conversation_id, texte, auteur):
+
+
+def _titre_fallback_six_mots(texte):
+    nettoye = re.sub(r"[*_~#\\x60>]+", "", str(texte or ""))
+    nettoye = nettoye.replace(chr(96), "")
+    nettoye = re.sub(r"\\s+", " ", nettoye).strip()
+    if not nettoye or nettoye.lower() in {"image", "image envoyée", "photo"}:
+        return ""
+    return " ".join(nettoye.split()[:6])[:58].rstrip(" ,.;:-")
+
+
+def _titre_premier_echange(user_id, conversation_id):
+    with session_base() as db:
+        messages = (
+            db.query(Message)
+            .filter_by(conversation_id=conversation_id)
+            .order_by(Message.id.asc())
+            .limit(2)
+            .all()
+        )
+    if len(messages) < 2 or messages[0].auteur != "user" or messages[1].auteur != "bot":
+        return ""
+    historique = [{"auteur": m.auteur, "texte": m.texte} for m in messages]
+    try:
+        resume = resumer_conversation(historique, "", user_id=user_id)
+    except Exception:
+        resume = ""
+    titre = _titre_fallback_six_mots(resume)
+    if titre:
+        return titre
+    source = messages[1].texte if not _titre_fallback_six_mots(messages[0].texte) else messages[0].texte
+    return _titre_fallback_six_mots(source)
+
+def _extraire_apercu_image_message(texte):
+    brut = str(texte or "")
+    marqueur = "\n" + _IMAGE_PREVIEW_PREFIX
+    if marqueur not in brut:
+        return brut, ""
+    propre, suffixe = brut.rsplit(marqueur, 1)
+    apercu = suffixe[:-2] if suffixe.endswith("]]") else ""
+    if apercu.startswith("data:image/jpeg;base64,"):
+        return propre.rstrip(), apercu
+    return brut, ""
+
+
+def _texte_persistant_message(texte, image_preview=""):
+    propre = str(texte or "").strip()
+    apercu = str(image_preview or "")
+    if apercu.startswith("data:image/jpeg;base64,"):
+        return propre + "\n" + _IMAGE_PREVIEW_PREFIX + apercu + "]]"
+    return propre
+
+
+def _miniature_image_data_uri(image_bytes):
+    if not PIL_DISPONIBLE:
+        return ""
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as image:
+            image = ImageOps.exif_transpose(image).convert("RGB")
+            image.thumbnail((IMAGE_PREVIEW_MAX_SIDE, IMAGE_PREVIEW_MAX_SIDE), Image.Resampling.LANCZOS)
+            sortie = io.BytesIO()
+            image.save(sortie, format="JPEG", quality=72, optimize=True)
+        return "data:image/jpeg;base64," + base64.b64encode(sortie.getvalue()).decode("ascii")
+    except Exception:
+        return ""
+
+
+def ajouter_message(user_id, conversation_id, texte, auteur, image_preview=""):
     with session_base() as db:
         conv = db.query(Conversation).filter_by(
             id=conversation_id, user_id=user_id
         ).one_or_none()
         if conv is None:
             raise LookupError("Conversation introuvable")
-        msg = Message(conversation_id=conv.id, auteur=auteur, texte=texte)
+        texte_propre = str(texte or "").strip()
+        msg = Message(
+            conversation_id=conv.id,
+            auteur=auteur,
+            texte=_texte_persistant_message(texte_propre, image_preview),
+        )
         db.add(msg)
         db.flush()
-        if auteur == "user" and conv.title == "Nouvelle conversation":
-            conv.title = _titre_automatique(texte) or conv.title
         conv.updated_at = datetime.utcnow()
-        return msg.id
+        message_id = msg.id
+        doit_titrer = auteur == "bot" and conv.title == "Nouvelle conversation"
+    if doit_titrer:
+        titre = _titre_premier_echange(user_id, conversation_id)
+        if titre:
+            with session_base() as db:
+                conv = db.query(Conversation).filter_by(
+                    id=conversation_id, user_id=user_id
+                ).one_or_none()
+                if conv is not None and conv.title == "Nouvelle conversation":
+                    conv.title = titre
+    return message_id
 
 
 # ---------------------------------------------------------------------------
@@ -592,6 +864,8 @@ def ajouter_message(user_id, conversation_id, texte, auteur):
 
 _CSS = """
 * { box-sizing: border-box; }
+
+button, a, [role="button"] { touch-action: manipulation; }
 
 :root {
   --accent-vert: #22C55E;
@@ -632,6 +906,7 @@ body {
   background: var(--fond);
   color: var(--texte);
   height: 100vh;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -812,6 +1087,7 @@ header button.icon-btn:hover { background: rgba(255,255,255,0.18); }
   width: 82%;
   max-width: 320px;
   height: 100%;
+  height: 100dvh;
   background: var(--sidebar-bg);
   z-index: 6;
   overflow-y: auto;
@@ -961,6 +1237,27 @@ body.theme-sombre .msg.bot pre { border:1px solid #31483e; }
 }
 
 /* ---- Indicateur de réflexion ---- */
+.suivi-action {
+  margin: 6px 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--bordure);
+  border-radius: 12px;
+  background: var(--fond-secondaire);
+  max-width: min(520px, 92%);
+}
+.suivi-action-entete { display:flex; align-items:center; gap:8px; }
+.suivi-action-titre { flex:1; font-size:13px; color:var(--texte); }
+.suivi-action-indicateur { width:8px; height:8px; border-radius:50%; background:var(--vert); animation:pulse .9s infinite ease-in-out; }
+.suivi-action-indicateur.termine { animation:none; }
+.suivi-action-indicateur.echec { animation:none; background:#c0392b; }
+.suivi-action-indicateur.annule { animation:none; background:#888; }
+.suivi-action-annuler { border:0; background:transparent; color:var(--vert-fonce); cursor:pointer; font-size:12px; }
+.suivi-action-etapes { margin-top:7px; display:grid; gap:3px; font-size:12px; color:var(--texte-secondaire); }
+.suivi-action-etape.termine { color:var(--vert-fonce); }
+.suivi-action-etape.echec { color:#c0392b; }
+.suivi-action-etape.annule { color:var(--texte-secondaire); }
+.suivi-action-points { display:inline-block; letter-spacing:2px; animation:pulse .9s infinite ease-in-out; }
+.suivi-action-resultat { margin-top:8px; }
 .reflexion {
   display: flex;
   align-items: center;
@@ -988,7 +1285,7 @@ body.theme-sombre .msg.bot pre { border:1px solid #31483e; }
 form.bas {
   display: flex;
   gap: 6px;
-  padding: 10px 12px;
+  padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
   border-top: 1px solid var(--bordure);
   align-items: flex-end;
   background: var(--fond);
@@ -1397,6 +1694,13 @@ video#apercu-fichier-media { object-fit: contain; }
 .message-wrap { max-width:min(95%,var(--largeur-conversation)); }
 .message-wrap { margin-bottom:22px; }
 .msg { padding:14px 17px; border:1px solid var(--bordure); box-shadow:0 3px 12px rgba(17,51,39,.045); }
+.message-image-persistante { margin:0 0 8px; max-width:min(320px,100%); }
+.msg table { display:block; max-width:100%; overflow-x:auto; border-collapse:collapse; }
+.msg th, .msg td { padding:6px 8px; border:1px solid rgba(127,127,127,.25); text-align:left; }
+.msg thead th { background:rgba(127,127,127,.08); }
+.msg ul, .msg ol { padding-left:1.4rem; }
+
+.message-image-persistante img { display:block; width:auto; max-width:100%; max-height:260px; border-radius:14px; object-fit:contain; cursor:zoom-in; }
 .msg.user { border-color:rgba(34,197,94,.18); }
 .msg.bot { background:var(--fond-secondaire); }
 .actions-reponse { gap:4px; padding:6px 4px; }
@@ -1405,6 +1709,27 @@ video#apercu-fichier-media { object-fit: contain; }
 .actions-reponse button:hover { border-color:var(--bordure); }
 .image-message-lien { display:block; margin-top:4px; }
 .image-message { display:block; max-width:min(280px,70vw); max-height:320px; object-fit:contain; border-radius:12px; cursor:zoom-in; }
+.suivi-action.image-generation { width:min(100%,560px); }
+.suivi-action-image-progress { position:relative; overflow:hidden; margin:12px 0 4px; padding:15px 16px; border:1px solid rgba(16,163,127,.18); border-radius:16px; background:linear-gradient(135deg,rgba(34,197,94,.08),rgba(59,130,246,.09)); }
+.suivi-action-image-progress::before { content:""; position:absolute; inset:0 auto 0 0; width:42%; background:linear-gradient(90deg,rgba(34,197,94,.0),rgba(34,197,94,.20),rgba(59,130,246,.22),rgba(59,130,246,0)); transform:translateX(-120%); animation:dashleImageSweep 2.1s ease-in-out infinite; }
+.suivi-action-image-progress .titre { position:relative; font-weight:700; color:var(--texte); }
+.suivi-action-image-progress .sous-titre { position:relative; margin-top:4px; color:var(--muted); font-size:13px; }
+.suivi-action-image-progress .barre { position:relative; height:5px; margin-top:13px; overflow:hidden; border-radius:99px; background:rgba(16,163,127,.10); }
+.suivi-action-image-progress .barre::after { content:""; display:block; width:38%; height:100%; border-radius:inherit; background:linear-gradient(90deg,#22c55e,#3b82f6); animation:dashleImageBar 1.8s ease-in-out infinite; }
+.suivi-action-image-resultat { margin-top:12px; }
+.suivi-action-image-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+.suivi-action-image-actions button,.suivi-action-image-actions a { display:inline-flex; align-items:center; justify-content:center; min-height:38px; padding:8px 12px; border:1px solid var(--bordure); border-radius:10px; background:var(--fond); color:var(--texte); text-decoration:none; font:600 13px/1.2 inherit; cursor:pointer; }
+.suivi-action-image-actions button.primaire,.suivi-action-image-actions a.primaire { border-color:transparent; color:#fff; background:linear-gradient(110deg,#22c55e,#3b82f6); }
+.image-viewer { position:fixed; inset:0; z-index:3000; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:12px; background:rgba(5,16,13,.94); }
+.image-viewer[hidden] { display:none; }
+.image-viewer img { width:auto; max-width:100%; max-height:calc(100vh - 132px); object-fit:contain; border-radius:12px; }
+.image-viewer-bar { width:min(100%,720px); display:flex; flex-wrap:wrap; gap:8px; justify-content:center; margin-top:12px; }
+.image-viewer-bar button { min-height:42px; padding:9px 13px; border:1px solid rgba(255,255,255,.18); border-radius:11px; background:rgba(255,255,255,.09); color:#fff; font:600 13px/1.2 inherit; cursor:pointer; }
+.image-viewer-bar button.primaire { background:linear-gradient(110deg,#22c55e,#3b82f6); border-color:transparent; }
+.image-viewer-fermer { position:absolute; top:max(12px,env(safe-area-inset-top)); right:12px; min-width:42px; min-height:42px; }
+@keyframes dashleImageSweep { to { transform:translateX(330%); } }
+@keyframes dashleImageBar { 0% { transform:translateX(-150%); } 50% { transform:translateX(120%); } 100% { transform:translateX(300%); } }
+@media (max-width:420px) { .image-viewer { padding:8px; } .image-viewer img { max-height:calc(100vh - 150px); } .image-viewer-bar { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); width:100%; } .image-viewer-bar button { width:100%; } }
 .bas { gap:10px !important; padding:12px 14px max(12px,env(safe-area-inset-bottom)) !important; border:1px solid var(--bordure) !important; border-radius:24px; margin-top:8px; margin-bottom:14px; box-shadow:0 8px 28px rgba(16,55,41,.08); }
 .bas textarea { min-height:46px !important; padding:12px 15px !important; border-radius:16px !important; }
 .btn-attach { border:1px solid var(--bordure); background:var(--fond-secondaire); }
@@ -1532,6 +1857,8 @@ PAGE = _HEADER_USER_MACRO + """
 <script type="application/ld+json">
 {"@context":"https://schema.org","@type":"WebApplication","name":"Dashle","url":"https://dashle.onrender.com/","description":"Dashle est une intelligence artificielle personnelle accessible depuis un navigateur pour échanger par écrit et demander l’analyse d’images ou de vidéos."}
 </script>
+<script defer src="{{ url_for('static', filename='vendor/marked.min.js') }}"></script>
+<script defer src="{{ url_for('static', filename='vendor/purify.min.js') }}"></script>
 <link rel="manifest" href="/static/manifest.json">
 <link rel="icon" type="image/png" sizes="1024x1024" href="/static/icons/dashle-icon-1024.png">
 <link rel="icon" type="image/png" sizes="512x512" href="/static/icons/dashle-icon-512.png">
@@ -1671,6 +1998,11 @@ if ('serviceWorker' in navigator) {
   {% endif %}
   {% for m in messages %}
     <div class="message-wrap {{ 'user' if m.auteur == 'user' else 'bot' }}">
+      {% if m.get('image_preview') %}
+      <div class="message-image-persistante">
+        <img src="{{ m.get('image_preview') }}" alt="Image envoyée" loading="lazy">
+      </div>
+      {% endif %}
       <div class="msg {{ 'user' if m.auteur == 'user' else 'bot' }}" data-message-id="{{ m.get('id','') }}">{{ m.texte }}</div>
       {% if m.auteur == 'bot' %}
       <div class="actions-reponse">
@@ -1691,7 +2023,7 @@ if ('serviceWorker' in navigator) {
   {% endfor %}
 </div>
 
-<section id="mode-vocal" data-etat="attente" aria-label="Conversation vocale" aria-hidden="true">
+<section id="mode-vocal" data-etat="attente" aria-label="Conversation vocale" inert>
   <div class="vocal-entete">
     <strong>Conversation vocale</strong>
     <div class="vocal-commandes">
@@ -1704,7 +2036,7 @@ if ('serviceWorker' in navigator) {
       <div class="orbite" style="--taille:58%;--vitesse:11s"><span class="planete" style="--diametre:9px;--couleur:#b8ffe5"></span></div>
       <div class="orbite" style="--taille:78%;--vitesse:17s"><span class="planete" style="--diametre:13px;--couleur:#62dcb0"></span></div>
       <div class="orbite" style="--taille:98%;--vitesse:25s"><span class="planete" style="--diametre:7px;--couleur:#d5fff0"></span></div>
-      <div class="orbe-dashle"></div>
+      <div class="orbe-dashle" id="orbe-dashle" role="button" tabindex="0" aria-label="Appuie pour interrompre Dashle"></div>
     </div>
     <div class="etat-vocal" id="etat-vocal">En attente</div>
   </div>
@@ -1775,6 +2107,7 @@ const chat        = document.getElementById('chat');
 const form        = document.getElementById('form-message');
 const champ       = document.getElementById('message');
 const btnEnvoyer  = document.getElementById('btn-envoyer');
+const orbeDashle = document.getElementById('orbe-dashle');
 const btnMicro    = document.getElementById('btn-micro');
 const btnVocal    = document.getElementById('btn-vocal');
 const statutVocal = document.getElementById('statut-vocal');
@@ -1785,8 +2118,21 @@ let   apercuMedia     = document.getElementById('apercu-fichier-media');
 const apercuNom       = document.getElementById('apercu-fichier-nom');
 const apercuType      = document.getElementById('apercu-fichier-type');
 const inputImage      = document.getElementById('image-input');
+const btnRouvrirVocal = document.getElementById('btn-rouvrir-vocal');
 
 // CSRF token injecté côté serveur
+document.querySelectorAll('a[href*="/parametres"]').forEach(function(lien) {
+  let appuis = 0, dernierAppui = 0;
+  lien.addEventListener('click', function() {
+    const maintenant = Date.now();
+    appuis = maintenant - dernierAppui < 1400 ? appuis + 1 : 1;
+    dernierAppui = maintenant;
+    if (appuis >= 5) {
+      try { localStorage.setItem('dashle_vocal_diag_open', '1'); } catch(e) {}
+      appuis = 0;
+    }
+  });
+});
 const csrfToken        = __CSRF_TOKEN__;
 const preferencesVocales = __PREFS_VOCALES__;
 if (preferencesVocales.voix_active === false) {
@@ -1802,13 +2148,18 @@ const conversationId   = __CONV_ID__;
 let reco = null;
 let recoEnCours = false;
 let recoResultatsAutorises = false;
+let recoDebutEcouteMs = 0;
+let dernierTranscriptDictee = '';
 
 // États vocaux
 let vocalActif          = false;
 let modeActuel          = 'texte';   // 'texte' | 'dictee' | 'vocal'
 let requeteActiveController = null;
+let reponseActiveElement = null;
 let reponseEnCours      = false;
 let interruptionDemandee = false;
+let texteGenerationEnCours = '';
+let generationInterrompueParReseau = false;
 
 // VAD (Voice Activity Detection) — interruption pendant que Dashle parle
 let vadStream       = null;
@@ -1819,6 +2170,8 @@ let vadAnimation    = null;
 let vadDerniereDetection = 0;
 let vadDebutParole  = 0;
 let vadPret         = false;
+let vadBruitBase = 0.01;
+let vadSeuilCourant = 0.06;
 
 // Flag : vrai pendant toute la durée d'une synthèse vocale pour éviter
 // que le VAD ne déclenche une interruption sur la voix de Dashle lui-même.
@@ -1835,20 +2188,164 @@ let syntheseEnCours = false;
 // Empêche reco.onend de relancer reco automatiquement pendant la synthèse.
 let recoMutePendantTTS = false;
 
-const VAD_SEUIL       = 0.06;  // RMS minimal pour "parole humaine"
-const VAD_DUREE_MIN   = 350;   // ms continus avant interruption (↑ anti-plosive)
+const VAD_SEUIL       = 0.06;  // RMS plancher pour "parole humaine"
+const VAD_DUREE_MIN   = 350;   // ms continus avant interruption (anti-plosive)
+const VAD_MARGE        = 0.025; // marge au-dessus du bruit ambiant estimé
+const VAD_FACTEUR      = 3.0;   // seuil adaptatif = bruit x facteur + marge
 const VAD_COOLDOWN    = 1200;  // ms minimum entre deux interruptions
 const VAD_DELAI_POST  = 350;   // ms de délai anti-écho après fin réelle de synthèse
+const AUDIO_SECOURS_MAX_MS = 20000;
+const AUDIO_SECOURS_SILENCE_MS = 1200;
+let audioSecoursActif = false;
+let audioSecoursRecorder = null;
+let audioSecoursStream = null;
+let audioSecoursContext = null;
+let audioSecoursAnimation = null;
+let audioSecoursDebut = 0;
+let audioSecoursParoleDepuis = 0;
+
+function arreterSecoursAudio() {
+  if (audioSecoursAnimation) cancelAnimationFrame(audioSecoursAnimation);
+  audioSecoursAnimation = null;
+  if (audioSecoursRecorder && audioSecoursRecorder.state !== 'inactive') {
+    try { audioSecoursRecorder.stop(); } catch(e) {}
+  }
+  if (audioSecoursStream) audioSecoursStream.getTracks().forEach(function(t) { t.stop(); });
+  audioSecoursStream = null;
+  if (audioSecoursContext) { try { audioSecoursContext.close(); } catch(e) {} }
+  audioSecoursContext = null;
+  audioSecoursRecorder = null;
+  audioSecoursActif = false;
+}
+
+async function demarrerSecoursAudio() {
+  if (audioSecoursActif || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia
+      || typeof window.MediaRecorder !== 'function') {
+    return false;
+  }
+  try {
+    audioSecoursStream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 }
+    });
+    let mime = 'audio/webm';
+    if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+      mime = 'audio/webm;codecs=opus';
+    } else if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported('audio/ogg;codecs=opus')) {
+      mime = 'audio/ogg;codecs=opus';
+    }
+    const morceaux = [];
+    audioSecoursRecorder = new MediaRecorder(audioSecoursStream, { mimeType: mime });
+    audioSecoursActif = true;
+    audioSecoursDebut = performance.now();
+    audioSecoursParoleDepuis = 0;
+    afficherEtatVocal('ecoute', 'Enregistrement de secours…');
+    afficherStatutVocal("🎙️ Ton audio sera envoyé à Dashle pour transcription.");
+
+    audioSecoursRecorder.ondataavailable = function(e) {
+      if (e.data && e.data.size) morceaux.push(e.data);
+    };
+    audioSecoursRecorder.onstop = async function() {
+      const dureeMs = Math.min(AUDIO_SECOURS_MAX_MS, Math.round(performance.now() - audioSecoursDebut));
+      const blob = new Blob(morceaux, { type: mime });
+      arreterSecoursAudio();
+      if (!blob.size) {
+        afficherEtatVocal('erreur', "Je n'arrive pas à t'entendre, réessaie");
+        afficherStatutVocal("Je n'arrive pas à t'entendre, réessaie");
+        return;
+      }
+      const formAudio = new FormData();
+      formAudio.append('audio', blob, 'dashle-vocal.' + (mime.indexOf('ogg') >= 0 ? 'ogg' : 'webm'));
+      try {
+        const rep = await fetch('/api/transcrire', {
+          method: 'POST',
+          headers: { 'X-CSRF-Token': csrfToken, 'X-Dashle-Audio-Duration-Ms': String(dureeMs) },
+          body: formAudio,
+          credentials: 'same-origin'
+        });
+        const data = await rep.json();
+        if (!rep.ok || !data.texte) throw new Error(data.erreur || 'Transcription indisponible');
+        champ.value = data.texte;
+        champ.style.height = 'auto';
+        if (vocalActif) {
+          afficherEtatVocal('reflexion', 'Dashle réfléchit…');
+          afficherStatutVocal('');
+          try { form.requestSubmit(); } catch(e) { form.dispatchEvent(new Event('submit', {bubbles:true,cancelable:true})); }
+        }
+      } catch(e) {
+        console.warn('[DASHLE][AudioFallback] échec transcription', e && e.message);
+        afficherEtatVocal('erreur', "Je n'arrive pas à t'entendre, réessaie");
+        afficherStatutVocal(e && e.message ? e.message : "Je n'arrive pas à t'entendre, réessaie");
+      }
+    };
+
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (AudioCtx) {
+      audioSecoursContext = new AudioCtx();
+      const source = audioSecoursContext.createMediaStreamSource(audioSecoursStream);
+      const analyser = audioSecoursContext.createAnalyser();
+      analyser.fftSize = 1024;
+      source.connect(analyser);
+      const donnees = new Uint8Array(analyser.fftSize);
+      const verifier = function() {
+        if (!audioSecoursActif) return;
+        const elapsed = performance.now() - audioSecoursDebut;
+        analyser.getByteTimeDomainData(donnees);
+        let somme = 0;
+        for (let i = 0; i < donnees.length; i++) {
+          const x = (donnees[i] - 128) / 128;
+          somme += x * x;
+        }
+        const rms = Math.sqrt(somme / donnees.length);
+        if (rms > 0.035) {
+          audioSecoursParoleDepuis = performance.now();
+        } else if (audioSecoursParoleDepuis && performance.now() - audioSecoursParoleDepuis >= AUDIO_SECOURS_SILENCE_MS) {
+          try { audioSecoursRecorder.stop(); } catch(e) {}
+          return;
+        }
+        if (elapsed >= AUDIO_SECOURS_MAX_MS) {
+          try { audioSecoursRecorder.stop(); } catch(e) {}
+          return;
+        }
+        audioSecoursAnimation = requestAnimationFrame(verifier);
+      };
+      audioSecoursAnimation = requestAnimationFrame(verifier);
+    } else {
+      setTimeout(function() {
+        if (audioSecoursActif) { try { audioSecoursRecorder.stop(); } catch(e) {} }
+      }, AUDIO_SECOURS_MAX_MS);
+    }
+    audioSecoursRecorder.start(250);
+    return true;
+  } catch(e) {
+    arreterSecoursAudio();
+    console.warn('[DASHLE][AudioFallback] micro indisponible', e);
+    return false;
+  }
+}
+
+
 
 // Compteur de backoff pour les relances SpeechRecognition sans résultat.
 let nbRelancesVocal = 0;
 let minuteurRelanceReco = null;
 const DELAI_RELANCE_RECO_INITIAL = 300;
-const DELAI_RELANCE_RECO_MAX = 5000;
+const DELAI_RELANCE_RECO_MAX = 2000;
 const MAX_PALIERS_RELANCE_RECO = 6;
+let nbFinsSansTranscriptionVocal = 0;
+const DUREE_FIN_IMMEDIATE_VOCAL_MS = 1200;
+const MAX_FINS_SANS_TRANSCRIPTION_VOCAL = 3;
 
 // Attendre que les résultats finaux se stabilisent avant d'envoyer le tour vocal.
 let transcriptionFinaleVocale = '';
+const VOCAL_DIAG_STORAGE_KEY = 'dashle_vocal_diagnostic_v1';
+function journaliserDiagnosticVocal(type, detail) {
+  try {
+    const courant = JSON.parse(localStorage.getItem(VOCAL_DIAG_STORAGE_KEY) || '[]');
+    courant.push({ ts: new Date().toISOString(), type: String(type || ''), detail: detail || null });
+    while (courant.length > 120) courant.shift();
+    localStorage.setItem(VOCAL_DIAG_STORAGE_KEY, JSON.stringify(courant));
+  } catch (e) {}
+}
 let dernierIndexFinalVocal = 0;
 let minuteurFinPhraseVocale = null;
 const DELAI_FIN_PHRASE_VOCALE = 1600;
@@ -1866,12 +2363,39 @@ function reinitialiserTranscriptionVocale() {
   dernierIndexFinalVocal = 0;
 }
 
+function ajouterTexteFinalVocalUnique(texte) {
+  const candidat = String(texte || '').trim().replace(/\s+/g, ' ');
+  if (!candidat) return;
+  const courant = transcriptionFinaleVocale.trim().replace(/\s+/g, ' ');
+  if (!courant) {
+    transcriptionFinaleVocale = candidat;
+    return;
+  }
+  if (courant === candidat || courant.endsWith(' ' + candidat)) return;
+  if (candidat.startsWith(courant + ' ')) {
+    transcriptionFinaleVocale = candidat;
+    return;
+  }
+  const motsCourant = courant.split(' ');
+  const motsCandidat = candidat.split(' ');
+  let chevauchement = 0;
+  const maximum = Math.min(motsCourant.length, motsCandidat.length);
+  for (let taille = maximum; taille > 0; taille -= 1) {
+    if (motsCourant.slice(-taille).join(' ') === motsCandidat.slice(0, taille).join(' ')) {
+      chevauchement = taille;
+      break;
+    }
+  }
+  const suffixe = motsCandidat.slice(chevauchement).join(' ');
+  if (suffixe) transcriptionFinaleVocale = courant + ' ' + suffixe;
+}
+
 function planifierEnvoiFinPhraseVocale() {
   annulerFinPhraseVocale();
   minuteurFinPhraseVocale = setTimeout(function() {
     minuteurFinPhraseVocale = null;
     if (!vocalActif || reponseEnCours || syntheseEnCours || recoMutePendantTTS) return;
-    const texteComplet = transcriptionFinaleVocale.trim();
+    const texteComplet = transcriptionFinaleVocale.trim()  // resultIndex repart à zéro ; ne pas dupliquer les finals;
     if (!texteComplet) return;
 
     transcriptionFinaleVocale = '';
@@ -1897,7 +2421,7 @@ const WATCHDOG_MS = 9000;
 function armerWatchdog() {
   desarmerWatchdog();
   watchdogEcoute = setTimeout(function() {
-    if (!vocalActif || reponseEnCours || syntheseEnCours) return;
+    if (!vocalActif || reponseEnCours || syntheseEnCours || transcriptionFinaleVocale.trim()) return;
     console.warn('[DASHLE] Watchdog écoute déclenché — relance reco');
     recoEnCours = false;
     try { reco && reco.abort(); } catch(e) {}
@@ -1939,21 +2463,92 @@ function reinitialiserEtatVocal() {
 // =====================================================================
 // Helpers UI
 // =====================================================================
+function journaliserEtatAudioReconnaissance() {
+  let gum = 'indisponible';
+  try {
+    const tracks = vadStream && typeof vadStream.getAudioTracks === 'function'
+      ? vadStream.getAudioTracks() : [];
+    gum = tracks.length ? tracks.map(function(t) { return t.readyState; }) : 'aucun flux actif';
+  } catch (e) { gum = 'erreur'; }
+  let audioContext = vadAudioContext ? vadAudioContext.state : 'aucun';
+  let mediaRecorder = typeof window.MediaRecorder === 'function';
+  let tts = 'indisponible';
+  let audioElement = null;
+  try {
+    tts = ('speechSynthesis' in window)
+      ? { speaking: window.speechSynthesis.speaking, pending: window.speechSynthesis.pending }
+      : 'indisponible';
+    audioElement = document.querySelector('audio');
+    audioElement = audioElement ? {
+      paused: audioElement.paused, readyState: audioElement.readyState,
+      currentTime: audioElement.currentTime
+    } : 'aucun élément audio';
+  } catch (e) { audioElement = 'erreur'; }
+  console.log('[DASHLE][AudioState]', {
+    getUserMedia: gum, AudioContext: audioContext, MediaRecorder: mediaRecorder,
+    speechSynthesis: tts, audioTTS: audioElement
+  });
+}
+
 function afficherEtatVocal(etat, libelle) {
   modeVocalEl.dataset.etat = etat;
   etatVocalEl.textContent  = libelle;
 }
 
-function ouvrirModeVocal() {
-  modeVocalEl.classList.add('visible');
-  modeVocalEl.setAttribute('aria-hidden', 'false');
-}
-
-function fermerModeVocal() {
+function synchroniserVueVocale() {
+  if (vocalActif) return true;
+  if (modeVocalEl.contains(document.activeElement)) {
+    try { document.activeElement.blur(); } catch(e) {}
+  }
+  modeVocalEl.setAttribute('inert', '');
   modeVocalEl.classList.remove('visible');
-  modeVocalEl.setAttribute('aria-hidden', 'true');
+  if (btnRouvrirVocal) btnRouvrirVocal.classList.remove('actif');
+  return false;
 }
 
+function ouvrirModeVocal() {
+  if (!synchroniserVueVocale()) return false;
+  modeVocalEl.classList.add('visible');
+  modeVocalEl.removeAttribute('inert');
+  if (btnRouvrirVocal) btnRouvrirVocal.classList.remove('actif');
+  return true;
+}
+
+function fermerModeVocal(autoriserRouvrir = true) {
+  if (modeVocalEl.contains(document.activeElement)) {
+    try { document.activeElement.blur(); } catch(e) {}
+  }
+  modeVocalEl.setAttribute('inert', '');
+  modeVocalEl.classList.remove('visible');
+  if (btnRouvrirVocal) {
+    btnRouvrirVocal.classList.toggle('actif', Boolean(vocalActif && autoriserRouvrir));
+  }
+}
+
+function desactiverModeVocal() {
+  vocalActif = false;
+  modeActuel = 'texte';
+  interruptionDemandee = true;
+  reinitialiserTranscriptionVocale();
+  annulerFinPhraseVocale();
+  if (minuteurRelanceReco !== null) {
+    clearTimeout(minuteurRelanceReco);
+    minuteurRelanceReco = null;
+  }
+  reinitialiserEtatVocal();
+  arreterSecoursAudio();
+  btnVocal.classList.remove('vocal-on', 'ecoute', 'parle');
+  btnMicro.classList.remove('actif');
+  afficherStatutVocal('');
+  fermerModeVocal(false);
+  afficherEtatVocal('attente', 'En attente');
+  interruptionDemandee = false;
+}
+
+
+// Source de vérité : au chargement, le mode vocal désactivé ne peut jamais
+// laisser une vue ou un bouton de réouverture visibles.
+synchroniserVueVocale();
 function afficherStatutVocal(texte) {
   statutVocal.textContent = texte;
   statutVocal.classList.toggle('visible', !!texte);
@@ -1965,43 +2560,35 @@ function echapperHtml(texte) {
   });
 }
 
+function texteSansMarqueursMarkdown(texte) {
+  return String(texte || '')
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/\x60\x60\x60[\w+-]*\n?([\s\S]*?)\x60\x60\x60/g, '$1')
+    .replace(/\x60([^\x60\n]+)\x60/g, '$1')
+    .replace(/[*_~#>]/g, '')
+    .replace(/^[-+*]\s+/gm, '')
+    .replace(/^\d+[.)]\s+/gm, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+}
 function rendreMarkdown(texte) {
-  const blocsCode = [];
-  let html = echapperHtml(texte).replace(/```([\w+-]*)\s*\n([\s\S]*?)```/g, function(_, langue, code) {
-    const classe = /^[\w+-]*$/.test(langue) ? langue : '';
-    const bouton = '<button type="button" class="copier-code">Copier le code</button>';
-    blocsCode.push('<div class="bloc-code">' + bouton + '<pre><code' + (classe ? ' class="language-' + classe + '"' : '') + '>' + code.replace(/\n$/, '') + '</code></pre></div>');
-    return '\u0000CODE' + (blocsCode.length - 1) + '\u0000';
-  });
-  html = html
-    .replace(/^###\s+(.+)$/gm, '<h3>$1</h3>')
-    .replace(/^##\s+(.+)$/gm, '<h2>$1</h2>')
-    .replace(/^#\s+(.+)$/gm, '<h1>$1</h1>')
-    .replace(/(?:^|\n)((?:[-*+]\s+.+(?:\n|$))+)/g, function(_, liste) {
-      return '\n<ul>' + liste.trim().split('\n').map(function(ligne) { return '<li>' + ligne.replace(/^[-*+]\s+/, '') + '</li>'; }).join('') + '</ul>';
-    })
-    .replace(/(?:^|\n)((?:\d+\.\s+.+(?:\n|$))+)/g, function(_, liste) {
-      return '\n<ol>' + liste.trim().split('\n').map(function(ligne) { return '<li>' + ligne.replace(/^\d+\.\s+/, '') + '</li>'; }).join('') + '</ol>';
-    })
-    .replace(/`([^`\n]+)`/g, '<code>$1</code>')
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/__(.+?)__/g, '<strong>$1</strong>')
-    .replace(/\*(.+?)\*/g, '<em>$1</em>')
-    .replace(/_(.+?)_/g, '<em>$1</em>')
-    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" rel="noopener noreferrer" target="_blank">$1</a>')
-    .replace(/\n/g, '<br>');
-  return html.replace(/\u0000CODE(\d+)\u0000/g, function(_, index) { return blocsCode[Number(index)]; });
+  const source = String(texte || '');
+  if (!window.marked || !window.DOMPurify) return echapperHtml(source).replace(/\\n/g, '<br>');
+  const brut = window.marked.parse(source, { gfm: true, breaks: true, headerIds: false, mangle: false, sanitize: false });
+  const propre = window.DOMPurify.sanitize(brut, { USE_PROFILES: { html: true }, FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed', 'form', 'input', 'button'] });
+  const conteneur = document.createElement('div'); conteneur.innerHTML = propre;
+  conteneur.querySelectorAll('a').forEach(function(lien) { const href = lien.getAttribute('href') || ''; if (!/^(?:https?:|mailto:|tel:)/i.test(href)) lien.removeAttribute('href'); lien.setAttribute('target', '_blank'); lien.setAttribute('rel', 'noopener noreferrer'); });
+  conteneur.querySelectorAll('pre').forEach(function(pre) { if (pre.parentElement && pre.parentElement.classList.contains('bloc-code')) return; const bloc = document.createElement('div'); bloc.className = 'bloc-code'; const bouton = document.createElement('button'); bouton.type = 'button'; bouton.className = 'copier-code'; bouton.textContent = 'Copier le code'; bouton.setAttribute('aria-label', 'Copier le code'); pre.parentNode.insertBefore(bloc, pre); bloc.appendChild(bouton); bloc.appendChild(pre); });
+  return conteneur.innerHTML;
 }
 
-function afficherMarkdown(message, texte) {
-  message.dataset.markdownSource = String(texte);
-  message.innerHTML = rendreMarkdown(texte);
-}
+function afficherMarkdown(message, texte) { message.dataset.markdownSource = String(texte); message.innerHTML = rendreMarkdown(texte); }
+function afficherMarkdownStreaming(message, texte) { message.dataset.markdownSource = String(texte); message.innerHTML = rendreMarkdown(texte); }
 
-document.querySelectorAll('#chat .msg.bot').forEach(function(message) {
-  afficherMarkdown(message, message.textContent);
-});
-
+function afficherMarkdownInitial() { document.querySelectorAll('#chat .msg.bot').forEach(function(message) { afficherMarkdown(message, message.textContent); }); }
+document.addEventListener('DOMContentLoaded', afficherMarkdownInitial);
 function ajouterMessage(texte, classe) {
   const accueil = document.querySelector('.accueil-vide');
   if (accueil) accueil.remove();
@@ -2016,22 +2603,22 @@ function ajouterMessage(texte, classe) {
   return div;
 }
 
-function ajouterMessageImage(texte, fichier) {
+function ajouterMessageImage(texte, fichier, miniature) {
   if (!fichier || !fichier.type.startsWith('image/')) {
     return ajouterMessage(texte || '📎 Fichier envoyé', 'user');
   }
   const message = ajouterMessage(texte, 'user');
-  const url = URL.createObjectURL(fichier);
   const lien = document.createElement('a');
   lien.className = 'image-message-lien';
-  lien.href = url;
+  lien.href = miniature || '#';
   lien.target = '_blank';
   lien.rel = 'noopener noreferrer';
   lien.setAttribute('aria-label', 'Ouvrir l’image envoyée');
   const image = document.createElement('img');
   image.className = 'image-message';
-  image.src = url;
+  image.src = miniature || '';
   image.alt = fichier.name ? 'Image envoyée : ' + fichier.name : 'Image envoyée';
+  image.addEventListener('error', function(){ lien.replaceWith(document.createTextNode('Image envoyée : ' + (fichier.name || 'fichier image'))); });
   lien.appendChild(image);
   message.appendChild(lien);
   return message;
@@ -2078,7 +2665,8 @@ function ajouterReponse(texte, messageId) {
   afficherMarkdown(message, texte);
 
   let actionsHtml = '<div class="actions-reponse">'
-    + '<button type="button" class="action-copier" title="Copier" aria-label="Copier">' + iconeAction('copier') + '</button>';
+    + '<button type="button" class="action-copier" title="Copier" aria-label="Copier">' + iconeAction('copier') + '</button>'
+    + '';
   if (estConnecte && preferencesVocales.conserver_historique) {
     actionsHtml += '<button type="button" class="action-feedback" data-valeur="positif" title="J\'aime" aria-label="J\'aime">' + iconeAction('positif') + '</button>'
       + '<button type="button" class="action-feedback" data-valeur="negatif" title="Je n\'aime pas" aria-label="Je n\'aime pas">' + iconeAction('negatif') + '</button>'
@@ -2095,6 +2683,159 @@ function ajouterReponse(texte, messageId) {
   chat.appendChild(enveloppe);
   chat.scrollTop = chat.scrollHeight;
   return enveloppe;
+}
+
+function creerSuiviAction(action) {
+  const bloc = document.createElement('div');
+  bloc.className = 'suivi-action' + (action.type === 'image' ? ' image-generation' : '');
+  bloc.dataset.actionId = action.id || '';
+  bloc.innerHTML = '<div class="suivi-action-entete"><span class="suivi-action-indicateur"></span><strong class="suivi-action-titre"></strong><button type="button" class="suivi-action-annuler" title="Annuler" aria-label="Annuler">Annuler</button></div><div class="suivi-action-etapes"></div>';
+  const titre = bloc.querySelector('.suivi-action-titre');
+  titre.textContent = action.type === 'image' ? 'Génération d’image' : action.type === 'pdf' ? 'Génération de PDF' : 'Action Dashle';
+  const annuler = bloc.querySelector('.suivi-action-annuler');
+  annuler.style.display = action.cancelable ? '' : 'none';
+  annuler.addEventListener('click', function() {
+    if (requeteActiveController) {
+      try { requeteActiveController.abort(); } catch(e) {}
+      requeteActiveController = null;
+    }
+    reponseEnCours = false;
+    mettreAJourSuiviAction(bloc, {
+      id: bloc.dataset.actionId, type: action.type, step: 'annule',
+      message: 'Action annulée', event: 'action_cancelled'
+    });
+  });
+  chat.appendChild(bloc);
+  chat.scrollTop = chat.scrollHeight;
+  return bloc;
+}
+
+function mettreAJourSuiviAction(bloc, action) {
+  if (!bloc) return;
+  const etapes = bloc.querySelector('.suivi-action-etapes');
+  const indicateur = bloc.querySelector('.suivi-action-indicateur');
+  const messages = { preparation: 'Préparation de l’image…', generation: 'Génération en cours…', finalisation: 'Finalisation…' };
+  const libelle = action.message || messages[action.step] || 'Action en cours…';
+  if (action.event === 'action_failed') {
+    indicateur.className = 'suivi-action-indicateur echec';
+    const ligne = document.createElement('div'); ligne.className = 'suivi-action-etape echec';
+    ligne.textContent = '✕ Génération échouée'; etapes.appendChild(ligne);
+    if (!bloc.querySelector('.suivi-action-image-retry') && action.type === 'image') {
+      const bouton = document.createElement('button');
+      bouton.type = 'button'; bouton.className = 'primaire suivi-action-image-retry';
+      bouton.textContent = 'Réessayer';
+      bouton.addEventListener('click', function(){ genererArtifactDansChat(bloc.dataset.prompt || '', 'image'); });
+      etapes.appendChild(bouton);
+    }
+    bloc.dataset.generationState = 'failed';
+    bloc.dataset.generationActive = 'false';
+    return;
+  }
+  if (action.event === 'action_cancelled' || action.step === 'annule') {
+    indicateur.className = 'suivi-action-indicateur annule';
+    const ligne = document.createElement('div'); ligne.className = 'suivi-action-etape annule';
+    ligne.textContent = '— Génération annulée'; etapes.appendChild(ligne);
+    bloc.dataset.generationState = 'cancelled';
+    bloc.dataset.generationActive = 'false';
+    return;
+  }
+  if (action.event === 'action_completed' || action.step === 'termine') {
+    indicateur.className = 'suivi-action-indicateur termine';
+    const ligne = document.createElement('div'); ligne.className = 'suivi-action-etape termine';
+    ligne.textContent = '✓ Image générée'; etapes.appendChild(ligne);
+    bloc.dataset.generationState = 'completed';
+    bloc.dataset.generationActive = 'false';
+    return;
+  }
+  indicateur.className = 'suivi-action-indicateur actif';
+  const precedent = etapes.querySelector('.suivi-action-etape.actif');
+  if (precedent) precedent.classList.remove('actif');
+  if (action.type === 'image') {
+    bloc.dataset.generationState = action.step || 'generation';
+    bloc.dataset.generationActive = 'true';
+    let carte = bloc.querySelector('.suivi-action-image-progress');
+    if (!carte) { carte = document.createElement('div'); carte.className = 'suivi-action-image-progress'; etapes.appendChild(carte); }
+    carte.innerHTML = '<div class="titre"></div><div class="sous-titre">Une image originale se prépare.</div><div class="barre" aria-hidden="true"></div>';
+    carte.querySelector('.titre').textContent = libelle;
+  } else {
+    const ligne = document.createElement('div'); ligne.className = 'suivi-action-etape actif';
+    ligne.innerHTML = '<span class="suivi-action-points">•••</span> <span></span>';
+    ligne.lastElementChild.textContent = libelle; etapes.appendChild(ligne);
+  }
+  chat.scrollTop = chat.scrollHeight;
+}
+
+function ouvrirVisionneuseImage(url, alt, prompt, filename) {
+  let viewer = document.getElementById('dashle-image-viewer');
+  if (!viewer) {
+    viewer = document.createElement('div'); viewer.id = 'dashle-image-viewer'; viewer.className = 'image-viewer'; viewer.hidden = true;
+    viewer.innerHTML = '<button type="button" class="image-viewer-fermer" aria-label="Fermer">×</button><img alt=""><div class="image-viewer-bar"><button type="button" class="primaire" data-action="download">Télécharger</button><button type="button" data-action="share">Partager</button><button type="button" data-action="retry">Régénérer</button><button type="button" data-action="close">Fermer</button></div>';
+    document.body.appendChild(viewer);
+    viewer.querySelector('[data-action="close"]').addEventListener('click', function(){ viewer.hidden = true; });
+    viewer.querySelector('.image-viewer-fermer').addEventListener('click', function(){ viewer.hidden = true; });
+    viewer.addEventListener('click', function(e){ if(e.target === viewer) viewer.hidden = true; });
+  }
+  const image = viewer.querySelector('img'); image.src = url; image.alt = alt || 'Image générée par DASHLE';
+  viewer.querySelector('[data-action="download"]').onclick = function(){ const a=document.createElement('a'); a.href=url; a.download=filename || 'image-dashle.png'; document.body.appendChild(a); a.click(); a.remove(); };
+  viewer.querySelector('[data-action="share"]').onclick = async function(){
+    try {
+      if (navigator.share) { await navigator.share({title:'Image générée par DASHLE', text: alt || 'Image générée par DASHLE', url:url}); return; }
+    } catch(e) { if (e && e.name === 'AbortError') return; }
+    try { await navigator.clipboard.writeText(url); this.textContent='Lien copié'; setTimeout(()=>{this.textContent='Partager';},1600); }
+    catch(e) { window.prompt('Copie ce lien :', url); }
+  };
+  viewer.querySelector('[data-action="retry"]').onclick = function(){ viewer.hidden = true; if(prompt) genererArtifactDansChat(prompt, 'image'); };
+  viewer.hidden = false;
+}
+
+function afficherEchecImage(bloc, prompt, message) {
+  if (!bloc) return;
+  const zone=document.createElement('div'); zone.className='suivi-action-image-resultat';
+  const texte=document.createElement('div'); texte.textContent=message || 'La génération a échoué. Réessaie.'; zone.appendChild(texte);
+  const actions=document.createElement('div'); actions.className='suivi-action-image-actions';
+  const bouton=document.createElement('button'); bouton.className='primaire'; bouton.textContent='Réessayer';
+  bouton.onclick=function(){ genererArtifactDansChat(prompt || '', 'image'); };
+  actions.appendChild(bouton); zone.appendChild(actions); bloc.appendChild(zone);
+}
+
+function afficherQuotaImage(bloc, quota, prompt) {
+  if (!bloc) return;
+  const zone = document.createElement('div'); zone.className = 'suivi-action-image-resultat';
+  const reset = quota && quota.reset_at ? new Date(quota.reset_at) : null;
+  const heure = reset && !isNaN(reset.getTime()) ? reset.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : '00:00';
+  const texte = (quota && quota.message ? quota.message : 'Tu as utilisé tes images du jour. Elles reviennent à HH:MM').replace('HH:MM', heure);
+  const p = document.createElement('div'); p.textContent = texte; zone.appendChild(p);
+  const actions = document.createElement('div'); actions.className = 'suivi-action-image-actions';
+  const bouton = document.createElement('button'); bouton.className='primaire';
+  const visiteur = quota && quota.niveau === 'visitor'; bouton.textContent = visiteur ? 'Créer un compte' : 'Voir les forfaits';
+  bouton.onclick = function(){ window.location.href = visiteur ? '/inscription' : '/tarifs'; };
+  actions.appendChild(bouton); zone.appendChild(actions); bloc.appendChild(zone);
+}
+
+function finaliserSuiviAction(bloc, result) {
+  if (!bloc || !result || !result.artifact || !result.artifact.data) return;
+  const artifact = result.artifact;
+  try {
+    const bytes = Uint8Array.from(atob(String(artifact.data)), function(c){ return c.charCodeAt(0); });
+    const mime = String(artifact.mime_type || 'application/octet-stream').toLowerCase();
+    if (artifact.type === 'image' && !mime.startsWith('image/')) throw new Error('MIME image invalide');
+    const blob = new Blob([bytes], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const contenu = document.createElement('div'); contenu.className = 'suivi-action-resultat suivi-action-image-resultat';
+    if (artifact.type === 'image') {
+      const lien = document.createElement('a'); lien.className = 'image-message-lien'; lien.href = url; lien.setAttribute('aria-label','Ouvrir l’image générée');
+      const image = document.createElement('img'); image.className = 'image-message'; image.src = url; image.alt = 'Image générée par DASHLE';
+      image.onclick = function(e){ e.preventDefault(); ouvrirVisionneuseImage(url, image.alt, bloc.dataset.prompt || '', artifact.filename || 'image-dashle.png'); };
+      image.onerror = function(){ contenu.dataset.imageError='true'; image.alt='Image générée indisponible'; };
+      lien.appendChild(image); contenu.appendChild(lien);
+    } else {
+      const lien = document.createElement('a'); lien.href=url; lien.download=artifact.filename || 'dashle-document.pdf'; lien.className='pdf-telechargement-chat'; lien.textContent='Ouvrir / télécharger le PDF'; contenu.appendChild(lien);
+    }
+    bloc.appendChild(contenu); chat.scrollTop=chat.scrollHeight;
+  } catch(erreur) {
+    console.error('[DASHLE] Artefact reçu mais rendu impossible', erreur);
+    const erreurEl=document.createElement('div'); erreurEl.className='suivi-action-etape echec'; erreurEl.textContent='✕ L’image générée n’a pas pu être affichée.'; bloc.appendChild(erreurEl);
+  }
 }
 
 function afficherReflexion() {
@@ -2130,10 +2871,16 @@ function bloquerEnvoi(secondes) {
   }, 1000);
 }
 
+function estDemandeImage(texte) {
+  const normalise = String(texte || '').toLocaleLowerCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g, '');
+  return /\\b(?:gener(?:e|es|ez|er|ee|ees|es)|cre(?:e|es|ez|er|ee|ees|es)|fais|faire|dessin(?:e|es|ez|er)?|illustr(?:e|es|ez|er)?|montre|represent(?:e|es|ez|er)?)\\b/.test(normalise)
+    && /\\b(?:image|illustration|logo|affiche|schema|diagramme|infographie|visuel|dessin)\\b/.test(normalise);
+}
+
 function estDemandePdf(texte) {
   const normalise = String(texte || '').toLocaleLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
   return /\bpdf\b/.test(normalise)
-    && /\b(genere|generer|creer|cree|fais|faire|fabrique|fabriquer|telecharger|telecharge|produis|produire|exporte|exporter|exportez|imprime|imprimer)\b/.test(normalise);
+    && /\b(genere|generer|creer|cree|fais|faire|fabrique|fabriquer|telecharger|telecharge|produis|produire|exporte|exporter|exportez|imprime|imprimer|transforme|transformer|prepare|preparer)\b/.test(normalise);
 }
 
 function extraireSujetPdf(texte) {
@@ -2147,9 +2894,87 @@ function extraireSujetPdf(texte) {
     .trim();
 }
 
+function demandePdfSansSujet(texte) {
+  const normalise = String(texte || '').toLocaleLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  return /^(peux[- ]tu|pourrais[- ]tu|est[- ]ce que tu peux|tu peux|peut[- ]tu)\s+(me\s+)?(genere|generer|creer|cree|fais|faire|fabriquer|produire|produis)\s+(un|une)?\s*pdf(?:\s+(s'il te plait|stp))?\s*\??$/.test(normalise);
+}
+
+function demandeIllustrationPedagogique(texte) {
+  const t = String(texte || '').toLocaleLowerCase();
+  return !/\b(image|illustration|logo|affiche|schéma|diagramme|infographie)\b/.test(t)
+    && /\b(explique|comment fonctionne|fonctionnement|processus|architecture|système|concept|comparaison|notion)\b/.test(t)
+    && t.length >= 35;
+}
+
 function estPdfTempsReel(texte) {
   const normalise = String(texte || '').toLocaleLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
   return /\b(meteo|actualites?|nouvelles recentes|temps reel|date et heure|heure locale)\b/.test(normalise);
+}
+
+async function genererArtifactDansChat(texte, type) {
+  ajouterMessage(texte, 'user'); champ.value = ''; champ.style.height = 'auto';
+  const headers = { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8', 'Accept': 'text/event-stream' };
+  if (estConnecte) headers['X-CSRF-Token'] = csrfToken;
+  let suivi = null;
+  try {
+    const body = new URLSearchParams(); body.set('message', texte);
+    const controller = new AbortController();
+    requeteActiveController = controller; reponseEnCours = true;
+    const res = await fetch('/repondre_flux', { method: 'POST', headers, body: body.toString(), cache: 'no-store', signal: controller.signal });
+    if (!res.ok || !res.body) throw new Error('Flux indisponible (' + res.status + ')');
+    const lecteur = res.body.getReader(); const decodeur = new TextDecoder(); let tampon = '';
+    while (true) {
+      const {done, value} = await lecteur.read();
+      if (done) break;
+      tampon += decodeur.decode(value, {stream:true});
+      const lignes = tampon.split('\n'); tampon = lignes.pop();
+      for (const ligne of lignes) {
+        if (!ligne.startsWith('data:')) continue;
+        let ev; try { ev = JSON.parse(ligne.slice(5).trim()); } catch(e) { continue; }
+        if (ev.event === 'action_started') {
+          suivi = creerSuiviAction(ev.action);
+          suivi.dataset.prompt = texte;
+          mettreAJourSuiviAction(suivi, ev.action);
+        } else if (ev.event === 'action_progress') {
+          if (!suivi) suivi = creerSuiviAction(ev.action);
+          mettreAJourSuiviAction(suivi, ev.action);
+        } else if (ev.event === 'action_completed') {
+          if (!suivi) suivi = creerSuiviAction(ev.action);
+          mettreAJourSuiviAction(suivi, ev.action);
+          finaliserSuiviAction(suivi, ev.action.result || {});
+        } else if (ev.event === 'action_failed') {
+          if (!suivi) suivi = creerSuiviAction(ev.action);
+          mettreAJourSuiviAction(suivi, ev.action);
+          if (ev.action.result && ev.action.result.quota) afficherQuotaImage(suivi, ev.action.result.quota, texte);
+          else afficherEchecImage(suivi, texte, ev.action.error);
+        } else if (ev.event === 'action_cancelled') {
+          if (!suivi) suivi = creerSuiviAction(ev.action);
+          mettreAJourSuiviAction(suivi, ev.action);
+        }
+        if (ev.termine && ev.reponse && !estConnecte) {
+          try {
+            await fetch('/confirmer_message', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ reponse: ev.reponse }),
+              cache: 'no-store'
+            });
+          } catch (confirmationErreur) {
+            console.warn('[DASHLE] Résultat action non confirmé en session visiteur', confirmationErreur);
+          }
+        }
+        if (ev.erreur) throw new Error(ev.erreur);
+      }
+    }
+  } catch (erreur) {
+    if (erreur.name !== 'AbortError') ajouterMessage(erreur.message || 'La génération a échoué. Réessaie.', 'bot');
+  } finally {
+    if (requeteActiveController === controller) {
+      requeteActiveController = null;
+      reponseEnCours = false;
+      texteGenerationEnCours = '';
+    }
+  }
 }
 
 async function genererPdfTempsReelDansChat(texte) {
@@ -2208,12 +3033,56 @@ async function genererPdfTempsReelDansChat(texte) {
 // Gestion des générations SSE
 // =====================================================================
 function arreterGeneration() {
+  if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+  if (reponseActiveElement && reponseActiveElement.isConnected) {
+    reponseActiveElement.remove();
+  }
+  reponseActiveElement = null;
+  const messagesActifs = Array.from(document.querySelectorAll('.message-wrap.bot .msg'))
+    .filter(function(message) { return !message.dataset.messageId; });
+  const dernierMessageActif = messagesActifs[messagesActifs.length - 1];
+  if (dernierMessageActif && dernierMessageActif.parentElement) {
+    dernierMessageActif.parentElement.remove();
+  }
   if (requeteActiveController) {
     try { requeteActiveController.abort(); } catch(e) {}
     requeteActiveController = null;
   }
   reponseEnCours = false;
 }
+
+function gererPerteReseau() {
+  const texteAReprendre = texteGenerationEnCours;
+  const generationActive = reponseEnCours || Boolean(requeteActiveController);
+  if (!generationActive) return;
+
+  generationInterrompueParReseau = true;
+  arreterGeneration();
+
+  if (texteAReprendre && !champ.value.trim()) {
+    champ.value = texteAReprendre;
+    champ.style.height = 'auto';
+    champ.style.height = Math.min(champ.scrollHeight, 120) + 'px';
+  }
+  champ.placeholder = 'Connexion perdue — réessaie quand le réseau revient';
+  if (vocalActif) {
+    afficherEtatVocal('erreur', 'Connexion perdue. Réessaie quand le réseau revient.');
+    afficherStatutVocal('Connexion perdue. Aucun renvoi automatique n’a été effectué.');
+  }
+}
+
+function gererRetourReseau() {
+  if (!generationInterrompueParReseau) return;
+  generationInterrompueParReseau = false;
+  const placeholder = champ.dataset.placeholderReseauInitial || '';
+  champ.placeholder = placeholder;
+  if (vocalActif) {
+    afficherStatutVocal('Connexion rétablie. Tu peux renvoyer ton message.');
+  }
+}
+
+window.addEventListener('offline', gererPerteReseau);
+window.addEventListener('online', gererRetourReseau);
 
 // =====================================================================
 // VAD — détection de voix pendant que Dashle parle
@@ -2254,6 +3123,8 @@ function arreterVAD() {
   vadAudioContext = null;
   vadPret = false;
   vadDebutParole = 0;
+  vadBruitBase = 0.01;
+  vadSeuilCourant = VAD_SEUIL;
   // Libérer les verrous de synthèse : on quitte le mode vocal,
   // plus aucune protection n'est nécessaire.
   syntheseEnCours = false;
@@ -2275,6 +3146,25 @@ function surveillerParole() {
       somme += x * x;
     }
     const rms = Math.sqrt(somme / donnees.length);
+    if (rms < vadSeuilCourant) {
+      vadBruitBase = (vadBruitBase * 0.92) + (rms * 0.08);
+    }
+    vadSeuilCourant = Math.max(
+      VAD_SEUIL,
+      Math.min(0.18, (vadBruitBase * VAD_FACTEUR) + VAD_MARGE)
+    );
+    window.__dashleVocalDiagnostic = {
+      vadActif: Boolean(vadPret && vadStream),
+      rms: Number(rms.toFixed(4)),
+      bruitBase: Number(vadBruitBase.toFixed(4)),
+      seuil: Number(vadSeuilCourant.toFixed(4)),
+      paroleDepuisMs: vadDebutParole ? Math.round(now - vadDebutParole) : 0,
+      dureeMinMs: VAD_DUREE_MIN,
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+      speechRecognitionBloqueePendantTTS: Boolean(recoMutePendantTTS || syntheseEnCours)
+    };
     // Dashle est occupé si SSE en cours OU synthèse en cours.
     const dashleOccupe = reponseEnCours
       || syntheseEnCours
@@ -2286,7 +3176,7 @@ function surveillerParole() {
     const enPeriodeProtegee = vadDebutSynthese > 0
       && (now - vadDebutSynthese) < VAD_DELAI_POST;
 
-    if (dashleOccupe && !enPeriodeProtegee && rms >= VAD_SEUIL) {
+    if (dashleOccupe && !enPeriodeProtegee && rms >= vadSeuilCourant) {
       if (!vadDebutParole) vadDebutParole = now;
       if (now - vadDebutParole >= VAD_DUREE_MIN
           && now - vadDerniereDetection >= VAD_COOLDOWN) {
@@ -2305,6 +3195,18 @@ function surveillerParole() {
 // =====================================================================
 // Mode vocal — interruption et séquencement
 // =====================================================================
+if (orbeDashle) {
+  orbeDashle.addEventListener('click', function() {
+    interrompreDashle();
+  });
+  orbeDashle.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      interrompreDashle();
+    }
+  });
+}
+
 function interrompreDashle() {
   if (!vocalActif) return;
   interruptionDemandee = true;
@@ -2344,6 +3246,7 @@ function interrompreDashle() {
 
   // 5. Redémarrer reco pour capter la nouvelle phrase.
   recoResultatsAutorises = false;
+  arreterVAD();
   if (reconnaissanceEnCoursAvantInterruption) {
     recoEnCours = true;
     try { reco && reco.abort(); } catch(e) {}
@@ -2386,8 +3289,10 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
     if (recoEnCours) {
       return false;
     }
-    reco.interimResults = true;
-    reco.continuous = true;
+    journaliserEtatAudioReconnaissance();
+    arreterVAD();
+    reco.interimResults = false;
+    reco.continuous = false;
     modeActuel = 'vocal';
     ouvrirModeVocal();
     afficherEtatVocal('ecoute', 'Dashle écoute...');
@@ -2397,6 +3302,8 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
     recoEnCours = true;
     recoResultatsAutorises = false;
     try {
+      recoDebutEcouteMs = performance.now();
+      recoDebutEcouteMs = performance.now();
       reco.start();
       return true;
     } catch(e) {
@@ -2410,7 +3317,7 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
     if (minuteurRelanceReco !== null || minuteurFinPhraseVocale !== null) return;
     const parleEncore = ('speechSynthesis' in window) && window.speechSynthesis.speaking;
     if (!vocalActif || interruptionDemandee || recoMutePendantTTS || syntheseEnCours
-        || reponseEnCours || parleEncore) {
+        || reponseEnCours || parleEncore || transcriptionFinaleVocale.trim()) {
       return;
     }
 
@@ -2436,37 +3343,34 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
     reco.interimResults = false;
     reco.continuous = false;
     btnMicro.classList.add('actif');
+    journaliserEtatAudioReconnaissance();
     try { reco.start(); } catch(e) {}
   };
 
   btnVocal.onclick = async function() {
-    vocalActif = !vocalActif;
     if (vocalActif) {
-      reinitialiserTranscriptionVocale();
-      btnVocal.classList.add('vocal-on');
-      ouvrirModeVocal();
-      interruptionDemandee = false;
-      await demarrerVAD();
-      recoResultatsAutorises = false;
-      try { reco.stop(); } catch(e) {}
-      setTimeout(demarrerEcouteVocale, 80);
-    } else {
-      reinitialiserTranscriptionVocale();
-      btnVocal.classList.remove('vocal-on', 'ecoute', 'parle');
-      fermerModeVocal();
-      afficherEtatVocal('attente', 'En attente');
-      afficherStatutVocal('');
-      recoResultatsAutorises = false;
-      try { reco.stop(); } catch(e) {}
-      arreterGeneration();
-      if ('speechSynthesis' in window) window.speechSynthesis.cancel();
-      arreterVAD();
+      desactiverModeVocal();
+      return;
     }
+    vocalActif = true;
+    reinitialiserTranscriptionVocale();
+    btnVocal.classList.add('vocal-on');
+    ouvrirModeVocal();
+    interruptionDemandee = false;
+    // Aucun getUserMedia/AnalyserNode en parallèle de SpeechRecognition.
+    recoResultatsAutorises = false;
+    try { reco.stop(); } catch(e) {}
+    setTimeout(function() {
+      if (vocalActif) demarrerEcouteVocale();
+    }, 80);
   };
 
   reco.onstart = function() {
+    journaliserDiagnosticVocal('onstart', { mode: modeActuel, vocalActif: vocalActif });
+    recoDebutEcouteMs = performance.now();
+    if (modeActuel === 'vocal') journaliserEtatAudioReconnaissance();
     console.log('[DASHLE][SpeechRecognition] onstart', { mode: modeActuel, vocalActif: vocalActif });
-    dernierIndexFinalVocal = 0;
+    if (!transcriptionFinaleVocale.trim()) dernierIndexFinalVocal = 0;
     recoResultatsAutorises = !recoMutePendantTTS && !syntheseEnCours && !reponseEnCours;
     if (vocalActif && modeActuel === 'vocal') {
       afficherEtatVocal('ecoute', 'Dashle écoute...');
@@ -2477,12 +3381,17 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
   };
 
   reco.onresult = function(e) {
+    journaliserDiagnosticVocal('onresult', { resultIndex: e && e.resultIndex, count: (e && e.results && e.results.length) || 0 });
+    const resultatsJournal = Array.from(e.results || []).map(function(r, index) {
+      const transcript = r && r[0] ? String(r[0].transcript || '').trim() : '';
+      const confidence = r && r[0] && typeof r[0].confidence === 'number' ? r[0].confidence : null;
+      console.log('[DASHLE][SpeechRecognition][resultat]', {
+        index: index, transcript: transcript, confidence: confidence, isFinal: Boolean(r && r.isFinal)
+      });
+      return { transcript: transcript, confidence: confidence, isFinal: Boolean(r && r.isFinal) };
+    });
     console.log('[DASHLE][SpeechRecognition] onresult', {
-      mode: modeActuel,
-      resultIndex: e.resultIndex,
-      results: Array.from(e.results || []).map(function(r) {
-        return { hasTranscript: Boolean(r[0] && String(r[0].transcript || '').trim()), isFinal: r.isFinal };
-      }),
+      mode: modeActuel, resultIndex: e.resultIndex, results: resultatsJournal,
       resultatsAutorises: recoResultatsAutorises
     });
     if (!recoResultatsAutorises || recoMutePendantTTS || syntheseEnCours
@@ -2494,31 +3403,29 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
       const resultat = resultats[e.resultIndex || 0];
       const transcript = (resultat && resultat[0] && resultat[0].transcript || '').trim();
       if (!transcript) return;
+      dernierTranscriptDictee = transcript;
       champ.value = transcript;
       champ.style.height = 'auto';
       return;
     }
 
-    let paroleInterimaire = false;
     let resultatNonVide = false;
     for (let i = 0; i < resultats.length; i++) {
       const texte = resultats[i] && resultats[i][0] && resultats[i][0].transcript;
-      if (texte && texte.trim()) {
-        resultatNonVide = true;
-        if (!resultats[i].isFinal) paroleInterimaire = true;
-      }
+      if (texte && texte.trim()) resultatNonVide = true;
     }
     const debut = Math.max(Number.isInteger(e.resultIndex) ? e.resultIndex : 0, dernierIndexFinalVocal);
     for (let i = debut; i < resultats.length; i++) {
       const resultat = resultats[i];
       const texte = (resultat && resultat[0] && resultat[0].transcript || '').trim();
       if (!resultat || !resultat.isFinal || !texte) continue;
-      transcriptionFinaleVocale += (transcriptionFinaleVocale ? ' ' : '') + texte;
+      ajouterTexteFinalVocalUnique(texte);
       dernierIndexFinalVocal = i + 1;
     }
 
     if (resultatNonVide) {
       nbRelancesVocal = 0;
+      nbFinsSansTranscriptionVocal = 0;
       if (minuteurRelanceReco !== null) {
         clearTimeout(minuteurRelanceReco);
         minuteurRelanceReco = null;
@@ -2526,18 +3433,17 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
     }
     if (!transcriptionFinaleVocale) return;
     interruptionDemandee = false;
-    if (paroleInterimaire) {
-      annulerFinPhraseVocale();
-    } else {
-      planifierEnvoiFinPhraseVocale();
-    }
+    planifierEnvoiFinPhraseVocale();
   };
 
   reco.onend = function() {
+    journaliserDiagnosticVocal('onend', { mode: modeActuel, vocalActif: vocalActif });
+    const dureeEcouteMs = recoDebutEcouteMs ? Math.max(0, Math.round(performance.now() - recoDebutEcouteMs)) : null;
+    const transcriptionLog = modeActuel === 'dictee' ? dernierTranscriptDictee : transcriptionFinaleVocale;
     console.log('[DASHLE][SpeechRecognition] onend', {
-      mode: modeActuel, vocalActif: vocalActif,
-      hasTranscription: Boolean(transcriptionFinaleVocale),
-      transcriptionLength: transcriptionFinaleVocale.length
+      mode: modeActuel, vocalActif: vocalActif, dureeEcouteMs: dureeEcouteMs,
+      hasTranscription: Boolean(String(transcriptionLog || '').trim()),
+      transcriptionLength: String(transcriptionLog || '').trim().length
     });
     btnMicro.classList.remove('actif');
     recoEnCours = false;  // reco s'est arrêté, le guard est libéré
@@ -2549,14 +3455,36 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
     if (recoMutePendantTTS) {
       return;  // TTS prend la main, onend le relancera
     }
+    if (transcriptionFinaleVocale.trim()) {
+      planifierEnvoiFinPhraseVocale();
+      return;
+    }
     const synthActive = ('speechSynthesis' in window) && window.speechSynthesis.speaking;
+    if (modeActuel === 'vocal' && !transcriptionFinaleVocale.trim()) {
+      nbFinsSansTranscriptionVocal += 1;
+      console.warn('[DASHLE][SpeechRecognition] fin sans transcription', {
+        compteur: nbFinsSansTranscriptionVocal, dureeEcouteMs: dureeEcouteMs
+      });
+      if (nbFinsSansTranscriptionVocal >= MAX_FINS_SANS_TRANSCRIPTION_VOCAL) {
+        nbFinsSansTranscriptionVocal = 0;
+        if (demarrerSecoursAudio()) return;
+        vocalActif = false;
+        btnVocal.classList.remove('vocal-on', 'ecoute', 'parle');
+        afficherEtatVocal('erreur', "Je n'arrive pas à t'entendre, réessaie");
+        afficherStatutVocal("Je n'arrive pas à t'entendre, réessaie");
+        return;
+      }
+    }
     if (!interruptionDemandee && !reponseEnCours && !syntheseEnCours && !synthActive) {
       planifierRelanceReco();
     }
   };
 
   reco.onerror = function(e) {
-    console.log('[DASHLE][SpeechRecognition] onerror', { error: e.error, message: e.message, mode: modeActuel });
+    journaliserDiagnosticVocal('onerror', { error: e && e.error, message: e && e.message });
+    console.log('[DASHLE][SpeechRecognition] onerror', {
+      error: e && e.error, message: e && e.message, mode: modeActuel, vocalActif: vocalActif
+    });
     btnMicro.classList.remove('actif');
     recoResultatsAutorises = false;
     if (vocalActif && (e.error === 'not-allowed' || e.error === 'service-not-allowed')) {
@@ -2565,6 +3493,10 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
       return;
     }
     if (vocalActif && e.error !== 'aborted') {
+      if (transcriptionFinaleVocale.trim()) {
+        planifierEnvoiFinPhraseVocale();
+        return;
+      }
       if (!recoMutePendantTTS && !syntheseEnCours && !reponseEnCours) {
         afficherEtatVocal('attente', 'En attente du micro...');
         afficherStatutVocal(e.error === 'network'
@@ -2589,9 +3521,18 @@ if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
   };
 } else {
   btnMicro.style.display = 'none';
-  btnVocal.title = 'Reconnaissance vocale non prise en charge par ce navigateur';
-  btnVocal.addEventListener('click', function() {
-    afficherStatutVocal('La reconnaissance vocale DASHLE n’est pas prise en charge dans ce navigateur. Essaie Chrome sur Android ou Chrome/Edge sur ordinateur.');
+  btnVocal.title = 'Utiliser la transcription audio de secours';
+  btnVocal.addEventListener('click', async function() {
+    vocalActif = true;
+    modeActuel = 'vocal';
+    btnVocal.classList.add('vocal-on');
+    ouvrirModeVocal();
+    if (!await demarrerSecoursAudio()) {
+      vocalActif = false;
+      btnVocal.classList.remove('vocal-on', 'ecoute', 'parle');
+      afficherEtatVocal('erreur', "Je n'arrive pas à t'entendre, réessaie");
+      afficherStatutVocal("Je n'arrive pas à t'entendre, réessaie");
+    }
   });
 }
 
@@ -2636,7 +3577,7 @@ function arreterLecture() {
 
 function nettoyerPourLecture(texte) {
   // Retire les marqueurs Markdown courants (ne modifie PAS le textContent affiché)
-  var propre = texte
+  var propre = texteSansMarqueursMarkdown(texte)
     .replace(/#{1,6}\s*/g, '')
     .replace(/\*{1,3}([^*]*)\*{1,3}/g, '$1')
     .replace(/_{1,3}([^_]*)_{1,3}/g, '$1')
@@ -2659,15 +3600,20 @@ function nettoyerPourLecture(texte) {
   return propre;
 }
 
-function lireReponse(bouton, texteForce) {
+const lecturesAutomatiquesEffectuees = new Set();
+
+function lireReponse(bouton, texteForce, lectureAutomatique) {
   if (!('speechSynthesis' in window)) {
     bouton.closest('.actions-reponse').querySelector('.lecture-etat').textContent = 'Voix indisponible';
     return;
   }
+  const messageWrap = bouton.closest('.message-wrap');
+  const messageId = messageWrap ? messageWrap.dataset.messageId : '';
+  if (lectureAutomatique && messageId && lecturesAutomatiquesEffectuees.has(messageId)) return;
   const texte = typeof texteForce === 'string'
     ? texteForce
-    : (bouton.closest('.message-wrap').querySelector('.msg').dataset.markdownSource
-        || bouton.closest('.message-wrap').querySelector('.msg').textContent);
+    : (messageWrap.querySelector('.msg').dataset.markdownSource
+        || messageWrap.querySelector('.msg').textContent);
   if (lectureActuelle === bouton && window.speechSynthesis.speaking) {
     if (window.speechSynthesis.paused) {
       window.speechSynthesis.resume();
@@ -2701,7 +3647,16 @@ function lireReponse(bouton, texteForce) {
     // L'audio démarre réellement : on arme le verrou d'état.
     // C'est ici, pas dans speak(), que le son commence vraiment.
     syntheseEnCours = true;
-    vadDebutSynthese = 0;  // réinitialiser le délai post-synthèse
+    vadDebutSynthese = 0;
+    demarrerVAD().then(function(ok) {
+      if (!ok) {
+        console.warn('[DASHLE][VAD] micro VAD indisponible pendant TTS');
+        window.__dashleVocalDiagnostic = Object.assign({}, window.__dashleVocalDiagnostic || {}, {
+          vadActif: false,
+          vadErreur: 'getUserMedia indisponible/refusé'
+        });
+      }
+    });
   };
 
   utteranceActuelle.onend = function() {
@@ -2711,6 +3666,7 @@ function lireReponse(bouton, texteForce) {
     // Armer le délai anti-écho : le VAD attend encore VAD_DELAI_POST ms
     // avant d'autoriser une interruption, le temps que l'écho s'estompe.
     vadDebutSynthese = performance.now();
+    arreterVAD();
     arreterLecture();
     // En mode vocal : relancer reco maintenant que le TTS est terminé.
     // On attend VAD_DELAI_POST ms (délai anti-écho) avant d'écouter.
@@ -2729,6 +3685,7 @@ function lireReponse(bouton, texteForce) {
     syntheseEnCours = false;
     recoMutePendantTTS = false;
     vadDebutSynthese = 0;
+    arreterVAD();
     // Ne pas afficher d'erreur si l'interruption est volontaire (cancel).
     if (ev && ev.error !== 'interrupted' && ev.error !== 'canceled') {
       etat.textContent = 'Erreur audio';
@@ -2761,6 +3718,7 @@ function lireReponse(bouton, texteForce) {
   // d'attente mais l'audio peut démarrer avec un délai. C'est onstart
   // qui marque le vrai début du son.
   window.speechSynthesis.speak(utteranceActuelle);
+  if (lectureAutomatique && messageId) lecturesAutomatiquesEffectuees.add(messageId);
 }
 
 // =====================================================================
@@ -2801,32 +3759,103 @@ function afficherApercuFichier(fichier) {
 }
 
 let fichierImage = null;
+const IMAGE_UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
+
+async function _rasteriserImage(fichier, coteMax, qualite) {
+  const bitmap = await createImageBitmap(fichier, { imageOrientation: 'from-image' });
+  const echelle = Math.min(1, coteMax / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(bitmap.width * echelle));
+  canvas.height = Math.max(1, Math.round(bitmap.height * echelle));
+  const contexte = canvas.getContext('2d', { alpha: false });
+  contexte.fillStyle = '#fff';
+  contexte.fillRect(0, 0, canvas.width, canvas.height);
+  contexte.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close();
+  return new Promise(function(resolve, reject) {
+    canvas.toBlob(function(blob) {
+      if (!blob) reject(new Error('Compression de l’image indisponible.'));
+      else resolve(blob);
+    }, 'image/jpeg', qualite);
+  });
+}
+
 async function preparerImagePourEnvoi(fichier) {
-  if (!fichier || !fichier.type.startsWith('image/') || fichier.size <= 5 * 1024 * 1024) return fichier;
+  if (!fichier || !fichier.type.startsWith('image/')) return fichier;
+  if (fichier.size > IMAGE_UPLOAD_MAX_BYTES) {
+    throw new Error('L’image dépasse 10 Mo. Réduis-la puis réessaie.');
+  }
   try {
-    const bitmap = await createImageBitmap(fichier);
-    const echelle = Math.min(1, 2048 / Math.max(bitmap.width, bitmap.height));
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.max(1, Math.round(bitmap.width * echelle));
-    canvas.height = Math.max(1, Math.round(bitmap.height * echelle));
-    const contexte = canvas.getContext('2d');
-    contexte.fillStyle = '#fff';
-    contexte.fillRect(0, 0, canvas.width, canvas.height);
-    contexte.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-    bitmap.close();
-    const blob = await new Promise(function(resolve) { canvas.toBlob(resolve, 'image/jpeg', 0.84); });
-    if (!blob || blob.size >= fichier.size) return fichier;
+    const blob = await _rasteriserImage(fichier, 1600, 0.8);
     const nom = (fichier.name || 'image').replace(/\.[^.]+$/, '') + '.jpg';
     return new File([blob], nom, { type: 'image/jpeg', lastModified: Date.now() });
   } catch (erreur) {
-    console.warn('[DASHLE] Compression de l’image impossible, envoi de l’originale :', erreur);
-    return fichier;
+    throw new Error('Je n’ai pas pu préparer cette image. Réessaie.');
+  }
+}
+
+async function creerMiniatureImage(fichier) {
+  if (!fichier || !fichier.type.startsWith('image/')) return '';
+  try {
+    const blob = await _rasteriserImage(fichier, 320, 0.72);
+    return await new Promise(function(resolve, reject) {
+      const lecteur = new FileReader();
+      lecteur.onload = function(){ resolve(String(lecteur.result || '')); };
+      lecteur.onerror = reject;
+      lecteur.readAsDataURL(blob);
+    });
+  } catch (erreur) {
+    return '';
   }
 }
 inputImage.addEventListener('change', function(e) {
   fichierImage = e.target.files[0] || null;
   afficherApercuFichier(fichierImage);
 });
+function envoyerImageAvecProgression(fd, headers, onProgress) {
+  return new Promise(function(resolve, reject) {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', urlImage, true);
+    xhr.responseType = 'json';
+    Object.keys(headers || {}).forEach(function(cle) { xhr.setRequestHeader(cle, headers[cle]); });
+    xhr.upload.onprogress = function(e) {
+      if (e.lengthComputable && typeof onProgress === 'function') {
+        onProgress(Math.round((e.loaded / e.total) * 100));
+      }
+    };
+    xhr.onload = function() {
+      let data = xhr.response;
+      if (!data) {
+        try { data = JSON.parse(xhr.responseText || '{}'); } catch(e) { data = {}; }
+      }
+      resolve({ ok: xhr.status >= 200 && xhr.status < 300, status: xhr.status, message: data.reponse || data.erreur || '', ...data });
+    };
+    xhr.onerror = function() {
+      reject(new Error('Je n’ai pas pu envoyer l’image. Réessaie.'));
+    };
+    xhr.ontimeout = function() {
+      reject(new Error('Je n’ai pas pu envoyer l’image. Réessaie.'));
+    };
+    xhr.send(fd);
+  });
+}
+
+function afficherEchecEnvoiImage(texte, fichier, message) {
+  const zone = ajouterMessage(message || 'Je n’ai pas pu envoyer l’image. Réessaie.', 'bot');
+  const bouton = document.createElement('button');
+  bouton.type = 'button';
+  bouton.className = 'primaire';
+  bouton.textContent = 'Réessayer';
+  bouton.addEventListener('click', function() {
+    fichierImage = fichier;
+    champ.value = texte || '';
+    afficherApercuFichier(fichier);
+    zone.appendChild(bouton);
+    form.requestSubmit();
+  });
+  zone.appendChild(bouton);
+}
+
 document.getElementById('retirer-fichier').addEventListener('click', effacerApercuFichier);
 
 const feuilleFichiers = document.getElementById('feuille-fichiers');
@@ -2861,27 +3890,16 @@ document.getElementById('reduire-vocal').addEventListener('click', function() {
 });
 
 document.getElementById('fermer-vocal').addEventListener('click', function() {
-  vocalActif = false;
-  btnVocal.classList.remove('vocal-on', 'ecoute', 'parle');
-  try { reco && reco.stop(); } catch(e) {}
-  afficherStatutVocal('');
-  fermerModeVocal();
-  afficherEtatVocal('attente', 'En attente');
-  if ('speechSynthesis' in window) window.speechSynthesis.cancel();
-  arreterVAD();
-  // Cacher le bouton de réouverture : le mode vocal est réellement arrêté.
-  var btnRouvrir = document.getElementById('btn-rouvrir-vocal');
-  if (btnRouvrir) btnRouvrir.classList.remove('actif');
+  desactiverModeVocal();
 });
+
 
 // Bouton rouvrir : ramène l'overlay sans relancer quoi que ce soit —
 // le VAD et la reconnaissance continuent de tourner en arrière-plan.
-var btnRouvrirVocal = document.getElementById('btn-rouvrir-vocal');
 if (btnRouvrirVocal) {
   btnRouvrirVocal.addEventListener('click', function() {
     if (!vocalActif) return;
     ouvrirModeVocal();
-    btnRouvrirVocal.classList.remove('actif');
   });
 }
 
@@ -3044,7 +4062,7 @@ chat.addEventListener('click', async function(e) {
   if (!message) return;
 
   if (bouton.classList.contains('action-copier')) {
-    await navigator.clipboard.writeText(message.dataset.markdownSource || message.innerText || message.textContent);
+    await navigator.clipboard.writeText(texteSansMarqueursMarkdown(message.dataset.markdownSource || message.innerText || message.textContent));
     bouton.classList.add('actif');
     setTimeout(function() { bouton.classList.remove('actif'); }, 1200);
 
@@ -3054,6 +4072,10 @@ chat.addEventListener('click', async function(e) {
     await navigator.clipboard.writeText(code.textContent);
     bouton.textContent = 'Copié';
     setTimeout(function() { bouton.textContent = 'Copier le code'; }, 1200);
+
+  } else if (bouton.classList.contains('action-pdf')) {
+    const textePdf = (message.dataset.markdownSource || message.innerText || message.textContent || '').trim();
+    if (textePdf) await genererArtifactDansChat('Transforme ce contenu en PDF.\n\n' + textePdf, 'pdf');
 
   } else if (bouton.classList.contains('action-repondre')) {
     const texteCite = (message.dataset.markdownSource || message.innerText || message.textContent || '').trim();
@@ -3102,12 +4124,25 @@ champ.addEventListener('keydown', function(e) {
 champ.addEventListener('input', function() {
   this.style.height = 'auto';
   this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+  if (generationInterrompueParReseau) {
+    generationInterrompueParReseau = false;
+    this.placeholder = this.dataset.placeholderReseauInitial || '';
+  }
 });
 
 form.addEventListener('submit', async function(e) {
   e.preventDefault();
   const texte = champ.value.trim();
   if (!texte && !fichierImage) return;
+  if (!champ.dataset.placeholderReseauInitial) {
+    champ.dataset.placeholderReseauInitial = champ.placeholder || '';
+  }
+
+  // Un nouvel envoi prend la main : annuler immédiatement le SSE et le TTS précédents.
+  if (reponseEnCours || requeteActiveController) {
+    arreterGeneration();
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+  }
 
   // Couper toute lecture en cours si l'utilisateur envoie manuellement
   if ('speechSynthesis' in window && window.speechSynthesis.speaking) arreterLecture();
@@ -3121,7 +4156,8 @@ form.addEventListener('submit', async function(e) {
 
     try {
       const imageEnvoyee = await preparerImagePourEnvoi(imageOriginale);
-      ajouterMessageImage(texte, imageEnvoyee);
+      const miniature = await creerMiniatureImage(imageEnvoyee);
+      ajouterMessageImage(texte, imageEnvoyee, miniature);
       const fd = new FormData();
       fd.append('message', texte);
       fd.append('image', imageEnvoyee, imageEnvoyee.name);
@@ -3130,15 +4166,17 @@ form.addEventListener('submit', async function(e) {
       }
       const headers = {};
       if (estConnecte) headers['X-CSRF-Token'] = csrfToken;
-      const res  = await fetch(urlImage, { method: 'POST', headers, body: fd });
-      const data = await res.json().catch(function() { return {}; });
+      const data = await envoyerImageAvecProgression(fd, headers, function(pourcentage) {
+        const reflexion = document.getElementById('reflexion-active');
+        if (reflexion) reflexion.setAttribute('aria-label', 'Envoi de l’image : ' + pourcentage + '%');
+      });
       retirerReflexion();
-      if (!res.ok) throw new Error(data.erreur || data.reponse || 'Erreur image (' + res.status + '). Réessaie.');
+      if (!data.ok) throw new Error(data.message || 'Je n’ai pas pu envoyer l’image. Réessaie.');
       ajouterReponse(data.reponse, data.message_id);
     } catch(err) {
       retirerReflexion();
-      console.warn('[DASHLE] Échec envoi image :', err);
-      ajouterMessage(err.message || "Erreur d'envoi de l'image. Réessaie.", 'bot');
+      console.warn('[DASHLE] Échec envoi image (%s)', err && err.name ? err.name : 'erreur');
+      afficherEchecEnvoiImage(texte, imageOriginale, err && err.message);
     }
     fichierImage = null;
     effacerApercuFichier();
@@ -3147,8 +4185,21 @@ form.addEventListener('submit', async function(e) {
 
   if (!texte) return;
 
+  if (!vocalActif && estDemandeImage(texte)) {
+    await genererArtifactDansChat(texte, 'image');
+    return;
+  }
+
   if (!vocalActif && estDemandePdf(texte)) {
-    await genererPdfTempsReelDansChat(texte);
+    if (estPdfTempsReel(texte)) {
+      await genererPdfTempsReelDansChat(texte);
+      return;
+    }
+    if (demandePdfSansSujet(texte)) {
+      ajouterMessage('Oui. Je peux générer un PDF. Sur quel sujet veux-tu que je le prépare ?', 'bot');
+      return;
+    }
+    await genererArtifactDansChat(texte, 'pdf');
     return;
   }
 
@@ -3172,6 +4223,8 @@ form.addEventListener('submit', async function(e) {
   requeteActiveController = controller;
   reponseEnCours  = true;
   interruptionDemandee = false;
+  generationInterrompueParReseau = false;
+  texteGenerationEnCours = texte;
 
   let reponseElement = null;
   let messageElement = null;
@@ -3210,6 +4263,7 @@ form.addEventListener('submit', async function(e) {
     }
 
     reponseElement = ajouterReponse('', '');
+    reponseActiveElement = reponseElement;
     messageElement = reponseElement.querySelector('.msg');
 
     const lecteur  = res.body.getReader();
@@ -3217,6 +4271,46 @@ form.addEventListener('submit', async function(e) {
     let tampon      = '';
     let reponseTexte = '';
     let messageId   = null;
+
+    let suiviActionSse = null;
+    let actionArtifactSse = false;
+    function traiterEvenementAction(ev) {
+      if (!ev || !ev.event || !ev.action) return false;
+      if (ev.event === 'action_started') {
+        actionArtifactSse = true;
+        if (reponseElement) { reponseElement.remove(); reponseElement = null; messageElement = null; }
+        reponseActiveElement = null;
+        retirerReflexion();
+        suiviActionSse = creerSuiviAction(ev.action);
+        suiviActionSse.dataset.prompt = texte;
+        mettreAJourSuiviAction(suiviActionSse, ev.action);
+        return true;
+      }
+      if (ev.event === 'action_progress') {
+        actionArtifactSse = true;
+        if (!suiviActionSse) { retirerReflexion(); suiviActionSse = creerSuiviAction(ev.action); }
+        mettreAJourSuiviAction(suiviActionSse, ev.action);
+        return true;
+      }
+      if (ev.event === 'action_completed') {
+        actionArtifactSse = true;
+        if (!suiviActionSse) { retirerReflexion(); suiviActionSse = creerSuiviAction(ev.action); }
+        mettreAJourSuiviAction(suiviActionSse, ev.action);
+        finaliserSuiviAction(suiviActionSse, ev.action.result || {});
+        return true;
+      }
+      if (ev.event === 'action_failed' || ev.event === 'action_cancelled') {
+        actionArtifactSse = true;
+        if (!suiviActionSse) { retirerReflexion(); suiviActionSse = creerSuiviAction(ev.action); }
+        mettreAJourSuiviAction(suiviActionSse, ev.action);
+        if (ev.event === 'action_failed') {
+          if (ev.action.result && ev.action.result.quota) afficherQuotaImage(suiviActionSse, ev.action.result.quota, texte);
+          else afficherEchecImage(suiviActionSse, texte, ev.action.error);
+        }
+        return true;
+      }
+      return false;
+    }
 
     while (true) {
       const { done, value } = await lecteur.read();
@@ -3237,16 +4331,37 @@ form.addEventListener('submit', async function(e) {
         if (!ligne.startsWith('data:')) continue;
         let ev;
         try { ev = JSON.parse(ligne.slice(5).trim()); } catch(ex) { continue; }
+        if (traiterEvenementAction(ev)) {
+          if (ev.termine) messageId = ev.message_id;
+          continue;
+        }
         if (ev.erreur) {
           throw new Error(ev.erreur);
         }
         if (ev.morceau) {
           reponseTexte += ev.morceau;
-          messageElement.textContent = reponseTexte;
+          afficherMarkdownStreaming(messageElement, reponseTexte);
           chat.scrollTop = chat.scrollHeight;
         }
         if (ev.termine) {
           messageId = ev.message_id;
+          if (demandeIllustrationPedagogique(texte)) {
+            try {
+              const h = { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' };
+              if (estConnecte) h['X-CSRF-Token'] = csrfToken;
+              const b = new URLSearchParams(); b.set('prompt', 'Illustration pédagogique fidèle à cette explication : ' + reponseTexte.slice(0, 8000));
+              const ir = await fetch('/generer-image', { method: 'POST', headers: h, body: b.toString(), cache: 'no-store' });
+              const idata = await ir.json().catch(function(){ return {}; });
+              if (ir.ok && idata.data) {
+                const raw = Uint8Array.from(atob(idata.data), function(c){ return c.charCodeAt(0); });
+                const blob = new Blob([raw], { type: idata.mime_type || 'image/png' });
+                const u = URL.createObjectURL(blob);
+                const lien = document.createElement('a'); lien.href = u; lien.target = '_blank'; lien.rel = 'noopener noreferrer';
+                const img = document.createElement('img'); img.className = 'image-message'; img.src = u; img.alt = 'Illustration pédagogique générée par DASHLE';
+                lien.appendChild(img); messageElement.appendChild(document.createElement('br')); messageElement.appendChild(lien);
+              }
+            } catch (_) {}
+          }
           // Visiteur : sauvegarder la réponse en session via une requête séparée.
           // Impossible de le faire dans le générateur SSE (headers déjà envoyés).
           if (!estConnecte && ev.reponse) {
@@ -3262,21 +4377,24 @@ form.addEventListener('submit', async function(e) {
       }
     }
 
-    const quotaVisuel = reponseTexte.replace(/^QUOTA:\d+:/, '');
-    afficherMarkdown(messageElement, quotaVisuel);
-    messageElement.dataset.messageId = messageId || '';
+    if (!actionArtifactSse && messageElement) {
+      const quotaVisuel = reponseTexte.replace(/^QUOTA:\d+:/, '');
+      afficherMarkdown(messageElement, quotaVisuel);
+      messageElement.dataset.messageId = messageId || '';
+    }
     reponseEnCours = false;
     requeteActiveController = null;
+    reponseActiveElement = null;
 
     // Lecture vocale si le mode vocal est actif
     const vocal = window._dashleVocal;
-    if (vocal && vocal.estActif() && reponseTexte) {
+    if (!actionArtifactSse && vocal && vocal.estActif() && reponseTexte) {
       vocal.marquerParle();
-      lireReponse(reponseElement.querySelector('.action-lire'));
+      lireReponse(reponseElement.querySelector('.action-lire'), undefined, true);
       // L'écoute reprendra via utteranceActuelle.onend (après la synthèse)
     } else if (preferencesVocales.voix_active && preferencesVocales.lecture_automatique
         && reponseTexte && reponseElement) {
-      lireReponse(reponseElement.querySelector('.action-lire'));
+      lireReponse(reponseElement.querySelector('.action-lire'), undefined, true);
     }
 
     if (reponseTexte) {
@@ -3314,6 +4432,7 @@ form.addEventListener('submit', async function(e) {
     retirerReflexion();
     reponseEnCours = false;
     if (requeteActiveController === controller) requeteActiveController = null;
+    reponseActiveElement = null;
 
     // En cas d'erreur, remettre l'orbe en état écoute (pas bloquée en réflexion).
     if (window._dashleVocal && window._dashleVocal.estActif()) {
@@ -3605,8 +4724,17 @@ body.theme-sombre label{border-color:#294238}
       </select>
     </label>
   </section>
-  <section class="carte"><h2>À propos de Dashle</h2>
-    <p class="note"><strong>Version :</strong> version du projet non déclarée</p>
+  <section class="carte" id="diagnostic-vocal" hidden>
+  <h2>Diagnostic vocal</h2>
+  <p class="note">Ce panneau est local au navigateur et n'apparaît qu'après 5 appuis rapides sur « Paramètres ».</p>
+  <pre id="diagnostic-vocal-contenu" style="max-height:280px;overflow:auto;white-space:pre-wrap"></pre>
+  <button type="button" class="secondaire" id="diagnostic-vocal-copier">Copier</button>
+  <button type="button" class="secondaire" id="diagnostic-vocal-effacer">Effacer</button>
+</section>
+<section class="carte"><h2>À propos de Dashle</h2>
+    <p class="note"><strong>Build :</strong> {{ build_commit_short }}</p>
+    <p class="note"><strong>Commit :</strong> {{ build_commit }}</p>
+    <p class="note"><strong>Date :</strong> {{ build_date }}</p>
     <p class="note"><strong>Modèle IA :</strong> {{ modele_gemini }} (Google AI)</p>
     <p class="note">Dashle est un assistant personnel conçu par Owen. Il mémorise le contexte de tes conversations et s'améliore avec le temps.</p>
     <p><a href="{{ url_for('conditions_utilisation') }}">Conditions d'utilisation</a></p>
@@ -3618,6 +4746,28 @@ body.theme-sombre label{border-color:#294238}
   <button type="submit" class="secondaire">Commencer une nouvelle conversation</button>
 </form>
 <script>
+const diagSection = document.getElementById('diagnostic-vocal');
+const diagContent = document.getElementById('diagnostic-vocal-contenu');
+function afficherDiagnosticVocal() {
+  if (!diagSection || !diagContent) return;
+  diagSection.hidden = false;
+  try { diagContent.textContent = JSON.stringify(JSON.parse(localStorage.getItem('dashle_vocal_diagnostic_v1') || '[]'), null, 2); } catch(e) { diagContent.textContent = 'Diagnostic indisponible.'; }
+}
+try {
+  if (localStorage.getItem('dashle_vocal_diag_open') === '1') {
+    localStorage.removeItem('dashle_vocal_diag_open');
+    afficherDiagnosticVocal();
+  }
+} catch(e) {}
+if (diagSection) {
+  document.getElementById('diagnostic-vocal-copier').addEventListener('click', async function() {
+    try { await navigator.clipboard.writeText(diagContent.textContent); } catch(e) {}
+  });
+  document.getElementById('diagnostic-vocal-effacer').addEventListener('click', function() {
+    try { localStorage.removeItem('dashle_vocal_diagnostic_v1'); } catch(e) {}
+    diagContent.textContent = '';
+  });
+}
 const sv = document.getElementById('voix-select');
 let vp = [];
 function remplirVoix() {
@@ -3907,22 +5057,24 @@ button{margin-top:22px;padding:12px;border:0;border-radius:10px;background:linea
 .erreur{color:#b00020;font-size:13px;margin-top:8px}.note{font-size:12px;color:#71837b;margin:7px 0 0}
 p{font-size:14px;color:#555;margin-top:16px}p a{color:#22C55E;font-weight:600;text-decoration:none}
 .visiteur{display:block;text-align:center;margin-top:12px;font-size:13px;color:#71837b}.visiteur a{color:#22C55E}
-.phone{display:grid;grid-template-columns:130px 1fr;gap:8px}.phone select,.phone input{margin-top:5px}
+.phone{display:grid;grid-template-columns:auto minmax(0,1fr);gap:8px;align-items:end}
+.phone-prefix{min-width:3.5rem;max-width:5rem;box-sizing:border-box;margin-top:5px;padding:12px 8px;border:1px solid #d9e1dd;border-radius:10px;background:#f5f7f6;text-align:center;font-weight:600;line-height:1.2;white-space:nowrap;overflow:hidden}
+.phone-prefix:empty{visibility:hidden}
 </style></head><body><main class="carte">
 <div class="logo-titre"><img class="logo" src="/static/icons/dashle-logo-header.png" alt="Dashle"><h1>Dashle</h1></div>
 <h2>{{ titre }}</h2>
 {% if erreur %}<p class="erreur">{{ erreur }}</p>{% endif %}
 <form method="post">
 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-<label>E-mail<input name="email" type="email" required maxlength="254" autocomplete="email"></label>
-{% if afficher_nom %}<label>Nom<input name="nom" type="text" required maxlength="160" autocomplete="name"></label>
+<label>E-mail<input name="email" type="email" required maxlength="254" autocomplete="email" value="{{ inscription_email|default('') }}"></label>
+{% if afficher_nom %}<label>Nom<input name="nom" type="text" required maxlength="160" autocomplete="name" value="{{ inscription_nom|default('') }}"></label>
 <label>Pays
 <select name="pays" id="pays" required autocomplete="country">
 <option value="">Sélectionner un pays</option>
-{% for code, nom_pays, indicatif in pays_profil %}<option value="{{ code }}">{{ nom_pays }} (+{{ indicatif }})</option>{% endfor %}
+{% for code, nom_pays, indicatif in pays_profil %}<option value="{{ code }}" {% if inscription_pays|default('') == code %}selected{% endif %}>{{ nom_pays }} (+{{ indicatif }})</option>{% endfor %}
 </select></label>
 <label>Numéro de téléphone
-<div class="phone"><select id="indicatif" aria-label="Indicatif" disabled><option>+---</option></select><input id="telephone" name="telephone" type="tel" required autocomplete="tel-national" inputmode="tel" placeholder="Numéro national"></div>
+<div class="phone"><span id="indicatif-prefix" class="phone-prefix" aria-label="Indicatif international"></span><input type="hidden" id="indicatif-envoye" name="indicatif" value="{{ inscription_indicatif|default('') }}"><input id="telephone" name="telephone" type="tel" required autocomplete="tel-national" inputmode="tel" placeholder="Numéro national" value="{{ inscription_telephone|default('') }}"></div>
 <p class="note">Le numéro est enregistré avec son indicatif international. Le 0 initial est conservé dans ton profil.</p>
 </label>{% endif %}
 <label>Mot de passe<input name="password" type="password" required minlength="8" autocomplete="{{ autocomplete }}"></label>
@@ -3930,11 +5082,33 @@ p{font-size:14px;color:#555;margin-top:16px}p a{color:#22C55E;font-weight:600;te
 </form>
 <p>{{ texte_lien }} <a href="{{ url_for(lien) }}">{{ libelle_lien }}</a></p>
 <span class="visiteur">Pas encore prêt ? <a href="{{ url_for('accueil') }}">Continuer sans compte →</a></span>
-{% if afficher_pays %}<script>
+{% if afficher_pays %}<script type="application/json" id="donnees-indicatifs">{{ pays_profil|tojson }}</script>
+<script>
 const pays=document.getElementById('pays'), indicatif=document.getElementById('indicatif');
-const indicatifs={% for code, nom_pays, indicatif in pays_profil %}{{ code|tojson }}:{{ ("+"+indicatif)|tojson }},{% endfor %};
-function syncIndicatif(){indicatif.options[0].textContent=indicatifs[pays.value]||'+---';}
-pays.addEventListener('change',syncIndicatif); syncIndicatif();
+const indicatifEnvoye=document.getElementById('indicatif-envoye');
+const repliIndicatifs={"BF":"+226"};
+let donneesIndicatifs={};
+try {
+  const donnees=document.getElementById('donnees-indicatifs');
+  const lignes=JSON.parse(donnees ? donnees.textContent : "[]");
+  for (const ligne of lignes) {
+    if (Array.isArray(ligne) && ligne.length >= 3) donneesIndicatifs[String(ligne[0]).toUpperCase()]="+"+String(ligne[2]);
+  }
+} catch (_erreur) {
+  donneesIndicatifs={};
+}
+if (!Object.keys(donneesIndicatifs).length) donneesIndicatifs=repliIndicatifs;
+for (const [code, valeur] of Object.entries(repliIndicatifs)) {
+  if (!donneesIndicatifs[code]) donneesIndicatifs[code]=valeur;
+}
+function syncIndicatif(){
+  const valeur=donneesIndicatifs[pays.value]||'';
+  document.getElementById('indicatif-prefix').textContent=valeur;
+  indicatifEnvoye.value=valeur;
+}
+pays.addEventListener('change',syncIndicatif);
+pays.addEventListener('input',syncIndicatif);
+syncIndicatif();
 </script>{% endif %}
 </main></body></html>
 """
@@ -4014,6 +5188,109 @@ def _rendre_page(messages, utilisateur=None, conversations=None, conversation_id
 # Routes — chat principal
 # ---------------------------------------------------------------------------
 
+VOICE_TRANSCRIPTION_LIMITS = {
+    "visitor": int(os.environ.get("DASHLE_VOICE_TRANSCRIPTION_DAILY_LIMIT_VISITOR", "3")),
+    "free": int(os.environ.get("DASHLE_VOICE_TRANSCRIPTION_DAILY_LIMIT_FREE", "10")),
+    "pro": int(os.environ.get("DASHLE_VOICE_TRANSCRIPTION_DAILY_LIMIT_PRO", "30")),
+    "prime": int(os.environ.get("DASHLE_VOICE_TRANSCRIPTION_DAILY_LIMIT_PRIME", "60")),
+}
+VOICE_TRANSCRIPTION_MAX_BYTES = 5 * 1024 * 1024
+VOICE_TRANSCRIPTION_MAX_SECONDS = 20
+VOICE_TRANSCRIPTION_MIMES = {"audio/webm", "audio/ogg", "audio/wav", "audio/x-wav", "audio/mpeg", "audio/mp4", "audio/aac"}
+
+def _cle_visiteur_voix():
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    ip = (forwarded.split(",")[0].strip() if forwarded else request.remote_addr) or "inconnu"
+    return hashlib.sha256((str(app.config.get("SECRET_KEY", "dashle")) + "|voice-quota|" + ip).encode("utf-8")).hexdigest()
+
+def _quota_transcription_voix(user_id=None):
+    today = datetime.utcnow().date()
+    if user_id:
+        with session_base() as db:
+            user = db.get(User, user_id)
+            niveau = niveau_abonnement(user) if user else "free"
+            limite = VOICE_TRANSCRIPTION_LIMITS.get(niveau, VOICE_TRANSCRIPTION_LIMITS["free"])
+            usage = db.query(VoiceTranscriptionUsage).filter_by(user_id=user_id, usage_date=today).one_or_none()
+            return niveau, limite, usage.count if usage else 0
+    with session_base() as db:
+        usage = db.query(VoiceTranscriptionUsage).filter_by(visitor_key=_cle_visiteur_voix(), usage_date=today).one_or_none()
+        return "visitor", VOICE_TRANSCRIPTION_LIMITS["visitor"], usage.count if usage else 0
+
+def _consommer_quota_transcription_voix(user_id=None):
+    today = datetime.utcnow().date()
+    with session_base() as db:
+        if user_id:
+            user = db.get(User, user_id)
+            niveau = niveau_abonnement(user) if user else "free"
+            limite = VOICE_TRANSCRIPTION_LIMITS.get(niveau, VOICE_TRANSCRIPTION_LIMITS["free"])
+            usage = db.query(VoiceTranscriptionUsage).filter_by(user_id=user_id, usage_date=today).one_or_none()
+            if usage is None:
+                usage = VoiceTranscriptionUsage(user_id=user_id, usage_date=today, count=0)
+                db.add(usage); db.flush()
+        else:
+            cle = _cle_visiteur_voix()
+            limite = VOICE_TRANSCRIPTION_LIMITS["visitor"]
+            usage = db.query(VoiceTranscriptionUsage).filter_by(visitor_key=cle, usage_date=today).one_or_none()
+            if usage is None:
+                usage = VoiceTranscriptionUsage(visitor_key=cle, usage_date=today, count=0)
+                db.add(usage); db.flush()
+        if usage.count >= limite:
+            return False
+        usage.count += 1
+        return True
+
+@app.post("/api/transcrire")
+def transcrire_audio():
+    fichier = request.files.get("audio")
+    if not fichier:
+        return jsonify({"erreur": "Aucun enregistrement audio reçu."}), 400
+    mime = (fichier.mimetype or "").lower().split(";")[0]
+    if mime not in VOICE_TRANSCRIPTION_MIMES:
+        return jsonify({"erreur": "Format audio non pris en charge."}), 415
+    audio = fichier.read(VOICE_TRANSCRIPTION_MAX_BYTES + 1)
+    if len(audio) > VOICE_TRANSCRIPTION_MAX_BYTES:
+        return jsonify({"erreur": "L'enregistrement est trop volumineux (5 Mo maximum)."}), 413
+    try:
+        duree_ms = int(request.headers.get("X-Dashle-Audio-Duration-Ms", "0") or 0)
+    except (TypeError, ValueError):
+        duree_ms = 0
+    if duree_ms and duree_ms > VOICE_TRANSCRIPTION_MAX_SECONDS * 1000:
+        return jsonify({"erreur": "L'enregistrement est trop long (20 secondes maximum)."}), 413
+
+    user_id = session.get("user_id")
+    niveau, limite, utilise = _quota_transcription_voix(user_id)
+    if utilise >= limite:
+        return jsonify({"erreur": "Le quota de transcription vocale du jour est atteint.", "niveau": niveau}), 429
+    if not CLE_API:
+        return jsonify({"erreur": "La transcription vocale de secours est momentanément indisponible."}), 503
+
+    payload = {
+        "contents": [{"parts": [
+            {"text": "Transcris cet audio en français. Retourne uniquement le texte prononcé, sans commentaire ni balise."},
+            {"inline_data": {"mime_type": mime, "data": base64.b64encode(audio).decode("ascii")}},
+        ]}],
+        "generationConfig": {"temperature": 0, "maxOutputTokens": 512},
+    }
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODELE_GEMINI}:generateContent?key={CLE_API}"
+    try:
+        rep = requests.post(url, json=payload, timeout=20)
+        if rep.status_code >= 400:
+            return jsonify({"erreur": "Le service de transcription a refusé l'enregistrement."}), 502
+        data = rep.json()
+        texte = ""
+        for candidat in data.get("candidates", []):
+            for part in candidat.get("content", {}).get("parts", []):
+                if isinstance(part.get("text"), str):
+                    texte += part["text"]
+        texte = texte.strip()[:4000]
+        if not texte:
+            return jsonify({"erreur": "Aucune parole détectée dans l'enregistrement."}), 422
+        if not _consommer_quota_transcription_voix(user_id):
+            return jsonify({"erreur": "Le quota de transcription vocale du jour est atteint."}), 429
+        return jsonify({"texte": texte, "quota": {"niveau": niveau, "utilise": utilise + 1, "limite": limite}})
+    except requests.RequestException:
+        return jsonify({"erreur": "Le service de transcription est temporairement indisponible."}), 502
+
 @app.route("/")
 def accueil():
     user_id = session.get("user_id")
@@ -4030,7 +5307,7 @@ def accueil():
                 conversation_id=conversation_id,
                 preferences=preferences,
             )
-        # Utilisateur connecté — comportement existant
+        # Utilisateur connecté : l'ouverture ne crée aucune conversation.
         conversation_id = _conv_courante(user_id)
         return _rendre_page(
             messages=_messages_conversation(user_id, conversation_id),
@@ -4065,12 +5342,18 @@ def nouvelle_conv():
         return redirect(url_for("accueil"))
     if not _conserver_historique(user_id):
         session.pop("conversation_id", None)
+        session.pop("nouvelle_conversation_en_attente", None)
         return redirect(url_for("accueil"))
-    with session_base() as db:
-        conv = Conversation(user_id=user_id)
-        db.add(conv)
-        db.flush()
-        session["conversation_id"] = conv.id
+    conversation_id = session.get("conversation_id")
+    if conversation_id:
+        with session_base() as db:
+            conv = db.query(Conversation).filter_by(
+                id=conversation_id, user_id=user_id
+            ).one_or_none()
+            if conv is not None and not conv.messages:
+                return redirect(url_for("accueil"))
+    session.pop("conversation_id", None)
+    session["nouvelle_conversation_en_attente"] = True
     return redirect(url_for("accueil"))
 
 
@@ -4399,6 +5682,9 @@ def parametres():
         telephone_utilisateur=(user.telephone_national if user else ""),
         preferences=_preferences(user_id),
         modele_gemini=MODELE_GEMINI,
+        build_commit=BUILD_COMMIT,
+        build_commit_short=BUILD_COMMIT_SHORT,
+        build_date=BUILD_DATE,
         consignes_personnalisees=reglages.get(cle_consignes, ""),
         longueur_reponse=reglages.get(cle_longueur, "standard"),
         memoires=memoires,
@@ -4528,11 +5814,41 @@ def securite():
 
 @app.route("/repondre", methods=["POST"])
 def repondre():
-    """Endpoint JSON synchrone (non-streaming)."""
+    """Endpoint JSON synchrone, avec génération de fichiers et d'images."""
     user_id = session.get("user_id")
     message = request.form.get("message", "").strip()
     if not message:
         return jsonify({"reponse": ""})
+    if detecter_demande_image(message):
+        bloque, quota = _quota_image_bloque(user_id)
+        if bloque:
+            return jsonify({"reponse": quota["message"], "quota": quota}), 429
+        try:
+            conversation_id = session.get("conversation_id")
+            historique = _messages_conversation(user_id, conversation_id, limite=MAX_MESSAGES_CONTEXTE) if conversation_id else []
+            contexte = "\n".join(str(x.get("texte", "")) for x in historique[-12:])
+            raw, mime = generer_image(message, contexte)
+            if not _consommer_quota_image(user_id):
+                bloque, quota = _quota_image_bloque(user_id)
+                return jsonify({"reponse": quota["message"], "quota": quota}), 429
+            saved = _enregistrer_element_bibliotheque(user_id, "image", "image-dashle", mime, raw, conversation_id) if user_id else False
+            return jsonify({"reponse": "Image générée par DASHLE.", "artifact": {"type": "image", "mime_type": mime, "data": base64.b64encode(raw).decode("ascii"), "saved": saved}})
+        except Exception as exc:
+            app.logger.exception("Échec de génération d'image")
+            return jsonify({"reponse": "Je n’ai pas pu générer l’image pour le moment.", "artifact_error": type(exc).__name__}), 502
+    if detecter_demande_pdf(message):
+        try:
+            conversation_id = session.get("conversation_id")
+            historique = _messages_conversation(user_id, conversation_id, limite=MAX_MESSAGES_CONTEXTE) if conversation_id else []
+            contexte = "\n".join(str(x.get("texte", "")) for x in historique[-12:])
+            structure = structurer_document(message, contexte, extraire_contenu_fourni(message))
+            raw = rendre_pdf(structure)
+            titre = structure["title"] or "dashle-document"
+            saved = _enregistrer_element_bibliotheque(user_id, "pdf", titre, "application/pdf", raw, conversation_id) if user_id else False
+            return jsonify({"reponse": "Voici le document PDF demandé.", "artifact": {"type": "pdf", "mime_type": "application/pdf", "filename": secure_filename(titre)[:120] + ".pdf", "data": base64.b64encode(raw).decode("ascii"), "saved": saved}})
+        except Exception as exc:
+            app.logger.exception("Échec de génération de PDF")
+            return jsonify({"reponse": "Je n’ai pas pu générer le PDF pour le moment.", "artifact_error": type(exc).__name__}), 502
 
     if user_id:
         if not _conserver_historique(user_id):
@@ -4559,16 +5875,44 @@ def repondre():
         mid = ajouter_message(user_id, conversation_id, reponse, "bot")
         _actualiser_resume(user_id, conversation_id)
         return jsonify({"reponse": reponse, "message_id": mid})
-    else:
-        # Visiteur
-        historique = _historique_visiteur()
-        resume = _resume_visiteur()
-        _ajouter_message_visiteur(message, "user")
-        reponse = traiter_message(
-            message, historique + [{"auteur": "user", "texte": message}], None, resume
-        )
-        _ajouter_message_visiteur(reponse, "bot")
-        return jsonify({"reponse": reponse, "message_id": None})
+
+    historique = _historique_visiteur()
+    resume = _resume_visiteur()
+    _ajouter_message_visiteur(message, "user")
+    reponse = traiter_message(
+        message, historique + [{"auteur": "user", "texte": message}], None, resume
+    )
+    _ajouter_message_visiteur(reponse, "bot")
+    return jsonify({"reponse": reponse, "message_id": None})
+
+
+def _evenement_action(nom_evenement, action_id, action_type, etape, message,
+                         resultats=None, erreur=None):
+    """Construit un événement SSE générique de suivi d'action."""
+    payload = {
+        "event": nom_evenement,
+        "action": {
+            "id": action_id,
+            "type": action_type,
+            "step": etape,
+            "message": message,
+            "cancelable": False,
+        },
+    }
+    if resultats is not None:
+        payload["action"]["result"] = resultats
+    if erreur is not None:
+        payload["action"]["error"] = erreur
+    return "data: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
+
+
+def _demande_action_longue(message):
+    """Retourne le type d'action multimédia gérée directement par le flux SSE."""
+    if detecter_demande_image(message):
+        return "image"
+    if detecter_demande_pdf(message):
+        return "pdf"
+    return None
 
 
 @app.route("/repondre_flux", methods=["POST"])
@@ -4600,7 +5944,7 @@ def repondre_flux():
     if user_id:
         conserver = _conserver_historique(user_id)
         if conserver:
-            conversation_id = _conv_courante(user_id)
+            conversation_id = _conversation_pour_message(user_id)
             historique = _messages_conversation(
                 user_id, conversation_id, limite=MAX_MESSAGES_CONTEXTE
             )
@@ -4625,17 +5969,152 @@ def repondre_flux():
     contexte_projet = (
         _arguments_contexte_projet(user_id, conversation_id) if user_id else {}
     )
+    observabilite = getattr(g, "dashle_observabilite", None)
+    debut_sse = perf_counter()
+    ttfb_at = None
+    resultat_sse = "success"
 
     @stream_with_context
     def generer():
+        nonlocal resultat_sse
         morceaux = []
+        action_id = secrets.token_hex(12)
+        action_type = _demande_action_longue(message)
         try:
+            if action_type:
+                yield _evenement_action(
+                    "action_started", action_id, action_type, "preparation",
+                    "Ton idée prend forme…" if action_type == "image" else "Préparation du document…",
+                )
+                if action_type == "image":
+                    bloque, quota = _quota_image_bloque(user_id)
+                    if bloque:
+                        yield _evenement_action(
+                            "action_failed", action_id, "image", "quota", quota["message"],
+                            resultats={"quota": quota}, erreur=quota["message"]
+                        )
+                        return
+                conversation_id_action = conversation_id
+                historique_action = (
+                    _messages_conversation(user_id, conversation_id_action, limite=MAX_MESSAGES_CONTEXTE)
+                    if user_id and conversation_id_action else []
+                )
+                contexte_action = "\n".join(str(x.get("texte", "")) for x in historique_action[-12:])
+                if action_type == "image":
+                    yield _evenement_action(
+                        "action_progress", action_id, "image", "generation",
+                        "Création d'une première ébauche…",
+                    )
+                    debut_image = perf_counter()
+                    try:
+                        raw, mime = generer_image(message, contexte_action)
+                    except Exception:
+                        _journaliser_image(observabilite, debut_image, "error")
+                        raise
+                    _journaliser_image(observabilite, debut_image, "success")
+                    yield _evenement_action(
+                        "action_progress", action_id, "image", "finalisation",
+                        "Finitions…",
+                    )
+                    if not _consommer_quota_image(user_id):
+                        bloque, quota = _quota_image_bloque(user_id)
+                        yield _evenement_action(
+                            "action_failed", action_id, "image", "quota", quota["message"],
+                            resultats={"quota": quota}, erreur=quota["message"]
+                        )
+                        return
+                    saved = _enregistrer_element_bibliotheque(
+                        user_id, "image", "image-dashle", mime, raw, conversation_id_action
+                    ) if user_id else False
+                    artifact = {
+                        "type": "image",
+                        "mime_type": mime,
+                        "filename": "image-dashle.png",
+                        "data": base64.b64encode(raw).decode("ascii"),
+                        "saved": saved,
+                    }
+                else:
+                    yield _evenement_action(
+                        "action_progress", action_id, "pdf", "contenu",
+                        "Génération du contenu…",
+                    )
+                    structure = structurer_document(
+                        message, contexte_action, extraire_contenu_fourni(message)
+                    )
+                    yield _evenement_action(
+                        "action_progress", action_id, "pdf", "mise_en_page",
+                        "Mise en page du PDF…",
+                    )
+                    raw = rendre_pdf(structure)
+                    yield _evenement_action(
+                        "action_progress", action_id, "pdf", "generation",
+                        "Génération du PDF…",
+                    )
+                    titre = secure_filename(structure["title"])[:120] or "dashle-document"
+                    yield _evenement_action(
+                        "action_progress", action_id, "pdf", "finalisation",
+                        "Finalisation du document…",
+                    )
+                    saved = _enregistrer_element_bibliotheque(
+                        user_id, "pdf", structure["title"], "application/pdf",
+                        raw, conversation_id_action
+                    ) if user_id else False
+                    artifact = {
+                        "type": "pdf",
+                        "mime_type": "application/pdf",
+                        "filename": titre + ".pdf",
+                        "data": base64.b64encode(raw).decode("ascii"),
+                        "saved": saved,
+                    }
+
+                message_action = (
+                    "Image générée par DASHLE."
+                    if action_type == "image"
+                    else "Voici le document PDF demandé."
+                )
+                message_id_action = None
+                if user_id and conserver and conversation_id:
+                    message_id_action = ajouter_message(
+                        user_id, conversation_id, message_action, "bot"
+                    )
+                yield _evenement_action(
+                    "action_completed", action_id, action_type, "termine",
+                    message_action,
+                    resultats={
+                        "artifact": artifact,
+                        "message_id": message_id_action,
+                        "conversation_id": conversation_id_action,
+                    },
+                )
+                payload_fin = {
+                    "termine": True,
+                    "message_id": message_id_action,
+                    "action_id": action_id,
+                }
+                if not user_id:
+                    payload_fin["reponse"] = message_action
+                yield "data: " + json.dumps(payload_fin, ensure_ascii=False) + "\n\n"
+                return
+
             for morceau in streamer_message(
                 message, contexte_historique, user_id, resume, **contexte_projet
             ):
                 if not morceau:
                     continue
                 morceau = str(morceau)
+                if morceau.startswith("__DASHLE_CONNECTOR_CONFIRMATION__"):
+                    try:
+                        confirmation = json.loads(morceau.split("__DASHLE_CONNECTOR_CONFIRMATION__", 1)[1])
+                        yield "data: " + json.dumps(
+                            {"connector_confirmation": confirmation}, ensure_ascii=False
+                        ) + "\n\n"
+                    except (ValueError, TypeError):
+                        yield "data: " + json.dumps(
+                            {"morceau": "Je dois obtenir ta confirmation avant d'exécuter cette action externe."},
+                            ensure_ascii=False
+                        ) + "\n\n"
+                    yield "data: " + json.dumps({"termine": True}, ensure_ascii=False) + "\n\n"
+                    return
                 morceaux.append(morceau)
                 yield "data: " + json.dumps(
                     {"morceau": morceau}, ensure_ascii=False
@@ -4669,16 +6148,43 @@ def repondre_flux():
         except GeneratorExit:
             # Navigateur a fermé la connexion (interruption utilisateur).
             # On ne sauvegarde PAS une réponse incomplète.
+            resultat_sse = "cancelled"
             return
         except Exception as err:
-            print("ERREUR /repondre_flux :", repr(err))
-            yield "data: " + json.dumps(
-                {"erreur": "Erreur pendant la génération. Réessaie."},
-                ensure_ascii=False,
-            ) + "\n\n"
+            resultat_sse = "error"
+            app.logger.error(
+                "dashle.sse_error request_id=%s endpoint=repondre_flux error_type=%s",
+                observabilite["request_id"] if observabilite else "unknown",
+                type(err).__name__,
+            )
+            if action_type:
+                yield _evenement_action(
+                    "action_failed", action_id, action_type, "echec",
+                    "Échec de la génération",
+                    erreur="La génération a échoué. Réessaie.",
+                )
+                yield "data: " + json.dumps(
+                    {"termine": True, "message_id": None, "action_id": action_id},
+                    ensure_ascii=False,
+                ) + "\n\n"
+            else:
+                yield "data: " + json.dumps(
+                    {"erreur": "Erreur pendant la génération. Réessaie."},
+                    ensure_ascii=False,
+                ) + "\n\n"
+
+    flux = generer()
+
+    def flux_observe():
+        nonlocal ttfb_at
+        for donnees in flux:
+            if ttfb_at is None:
+                ttfb_at = perf_counter()
+            yield donnees
+        _journaliser_sse(observabilite, debut_sse, ttfb_at, resultat_sse)
 
     return Response(
-        generer(),
+        flux_observe(),
         mimetype="text/event-stream",
         headers={
             "Cache-Control": "no-cache, no-store, must-revalidate",
@@ -4741,6 +6247,55 @@ def confirmer_message():
     return jsonify({"ok": True})
 
 
+@app.route("/generer-image", methods=["POST"])
+def generer_image_endpoint():
+    user_id = session.get("user_id")
+    donnees = request.get_json(silent=True) or request.form
+    prompt = str(donnees.get("prompt", "")).strip()[:24000]
+    if not prompt:
+        return jsonify({"erreur": "Décris l’image à générer."}), 400
+    bloque, quota = _quota_image_bloque(user_id)
+    if bloque:
+        return jsonify({"ok": False, "erreur": quota["message"], "quota": quota}), 429
+    try:
+        conversation_id = session.get("conversation_id")
+        historique = _messages_conversation(user_id, conversation_id, limite=MAX_MESSAGES_CONTEXTE) if conversation_id else []
+        contexte = "\n".join(str(x.get("texte", "")) for x in historique[-12:])
+        raw, mime = generer_image(prompt, contexte)
+        if not _consommer_quota_image(user_id):
+            bloque, quota = _quota_image_bloque(user_id)
+            return jsonify({"ok": False, "erreur": quota["message"], "quota": quota}), 429
+        saved = _enregistrer_element_bibliotheque(user_id, "image", "image-dashle", mime, raw, conversation_id)
+        return jsonify({"ok": True, "mime_type": mime, "filename": "image-dashle.png", "data": base64.b64encode(raw).decode("ascii"), "saved": saved})
+    except Exception as exc:
+        app.logger.exception("Échec endpoint génération image")
+        return jsonify({"ok": False, "erreur": "La génération d’image a échoué.", "code": type(exc).__name__}), 502
+
+
+@app.route("/generer-pdf", methods=["POST"])
+def generer_pdf_endpoint():
+    user_id = session.get("user_id")
+    donnees = request.get_json(silent=True) or request.form
+    demande = str(donnees.get("demande", "")).strip()[:24000]
+    if not demande:
+        return jsonify({"erreur": "Décris le document à produire."}), 400
+    try:
+        conversation_id = session.get("conversation_id")
+        historique = _messages_conversation(user_id, conversation_id, limite=MAX_MESSAGES_CONTEXTE) if conversation_id else []
+        contexte = "\n".join(str(x.get("texte", "")) for x in historique[-12:])
+        structure = structurer_document(demande, contexte, extraire_contenu_fourni(demande))
+        image_bytes = None
+        if str(donnees.get("illustration", "")).lower() in {"1", "true", "oui"}:
+            image_bytes, _ = generer_image(demande, contexte)
+        raw = rendre_pdf(structure, image_bytes)
+        titre = secure_filename(structure["title"])[:120] or "dashle-document"
+        saved = _enregistrer_element_bibliotheque(user_id, "pdf", structure["title"], "application/pdf", raw, conversation_id) if user_id else False
+        return jsonify({"ok": True, "mime_type": "application/pdf", "filename": titre + ".pdf", "data": base64.b64encode(raw).decode("ascii"), "saved": saved})
+    except Exception as exc:
+        app.logger.exception("Échec endpoint génération PDF")
+        return jsonify({"ok": False, "erreur": "La génération du PDF a échoué.", "code": type(exc).__name__}), 502
+
+
 @app.route("/repondre_image", methods=["POST"])
 def repondre_image():
     user_id = session.get("user_id")
@@ -4748,7 +6303,7 @@ def repondre_image():
     if user_id:
         conserver = _conserver_historique(user_id)
         if conserver:
-            conversation_id = _conv_courante(user_id)
+            conversation_id = _conversation_pour_message(user_id)
             historique = _messages_conversation(
                 user_id, conversation_id, limite=MAX_MESSAGES_CONTEXTE
             )
@@ -4772,37 +6327,78 @@ def repondre_image():
     if not fichier:
         return jsonify({"reponse": "Aucune image reçue."})
 
-    image_bytes = fichier.read()
+    image_bytes = fichier.read(IMAGE_UPLOAD_MAX_BYTES + 1)
+    if len(image_bytes) > IMAGE_UPLOAD_MAX_BYTES:
+        return jsonify({
+            "reponse": "L’image est trop volumineuse. La limite avant compression est de 10 Mo. Réduis-la puis réessaie.",
+            "code": "image_trop_volumineuse",
+            "retryable": True,
+        }), 413
     if not image_bytes:
-        return jsonify({"reponse": "L'image reçue est vide."}), 400
+        return jsonify({"reponse": "L'image reçue est vide.", "retryable": True}), 400
 
     mime_type = detecter_type_media(image_bytes)
     if not mime_type:
-        return jsonify({"reponse": "Le fichier envoyé n'est pas une image ou une vidéo valide."}), 400
+        return jsonify({
+            "reponse": "Je n’ai pas pu reconnaître cette image. Choisis un JPEG, PNG, GIF, BMP ou WebP valide.",
+            "code": "image_invalide",
+            "retryable": True,
+        }), 400
 
     if mime_type.startswith("image/") and PIL_DISPONIBLE:
         try:
             with Image.open(io.BytesIO(image_bytes)) as img:
                 img.verify()
         except Exception:
-            return jsonify({"reponse": "Le fichier envoyé n'est pas une image valide."}), 400
+            return jsonify({
+                "reponse": "Je n’ai pas pu lire cette image. Vérifie le fichier puis réessaie.",
+                "code": "image_invalide",
+                "retryable": True,
+            }), 400
+
+    bloque, quota = _quota_image_bloque(user_id) if mime_type.startswith("image/") else (False, None)
+    if bloque:
+        return jsonify({"reponse": quota["message"], "quota": quota}), 429
 
     image_b64 = base64.b64encode(image_bytes).decode("utf-8")
     type_media = "Vidéo" if mime_type.startswith("video/") else "Image"
     texte_msg = message or f"[{type_media} envoyée]"
 
+    apercu_persistant = _miniature_image_data_uri(image_bytes) if mime_type.startswith("image/") else ""
     if user_id and conserver:
-        ajouter_message(user_id, conversation_id, texte_msg, "user")
+        ajouter_message(
+            user_id, conversation_id, texte_msg, "user",
+            image_preview=apercu_persistant,
+        )
     elif not user_id:
         _ajouter_message_visiteur(texte_msg, "user")
 
     contexte_projet = (
         _arguments_contexte_projet(user_id, conversation_id) if user_id else {}
     )
-    reponse = traiter_message_image(
-        message, image_b64, mime_type, historique, resume,
-        user_id=user_id, **contexte_projet,
-    )
+    try:
+        reponse = traiter_message_image(
+            message, image_b64, mime_type, historique, resume,
+            user_id=user_id, **contexte_projet,
+        )
+    except requests.RequestException:
+        app.logger.warning("Échec réseau lors de l’analyse d’image")
+        return jsonify({
+            "reponse": "Je n’ai pas pu envoyer l’image. Réessaie.",
+            "code": "image_reseau",
+            "retryable": True,
+        }), 502
+    except Exception as exc:
+        app.logger.warning("Échec analyse image (%s)", type(exc).__name__)
+        return jsonify({
+            "reponse": "Je n’ai pas pu analyser l’image. Réessaie.",
+            "code": "image_analyse",
+            "retryable": True,
+        }), 502
+
+    if mime_type.startswith("image/") and not _consommer_quota_image(user_id):
+        bloque, quota = _quota_image_bloque(user_id)
+        return jsonify({"reponse": quota["message"], "quota": quota}), 429
 
     if user_id and conserver:
         mid = ajouter_message(user_id, conversation_id, reponse, "bot")
@@ -4825,7 +6421,11 @@ def repondre_image():
 
 @app.errorhandler(413)
 def fichier_trop_volumineux(_erreur):
-    return jsonify({"reponse": "Le fichier est trop volumineux (maximum : 8 Mo)."}), 413
+    return jsonify({
+        "reponse": "L’image est trop volumineuse. La limite avant compression est de 10 Mo. Réduis-la puis réessaie.",
+        "code": "image_trop_volumineuse",
+        "retryable": True,
+    }), 413
 
 
 # ---------------------------------------------------------------------------
@@ -6599,6 +8199,13 @@ def inscription():
         password = request.form.get("password", "")
         pays     = request.form.get("pays", "").strip().upper()
         telephone_saisi = request.form.get("telephone", "").strip()
+        indicatif_recu = request.form.get("indicatif", "").strip()
+        app.logger.info(
+            "inscription POST: pays=%s indicatif=%s numero_length=%d",
+            pays or "<vide>",
+            indicatif_recu or "<vide>",
+            len(telephone_saisi),
+        )
         telephone, telephone_national = _normaliser_telephone(pays, telephone_saisi)
         if not nom or len(nom) > 160:
             erreur = "Indique ton nom (160 caractères maximum)."
@@ -6648,6 +8255,11 @@ def inscription():
         afficher_pays=True,
         pays_profil=PAYS_PROFIL,
         csrf_token=jeton_csrf(),
+        inscription_email=email if request.method == "POST" else "",
+        inscription_nom=nom if request.method == "POST" else "",
+        inscription_pays=pays if request.method == "POST" else "",
+        inscription_indicatif=indicatif_recu if request.method == "POST" else "",
+        inscription_telephone=telephone_saisi if request.method == "POST" else "",
     )
 
 
@@ -6703,7 +8315,7 @@ def transferer_conversation():
     if not hist:
         return jsonify({"ok": True, "transfere": 0})
 
-    conversation_id = _conv_courante(user_id)
+    conversation_id = _conv_courante(user_id) or _creer_conversation(user_id)
     # Ne transférer que si la conversation cible est vide
     existants = _messages_conversation(user_id, conversation_id)
     if existants:

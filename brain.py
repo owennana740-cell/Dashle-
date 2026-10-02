@@ -13,15 +13,19 @@ Corrections apportées :
 
 import json
 import os
+import logging
 import re
+import unicodedata
 import requests
 from urllib.parse import urlparse
+logger = logging.getLogger(__name__)
 from core.utils import BASE_DIR, lire_json
 from memory import memoire_active, se_souvenir_tout
 from config import CLE_API, MODELE_GEMINI, MAX_MESSAGES_CONTEXTE
 from database import User, UserPlugin, session_base
 from datetime import datetime
 from temps_reel import contexte_temps_reel
+from connectors.gemini import preflight as preflight_connector
 
 
 # Source unique des prix et avantages utilisés par le prompt et la page Tarifs.
@@ -194,11 +198,71 @@ def _historique_recent(historique) -> list:
     return list(reversed(selection))
 
 
+MEMOIRE_CONTEXT_MAX_ITEMS = 6
+MEMOIRE_CONTEXT_MAX_CHARS = 3000
+MEMOIRE_QUERY_MIN_TOKEN_LEN = 3
+MEMOIRE_REQUEST_HINTS = (
+    "souviens", "souvenir", "mémoire", "memoire", "rappelle", "rappelles",
+    "ce que tu sais de moi", "mes préférences", "mes preferences",
+)
+
+
+def _tokens_memoire(texte: str) -> set[str]:
+    normalise = unicodedata.normalize("NFD", str(texte or "")).encode(
+        "ascii", "ignore"
+    ).decode("ascii").lower()
+    return {
+        token for token in re.findall(r"[a-z0-9]{3,}", normalise)
+        if len(token) >= MEMOIRE_QUERY_MIN_TOKEN_LEN
+    }
+
+
+def _memoire_pertinente(message: str, user_id=None) -> str:
+    """Sélectionne un petit sous-ensemble de mémoire utilisateur pertinent au tour."""
+    if not user_id or not memoire_active(user_id):
+        return ""
+
+    souvenirs = se_souvenir_tout(user_id)
+    if not isinstance(souvenirs, dict):
+        return ""
+
+    requete = _tokens_memoire(message)
+    demande_memoire = any(indice in str(message or "").lower() for indice in MEMOIRE_REQUEST_HINTS)
+    candidats = []
+    for cle, valeur in souvenirs.items():
+        cle = str(cle)
+        if cle.startswith("__dashle_"):
+            continue
+        valeur = str(valeur or "").strip()
+        if not valeur:
+            continue
+        cle_tokens = _tokens_memoire(cle)
+        valeur_tokens = _tokens_memoire(valeur)
+        score = (len(requete & cle_tokens) * 4) + len(requete & valeur_tokens)
+        if demande_memoire:
+            score += 1
+        if score <= 0:
+            continue
+        candidats.append((score, cle, valeur))
+
+    candidats.sort(key=lambda item: (-item[0], item[1]))
+    lignes = []
+    total = 0
+    for _, cle, valeur in candidats[:MEMOIRE_CONTEXT_MAX_ITEMS]:
+        ligne = f"- {cle[:100]} : {valeur[:500]}"
+        if total + len(ligne) > MEMOIRE_CONTEXT_MAX_CHARS:
+            break
+        lignes.append(ligne)
+        total += len(ligne)
+    return "\n".join(lignes)
+
+
 def _instruction_systeme(
     resume: str = "", consignes: str = "", niveau: str = "free",
     contexte_live: str = "", nom_utilisateur: str | None = None,
     instructions_projet: str = "", fichiers_projet: str = "",
     est_visiteur: bool = False,
+    memoire_pertinente: str = "",
 ) -> str:
     instruction = (
         "Tu es Dashle, une IA personnelle. "
@@ -208,9 +272,26 @@ def _instruction_systeme(
         "et SpeechSynthesis pour lire les réponses à voix haute lorsque ce mode est activé. "
         "Ne prétends pas que Dashle fonctionne principalement par écrit ou ne peut pas "
         "répondre vocalement ; la disponibilité dépend du navigateur et de ses permissions. "
-        "Dashle peut analyser une image ou une vidéo envoyée dans la conversation, mais ne "
-        "peut pas produire ni joindre une nouvelle image tant qu'aucun outil de génération "
-        "d'images n'est disponible dans cette interface. "
+        "Dashle peut analyser une image ou une vidéo envoyée dans la conversation et peut "
+        "aussi générer des images lorsque l'utilisateur le demande explicitement. "
+        "Dashle SAIT générer des PDF sur le sujet demandé par l'utilisateur grâce à sa "
+        "fonctionnalité de génération de documents. Il est interdit de dire qu'il n'a pas "
+        "d'outil PDF, de prétendre que le PDF doit être copié dans Word ou Excel, ou de "
+        "renvoyer vers Word/Excel à la place de générer le PDF. Si l'utilisateur demande "
+        "simplement « peux-tu me générer un PDF ? » sans sujet, réponds oui et demande "
+        "sur quel sujet il souhaite le PDF. Si le sujet est donné, par exemple « génère "
+        "un PDF sur X », produis directement le PDF de X sans demander de confirmation. "
+        "Les fonctionnalités de l'interface comprennent notamment le chat, le mode vocal "
+        "lorsqu'il est disponible dans le navigateur, l'envoi/analyse d'images et de vidéos, "
+        "la génération d'images, la génération de PDF, la bibliothèque personnelle pour "
+        "retrouver les fichiers générés, les projets et fichiers de référence, les analyses "
+        "statistiques selon le forfait, les tâches planifiées selon le forfait, les paramètres "
+        "du compte et les pages d'offres, ainsi que les fonctions de paiement/abonnement. "
+        "Les forfaits visibles dans l'application sont Free, Pro et Prime ; leurs limites et "
+        "fonctionnalités doivent être décrites uniquement d'après l'interface et les règles "
+        "actuelles, sans inventer de quota ou de fonctionnalité. "
+        "Le PDF météo/temps réel est une fonctionnalité distincte : elle ne doit être utilisée "
+        "que pour les demandes portant réellement sur la météo, l'actualité ou l'heure/date. "
         "Dans une conversation déjà commencée, réponds directement sans répéter une salutation."
     )
     niveau_actuel = "visiteur" if est_visiteur else niveau if niveau in OFFRES_DASHLE else "free"
@@ -259,6 +340,12 @@ def _instruction_systeme(
         )
     if resume:
         instruction += "\nRésumé fiable des échanges précédents :\n" + resume
+    if memoire_pertinente:
+        instruction += (
+            "\nSouvenirs personnels pertinents pour ce tour :\n"
+            + memoire_pertinente
+            + "\nUtilise-les seulement s'ils sont pertinents et ne les invente pas."
+        )
     if consignes:
         instruction += (
             "\nConsignes personnalisées de l'utilisateur (à suivre si elles restent "
@@ -343,11 +430,13 @@ def demander_a_lia(message: str, historique=None, resume: str = "",
         return "La clé Gemini n'est pas configurée. Ajoute GEMINI_API_KEY dans le fichier .env."
 
     contexte_live = contexte_temps_reel(message, _plugins_actifs(user_id))
+    memoire_pertinente = _memoire_pertinente(message, user_id)
     corps = {
         "system_instruction": {"parts": [{"text": _instruction_systeme(
             resume, consignes, niveau, contexte_live, _nom_utilisateur(user_id),
             instructions_projet, fichiers_projet,
             est_visiteur=user_id is None,
+            memoire_pertinente=memoire_pertinente,
         )}]},
         "contents": _construire_contents(message, historique),
         "generationConfig": _gen_config(longueur),
@@ -367,12 +456,12 @@ def demander_a_lia(message: str, historique=None, resume: str = "",
                 retry_after = int(e.response.headers.get("Retry-After", 0))
             except (ValueError, TypeError):
                 retry_after = 0
-        print(f"ERREUR Gemini HTTP {code} [demander_a_lia] : {detail}")
+        logger.error("Gemini HTTP error endpoint=demander_a_lia code=%s", code)
         return _message_erreur_http(code, detail, retry_after)
     except requests.exceptions.Timeout:
         return "Le service IA a mis trop de temps à répondre. Réessaie dans quelques instants."
     except Exception as exc:
-        print(f"ERREUR Gemini inattendue [demander_a_lia] : {exc!r}")
+        logger.error("Gemini unexpected error endpoint=demander_a_lia type=%s", type(exc).__name__)
         return "Impossible de joindre le service IA. Vérifie la connexion puis réessaie."
 
 
@@ -389,18 +478,26 @@ def streamer_a_lia(
         yield "La clé Gemini n'est pas configurée. Ajoute GEMINI_API_KEY dans le fichier .env."
         return
 
+    connector_result = preflight_connector(message, user_id)
+    if connector_result:
+        yield connector_result
+        return
+
     consignes, longueur, niveau, nom_utilisateur = _reglages_reponse(user_id)
     contexte_live = contexte_temps_reel(message, _plugins_actifs(user_id))
+    memoire_pertinente = _memoire_pertinente(message, user_id)
     corps = {
         "system_instruction": {"parts": [{"text": _instruction_systeme(
             resume, consignes, niveau, contexte_live, nom_utilisateur,
             instructions_projet, fichiers_projet,
             est_visiteur=user_id is None,
+            memoire_pertinente=memoire_pertinente,
         )}]},
         "contents": _construire_contents(message, historique),
         "generationConfig": _gen_config(longueur),
     }
 
+    rep = None
     try:
         rep = _session.post(
             _url("streamGenerateContent") + "&alt=sse",
@@ -436,13 +533,16 @@ def streamer_a_lia(
                 retry_after = int(e.response.headers.get("Retry-After", 0))
             except (ValueError, TypeError):
                 retry_after = 0
-        print(f"ERREUR Gemini HTTP {code} [streamer_a_lia] : {detail}")
+        logger.error("Gemini HTTP error endpoint=streamer_a_lia code=%s", code)
         yield _message_erreur_http(code, detail, retry_after)
     except requests.exceptions.Timeout:
         yield "Le service IA a mis trop de temps à répondre. Réessaie dans quelques instants."
     except Exception as exc:
-        print(f"ERREUR Gemini inattendue [streamer_a_lia] : {exc!r}")
+        logger.error("Gemini unexpected error endpoint=streamer_a_lia type=%s", type(exc).__name__)
         yield "Impossible de joindre le service IA. Vérifie la connexion puis réessaie."
+    finally:
+        if rep is not None:
+            rep.close()
 
 
 def demander_a_lia_image(
@@ -514,12 +614,12 @@ def demander_a_lia_image(
                 retry_after = int(e.response.headers.get("Retry-After", 0))
             except (ValueError, TypeError):
                 retry_after = 0
-        print(f"ERREUR Gemini HTTP {code} [demander_a_lia_image] : {detail}")
+        logger.error("Gemini HTTP error endpoint=demander_a_lia_image code=%s", code)
         return _message_erreur_http(code, detail, retry_after)
     except requests.exceptions.Timeout:
         return "Le service IA a mis trop de temps à répondre. Réessaie dans quelques instants."
     except Exception as exc:
-        print(f"ERREUR Gemini inattendue [demander_a_lia_image] : {exc!r}")
+        logger.error("Gemini unexpected error endpoint=demander_a_lia_image type=%s", type(exc).__name__)
         return "Impossible de joindre le service IA. Vérifie la connexion puis réessaie."
 
 
@@ -567,7 +667,7 @@ def resumer_conversation(
         texte = rep.json()["candidates"][0]["content"]["parts"][0]["text"]
         return nettoyer_reponse(texte) or resume_existant
     except Exception as exc:
-        print("ERREUR Gemini pendant le résumé de conversation :", type(exc).__name__)
+        logger.error("Gemini summary error type=%s", type(exc).__name__)
         return resume_existant
 
 

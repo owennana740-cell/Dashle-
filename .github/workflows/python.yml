@@ -1,0 +1,55 @@
+name: Python validation
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Installer les dépendances
+        run: python -m pip install --upgrade pip && pip install -r requirements.txt
+      - name: Installer les dépendances JavaScript de test
+        run: npm install --no-audit --no-fund
+      - name: Compiler Python
+        run: python -m py_compile artifact_tools.py web.py app.py scripts/nettoyer_conversations_vides.py
+      - name: Vérifier le rendu Markdown JavaScript
+        run: node --check static/vendor/marked.min.js && node --check static/vendor/purify.min.js && node tests/test_markdown_jsdom.js
+      - name: Tests génération fichiers/images
+        run: python -m unittest tests.test_artifact_tools -v
+      - name: Tests conversations paresseuses
+        run: python -m unittest tests.test_conversation_lazy_creation -v
+      - name: Tests vocal jsdom
+        run: python -m unittest tests.test_vocal_view -v
+      - name: Tests sécurité connecteurs
+        if: always()
+        run: python -m unittest tests.test_connectors -v
+      - name: Tests inscription et téléphones
+        run: python -m unittest tests.test_registration_phone -v
+      - name: Tests mode vocal D2
+        run: python -m unittest tests.test_vocal_view -v
+      - name: Tests observabilité
+        run: python -m unittest tests.test_observability -v
+      - name: Tests résilience SSE
+        run: python -m unittest tests.test_sse_resilience -v
+      - name: Mesure performance serveur
+        run: python -m unittest tests.test_performance_baseline -v
+      - name: Tests sécurité des logs fournisseur
+        run: python -m unittest tests.test_provider_logging_security -v
+      - name: Tests PWA
+        run: python -m unittest tests.test_pwa_assets -v
+      - name: Tests interface mobile
+        run: python -m unittest tests.test_mobile_ui -v
+      - name: Tests SEO robots et sitemap
+        run: python -m unittest tests.test_seo -v
+      - name: Vérifier le diff
+        run: git diff --check
