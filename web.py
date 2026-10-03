@@ -6320,6 +6320,9 @@ def repondre_flux():
                         yield _evenement_action("action_failed", action_id, "video", "provider_unavailable",
                                                  message_indisponible, erreur=message_indisponible,
                                                  statut="provider_unavailable")
+                        yield "data: " + json.dumps({
+                            "termine": True, "message_id": None, "action_id": action_id
+                        }, ensure_ascii=False) + "\n\n"
                         return
                     yield _evenement_action(
                         "action_progress", action_id, "video", "en_attente",
@@ -6359,6 +6362,9 @@ def repondre_flux():
                         yield _evenement_action("action_failed", action_id, "recherche_web",
                                                  "provider_unavailable", str(exc), erreur=str(exc),
                                                  statut="provider_unavailable")
+                        yield "data: " + json.dumps({
+                            "termine": True, "message_id": None, "action_id": action_id
+                        }, ensure_ascii=False) + "\n\n"
                         return
                     except ProviderTimeout:
                         yield _evenement_action("action_failed", action_id, "recherche_web", "erreur",
