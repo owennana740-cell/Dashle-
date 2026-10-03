@@ -6214,6 +6214,8 @@ def repondre_flux():
     - Pour les utilisateurs connectés : sauvegarde BDD inchangée dans le générateur.
     """
     user_id = session.get("user_id")
+    if user_id is None:
+        _cle_visiteur_video()
     historique_recu = None
 
     if request.is_json:
