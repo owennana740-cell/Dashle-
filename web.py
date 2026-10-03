@@ -56,7 +56,8 @@ from artifact_tools import (detecter_demande_pdf, detecter_demande_image,
                             demande_illustration_pedagogique, extraire_contenu_fourni,
                             structurer_document, rendre_pdf, generer_image, extraire_texte_structure)
 from tool_router import detect_tool_intent
-from tool_providers import ProviderError, ProviderUnavailable, ProviderTimeout, ProviderRegistry\nfrom video_jobs import VideoJobStore
+from tool_providers import ProviderError, ProviderUnavailable, ProviderTimeout, ProviderRegistry
+from video_jobs import VideoJobStore
 
 BUILD_COMMIT = os.environ.get("RENDER_GIT_COMMIT") or os.environ.get("DASHLE_BUILD_COMMIT") or "inconnu"
 BUILD_COMMIT_SHORT = BUILD_COMMIT[:12] if BUILD_COMMIT != "inconnu" else BUILD_COMMIT
