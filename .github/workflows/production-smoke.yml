@@ -40,18 +40,23 @@ jobs:
           python - <<'PY'
           from html.parser import HTMLParser
           from pathlib import Path
+          import json
           import subprocess, sys
 
           class Scripts(HTMLParser):
               def __init__(self):
                   super().__init__()
                   self.items, self.attrs, self.buf, self.in_script = [], {}, [], False
+                  self.json_data = None
               def handle_starttag(self, tag, attrs):
                   if tag == "script":
                       self.attrs, self.buf, self.in_script = dict(attrs), [], True
               def handle_endtag(self, tag):
                   if tag == "script" and self.in_script:
-                      self.items.append((self.attrs, "".join(self.buf)))
+                      content = "".join(self.buf)
+                      self.items.append((self.attrs, content))
+                      if self.attrs.get("id") == "donnees-indicatifs":
+                          self.json_data = content
                       self.in_script = False
               def handle_data(self, data):
                   if self.in_script:
@@ -69,8 +74,14 @@ jobs:
                       print(f"JavaScript invalide dans {path}:\n{result.stderr}", file=sys.stderr)
                       sys.exit(1)
 
-          inscription = Path("/tmp/dashle__inscription.html").read_text(encoding="utf-8")
-          if 'id="donnees-indicatifs"' not in inscription or '"BF","Burkina Faso","226"' not in inscription:
-              print("Les données JSON des indicatifs ne sont pas présentes dans la production.", file=sys.stderr)
+          inscription_parser = Scripts()
+          inscription_parser.feed(Path("/tmp/dashle__inscription.html").read_text(encoding="utf-8"))
+          try:
+              indicatifs = json.loads(inscription_parser.json_data or "null")
+          except json.JSONDecodeError as error:
+              print(f"JSON des indicatifs invalide : {error}", file=sys.stderr)
+              sys.exit(1)
+          if not isinstance(indicatifs, list) or ["BF", "Burkina Faso", "226"] not in indicatifs:
+              print("Les données JSON des indicatifs sont absentes ou invalides.", file=sys.stderr)
               sys.exit(1)
           PY
