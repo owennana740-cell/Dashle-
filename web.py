@@ -44,7 +44,7 @@ from connectors.web import bp as connectors_bp
 from database import (
     AdminAuditLog, Conversation, ImageGenerationUsage, VoiceTranscriptionUsage, LibraryItem, Message, MessageFeedback, ShareLink, SubscriptionPayment, User,
     UserMemory, UserPreference, StatisticalAnalysisUsage, Project, ProjectFile, Reminder, UserPlugin,
-    ScheduledTask, ScheduledTaskRun, UserNotification,
+    ScheduledTask, ScheduledTaskRun, UserNotification, VideoGenerationJob,
     initialiser_base, session_base,
 )
 from statistiques import analyser_fichier
@@ -56,7 +56,11 @@ from artifact_tools import (detecter_demande_pdf, detecter_demande_image,
                             demande_illustration_pedagogique, extraire_contenu_fourni,
                             structurer_document, rendre_pdf, generer_image, extraire_texte_structure)
 from tool_router import detect_tool_intent
+
+PROVIDER_REGISTRY = ProviderRegistry(lambda: CLE_API, image_generator=generer_image)
+video_jobs.configure(PROVIDER_REGISTRY)
 from tool_providers import ProviderError, ProviderUnavailable, ProviderTimeout, ProviderRegistry
+import video_jobs
 
 BUILD_COMMIT = os.environ.get("RENDER_GIT_COMMIT") or os.environ.get("DASHLE_BUILD_COMMIT") or "inconnu"
 BUILD_COMMIT_SHORT = BUILD_COMMIT[:12] if BUILD_COMMIT != "inconnu" else BUILD_COMMIT
@@ -143,6 +147,7 @@ app.config.update(
     PERMANENT_SESSION_LIFETIME=timedelta(days=3650),
 )
 initialiser_base()
+video_jobs.resume_active_jobs()
 app.register_blueprint(connectors_bp)
 
 
