@@ -5943,6 +5943,8 @@ def repondre():
                 return jsonify({"reponse": quota["message"], "quota": quota}), 429
             saved = _enregistrer_element_bibliotheque(user_id, "image", "image-dashle", mime, raw, conversation_id) if user_id else False
             return jsonify({"reponse": "Image générée par DASHLE.", "artifact": {"type": "image", "mime_type": mime, "data": base64.b64encode(raw).decode("ascii"), "saved": saved}})
+        except ProviderUnavailable as exc:
+            return jsonify({"reponse": str(exc), "status": "provider_unavailable"}), 501
         except Exception as exc:
             app.logger.exception("Échec de génération d'image")
             return jsonify({"reponse": "Je n’ai pas pu générer l’image pour le moment.", "artifact_error": type(exc).__name__}), 502
