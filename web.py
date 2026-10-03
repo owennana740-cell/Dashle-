@@ -56,11 +56,11 @@ from artifact_tools import (detecter_demande_pdf, detecter_demande_image,
                             demande_illustration_pedagogique, extraire_contenu_fourni,
                             structurer_document, rendre_pdf, generer_image, extraire_texte_structure)
 from tool_router import detect_tool_intent
+from tool_providers import ProviderError, ProviderUnavailable, ProviderTimeout, ProviderRegistry
+import video_jobs
 
 PROVIDER_REGISTRY = ProviderRegistry(lambda: CLE_API, image_generator=generer_image)
 video_jobs.configure(PROVIDER_REGISTRY)
-from tool_providers import ProviderError, ProviderUnavailable, ProviderTimeout, ProviderRegistry
-import video_jobs
 
 BUILD_COMMIT = os.environ.get("RENDER_GIT_COMMIT") or os.environ.get("DASHLE_BUILD_COMMIT") or "inconnu"
 BUILD_COMMIT_SHORT = BUILD_COMMIT[:12] if BUILD_COMMIT != "inconnu" else BUILD_COMMIT
@@ -2627,6 +2627,7 @@ function afficherMarkdownInitial() { document.querySelectorAll('#chat .msg.bot')
 document.addEventListener('DOMContentLoaded', afficherMarkdownInitial);
 
 async function reprendreJobsVideo() {
+  if (typeof fetch !== 'function') return;
   try {
     const response = await fetch('/api/outils/jobs', { cache: 'no-store' });
     if (!response.ok) return;
