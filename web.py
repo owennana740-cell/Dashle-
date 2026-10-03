@@ -2749,15 +2749,24 @@ function creerSuiviAction(action) {
   titre.textContent = titres[action.type] || 'Action Dashle';
   const annuler = bloc.querySelector('.suivi-action-annuler');
   annuler.style.display = action.cancelable ? '' : 'none';
-  annuler.addEventListener('click', function() {
-    if (requeteActiveController) {
+  annuler.addEventListener('click', async function() {
+    if (action.type === 'video' && bloc.dataset.jobId) {
+      try {
+        const csrf = (document.querySelector('input[name="csrf_token"]') || {}).value || '';
+        await fetch('/api/outils/jobs/' + encodeURIComponent(bloc.dataset.jobId) + '/annuler', {
+          method: 'POST',
+          headers: csrf ? {'X-CSRF-Token': csrf} : {}
+        });
+      } catch(e) {}
+    } else if (requeteActiveController) {
       try { requeteActiveController.abort(); } catch(e) {}
       requeteActiveController = null;
     }
     reponseEnCours = false;
     mettreAJourSuiviAction(bloc, {
       id: bloc.dataset.actionId, type: action.type, step: 'annule',
-      message: 'Suivi interrompu', event: 'action_cancelled'
+      message: action.type === 'video' ? 'Suivi interrompu' : 'Suivi interrompu',
+      event: 'action_cancelled'
     });
   });
   chat.appendChild(bloc);
