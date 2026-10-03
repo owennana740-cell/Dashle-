@@ -89,18 +89,19 @@ class VideoJobPersistenceTests(unittest.TestCase):
             finally:
                 db.close()
 
-        self.session_patch = mock.patch.object(video_jobs, "session_base", isolated_session)
-        self.session_patch.start()
+        self.session_context = isolated_session
 
     def tearDown(self):
-        self.session_patch.stop()
         with self.SessionLocal() as db:
             db.query(VideoGenerationJob).delete()
             db.commit()
 
+    def make_store(self, registry):
+        return video_jobs.VideoJobStore(registry, session_context=self.session_context)
+
     def test_create_persists_job_without_provider_call_until_worker(self):
         provider = FakeVideoProvider()
-        store = video_jobs.VideoJobStore(FakeRegistry(provider))
+        store = self.make_store(FakeRegistry(provider))
         with mock.patch.object(store, "_start_worker"):
             job_id = store.create("une ville futuriste", user_id=7, visitor_key_hash=None, conversation_id=11)
         with self.SessionLocal() as db:
@@ -193,7 +194,7 @@ class VideoJobPersistenceTests(unittest.TestCase):
         self.assertIsNotNone(store.get("private-job", user_id=10, visitor_key_hash=None))
 
     def test_provider_unavailable_is_explicit(self):
-        store = video_jobs.VideoJobStore(FakeRegistry(available=False))
+        store = self.make_store(FakeRegistry(available=False))
         with unittest.mock.patch.object(store, "_start_worker"):
             with self.assertRaises(ProviderUnavailable):
                 store.create("test", user_id=1, visitor_key_hash=None, conversation_id=None)
