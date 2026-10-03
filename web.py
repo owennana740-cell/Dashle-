@@ -2809,7 +2809,8 @@ function mettreAJourSuiviAction(bloc, action) {
   const indicateur = bloc.querySelector('.suivi-action-indicateur');
   const messages = { preparation: 'Préparation…', generation: 'Génération en cours…', finalisation: 'Finalisation…', en_attente: 'En attente du fournisseur…' };
   const libelle = action.message || messages[action.step] || 'Action en cours…';
-  if (action.result && action.result.job_id && !bloc.dataset.toolJobFollowed) {\n    bloc.dataset.toolJobId = action.result.job_id;
+  if (action.result && action.result.job_id && !bloc.dataset.toolJobFollowed) {
+    bloc.dataset.toolJobId = action.result.job_id;
     bloc.dataset.toolJobFollowed = 'true';
     suivreJobOutil(bloc, action.result.job_id);
   }
