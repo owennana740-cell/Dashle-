@@ -146,7 +146,7 @@ app.config.update(
 initialiser_base()
 app.register_blueprint(connectors_bp)
 
-PROVIDER_REGISTRY = ProviderRegistry(lambda: CLE_API, image_generator=generer_image)
+PROVIDER_REGISTRY = ProviderRegistry(lambda: CLE_API, image_generator=lambda prompt, context: generer_image(prompt, context))
 VIDEO_JOB_STORE = VideoJobStore(PROVIDER_REGISTRY)
 VIDEO_JOB_STORE.resume_active_jobs()
 
@@ -187,6 +187,10 @@ def _cle_visiteur_video():
 
 
 def _lancer_job_video(message, user_id, conversation_id):
+    if not PROVIDER_REGISTRY.available("video_generation"):
+        raise ProviderUnavailable(
+            "La génération vidéo n'est pas encore configurée sur DASHLE : aucun fournisseur vidéo disponible."
+        )
     visitor_key_hash = None if user_id else _cle_visiteur_video()
     return VIDEO_JOB_STORE.create(
         message, user_id=user_id, visitor_key_hash=visitor_key_hash,
@@ -5985,7 +5989,7 @@ def securite():
 def _executer_recherche_web(message):
     provider = PROVIDER_REGISTRY.get("web_search")
     if provider is None or not PROVIDER_REGISTRY.available("web_search"):
-        raise ProviderUnavailable("La recherche Web générale n'est pas configurée sur DASHLE.")
+        raise ProviderUnavailable("La recherche Web générale n'est pas configurée sur DASHLE : aucun fournisseur de navigation Web disponible.")
     resultats = provider.search(message, timeout_s=35)
     if not resultats:
         raise ProviderError("Aucun résultat Web exploitable n'a été retourné.")
