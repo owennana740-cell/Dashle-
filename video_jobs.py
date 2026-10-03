@@ -80,7 +80,7 @@ def start(job_id):
     thread.start()
 def resume_active_jobs():
     now=_now()
-    with session_base() as db: ids=[j.id for j in db.query(VideoGenerationJob).filter(VideoGenerationJob.status.in_(list(ACTIVE_STATUSES)),VideoGenerationJob.expires_at>now).all()]
+    with session_base() as db: ids=[j.id for j in db.query(VideoGenerationJob).filter(VideoGenerationJob.status.in_(["queued", "processing", "completed"]),VideoGenerationJob.expires_at>now).all()]
     for job_id in ids:start(job_id)
 def get_owned(job_id,*,user_id,visitor_key_value):
     with session_base() as db:
