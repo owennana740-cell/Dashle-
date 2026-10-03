@@ -123,33 +123,48 @@ class VideoJobPersistenceTests(unittest.TestCase):
             self._delete(job_id)
 
     def test_result_endpoint_isolated(self):
+        from database import User
         job_id = "test-result-owner"
-        self._insert(job_id, status="completed", result_mime_type="video/mp4",
+        with session_base() as db:
+            owner = User(email="video-result-owner@example.invalid", password_hash="test")
+            other = User(email="video-result-other@example.invalid", password_hash="test")
+            db.add_all([owner, other]); db.flush()
+            owner_id, other_id = owner.id, other.id
+        self._insert(job_id, user_id=owner_id, status="completed", result_mime_type="video/mp4",
                      result_filename="video.mp4", result_data=b"video")
         try:
             with web.app.test_client() as client:
                 with client.session_transaction() as state:
-                    state["user_id"] = 202
+                    state["user_id"] = other_id
                 self.assertEqual(client.get(f"/api/outils/jobs/{job_id}/result").status_code, 404)
                 with client.session_transaction() as state:
-                    state["user_id"] = 101
+                    state["user_id"] = owner_id
                 self.assertEqual(client.get(f"/api/outils/jobs/{job_id}/result").status_code, 200)
         finally:
             self._delete(job_id)
+            with session_base() as db:
+                db.query(User).filter(User.id.in_([owner_id, other_id])).delete(synchronize_session=False)
 
     def test_reconnect_endpoint_lists_active_job_for_owner(self):
+        from database import User
         job_id = "test-reconnect-list"
-        self._insert(job_id, status="processing", progress=37.0, status_message="Génération en cours… 37 %")
+        with session_base() as db:
+            owner = User(email="video-reconnect-owner@example.invalid", password_hash="test")
+            db.add(owner); db.flush()
+            owner_id = owner.id
+        self._insert(job_id, user_id=owner_id, status="processing", progress=37.0, status_message="Génération en cours… 37 %")
         try:
             with web.app.test_client() as client:
                 with client.session_transaction() as state:
-                    state["user_id"] = 101
+                    state["user_id"] = owner_id
                 response = client.get("/api/outils/jobs")
                 self.assertEqual(response.status_code, 200)
                 payload = response.get_json()
                 self.assertTrue(any(item["job_id"] == job_id for item in payload["jobs"]))
         finally:
             self._delete(job_id)
+            with session_base() as db:
+                db.query(User).filter_by(id=owner_id).delete()
 
 
 if __name__ == "__main__":
