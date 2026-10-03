@@ -11,6 +11,7 @@ os.environ["DATABASE_URL"] = "sqlite://"
 os.environ["SESSION_COOKIE_SECURE"] = "0"
 
 import web
+from tool_providers import ProviderUnavailable
 import brain
 import artifact_tools
 from artifact_tools import (
@@ -125,11 +126,12 @@ class ArtifactToolsTests(unittest.TestCase):
             WebSearchProvider()
 
     def test_natural_latest_news_query_reports_web_provider_unavailable(self):
-        response = self.client.post(
-            "/repondre",
-            data={"message": "Cherche les dernières nouvelles sur le climat"},
-            headers={"X-CSRF-Token": "artifact-token"},
-        )
+        with patch.object(web.PROVIDER_REGISTRY, "available", return_value=False):
+            response = self.client.post(
+                "/repondre",
+                data={"message": "Cherche les dernières nouvelles sur le climat"},
+                headers={"X-CSRF-Token": "artifact-token"},
+            )
         self.assertEqual(response.status_code, 501)
         self.assertEqual(response.json["status"], "provider_unavailable")
 
@@ -287,7 +289,7 @@ class ArtifactToolsTests(unittest.TestCase):
         image.assert_not_called()
 
     def test_sse_video_generation_emits_provider_unavailable_state(self):
-        with patch.object(web.PROVIDER_REGISTRY, "available", return_value=False), patch.object(web, "streamer_message") as texte, patch.object(web, "generer_image") as image:
+        with patch.object(web.PROVIDER_REGISTRY, "available", return_value=False), patch.object(web, "streamer_message") as texte, patch.object(web, "generer_image") as image, patch.object(web, "_lancer_job_video", side_effect=ProviderUnavailable("aucun fournisseur vidéo n'est configuré sur DASHLE.")):
             response = self.client.post(
                 "/repondre_flux", data={"message": "Génère une vidéo futuriste."},
                 headers={"X-CSRF-Token": "artifact-token"},
@@ -314,7 +316,7 @@ class ArtifactToolsTests(unittest.TestCase):
         texte.assert_not_called()
 
     def test_sse_general_web_search_emits_provider_unavailable_state(self):
-        with patch.object(web.PROVIDER_REGISTRY, "available", return_value=False), patch.object(web, "streamer_message") as texte:
+        with patch.object(web.PROVIDER_REGISTRY, "available", return_value=False), patch.object(web, "streamer_message") as texte, patch.object(web, "_executer_recherche_web", side_effect=ProviderUnavailable("aucun fournisseur de navigation Web n'est configuré sur DASHLE.")):
             response = self.client.post(
                 "/repondre_flux", data={"message": "Cherche sur le Web les sources officielles."},
                 headers={"X-CSRF-Token": "artifact-token"},

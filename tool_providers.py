@@ -100,7 +100,15 @@ def _provider_error(response: requests.Response, label: str) -> ProviderError:
     detail = ""
     try:
         payload = response.json()
-        detail = str((payload.get("error") or {}).get("message") or "").strip()
+        if isinstance(payload, dict):
+            detail = str((payload.get("error") or {}).get("message") or "").strip()
+        elif isinstance(payload, list):
+            for item in payload:
+                if isinstance(item, dict):
+                    candidate = item.get("message") or (item.get("error") or {}).get("message")
+                    if candidate:
+                        detail = str(candidate).strip()
+                        break
     except (ValueError, TypeError):
         pass
     return ProviderError(f"{label} a refusé la requête (HTTP {code})" + (f": {detail[:240]}" if detail else "."))

@@ -363,6 +363,36 @@ class MobileOAuthHandoff(Base):
     used: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
 
+
+class VideoGenerationJob(Base):
+    """Job vidéo persistant et isolé par utilisateur/session visiteur."""
+    __tablename__ = "video_generation_jobs"
+    __table_args__ = (UniqueConstraint("provider", "provider_job_id", name="uq_video_job_provider_operation"),)
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=True)
+    visitor_key: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    conversation_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
+    provider: Mapped[str] = mapped_column(String(30), nullable=False)
+    tool_type: Mapped[str] = mapped_column(String(30), default="video_generation", nullable=False)
+    prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), index=True, nullable=False)
+    progress: Mapped[float | None] = mapped_column(Float, nullable=True)
+    status_message: Mapped[str] = mapped_column(String(300), default="", nullable=False)
+    provider_job_id: Mapped[str] = mapped_column(String(500), nullable=False)
+    result_mime_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    result_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    result_data: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    result_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    lease_token: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    retention_until: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class AdminAuditLog(Base):
     """Journal non sensible des connexions et actions administratives."""
     __tablename__ = "admin_audit_logs"
