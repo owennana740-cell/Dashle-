@@ -53,6 +53,10 @@ jobs:
         run: python -m unittest tests.test_mobile_ui -v
       - name: Tests SEO robots et sitemap
         run: python -m unittest tests.test_seo -v
+      - name: Tests persistance jobs vidéo
+        run: python -m unittest tests.test_video_jobs_persistence -v
+      - name: Tests contrat multimodal
+        run: python -m unittest tests.test_multimodal_contract -v
       - name: Suite Python complète dans un seul processus
         run: python -m unittest discover -s tests -p 'test_*.py'
       - name: Vérifier le diff
