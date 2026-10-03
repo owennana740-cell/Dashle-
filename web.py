@@ -2742,12 +2742,49 @@ function creerSuiviAction(action) {
   return bloc;
 }
 
+async function suivreJobOutil(bloc, jobId) {
+  try {
+    const response = await fetch('/api/outils/jobs/' + encodeURIComponent(jobId) + '/flux', {
+      headers: { 'Accept': 'text/event-stream' }, cache: 'no-store'
+    });
+    if (!response.ok || !response.body) throw new Error('Suivi du job indisponible');
+    const lecteur = response.body.getReader();
+    const decodeur = new TextDecoder();
+    let tampon = '';
+    while (true) {
+      const {done, value} = await lecteur.read();
+      if (done) break;
+      tampon += decodeur.decode(value, {stream:true});
+      const lignes = tampon.split('\n'); tampon = lignes.pop();
+      for (const ligne of lignes) {
+        if (!ligne.startsWith('data:')) continue;
+        let ev; try { ev = JSON.parse(ligne.slice(5).trim()); } catch(e) { continue; }
+        if (!ev || !ev.event) continue;
+        if (ev.action) {
+          mettreAJourSuiviAction(bloc, ev.action);
+          if (ev.event === 'action_completed') finaliserSuiviAction(bloc, ev.action.result || {});
+          if (ev.event === 'action_completed' || ev.event === 'action_failed') return;
+        }
+      }
+    }
+  } catch (e) {
+    mettreAJourSuiviAction(bloc, {
+      id: jobId, type:'video', event:'action_failed', step:'erreur',
+      message:'Le suivi de la génération a été interrompu.'
+    });
+  }
+}
+
 function mettreAJourSuiviAction(bloc, action) {
   if (!bloc) return;
   const etapes = bloc.querySelector('.suivi-action-etapes');
   const indicateur = bloc.querySelector('.suivi-action-indicateur');
   const messages = { preparation: 'Préparation…', generation: 'Génération en cours…', finalisation: 'Finalisation…', en_attente: 'En attente du fournisseur…' };
   const libelle = action.message || messages[action.step] || 'Action en cours…';
+  if (action.result && action.result.job_id && !bloc.dataset.toolJobFollowed) {
+    bloc.dataset.toolJobFollowed = 'true';
+    suivreJobOutil(bloc, action.result.job_id);
+  }
   if (action.event === 'action_failed') {
     indicateur.className = 'suivi-action-indicateur echec';
     const ligne = document.createElement('div'); ligne.className = 'suivi-action-etape echec';
