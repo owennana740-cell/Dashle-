@@ -148,7 +148,7 @@ class ProviderRouteTests(unittest.TestCase):
         self.assertEqual(response.json["reponse"], "Réponse fraîche.")
 
     def test_video_sse_launches_background_job_without_blocking_chat(self):
-        with patch.object(web, "_lancer_job_video", return_value="job-test-123"):
+        with patch.object(web.PROVIDER_REGISTRY, "available", return_value=True), patch.object(web, "_lancer_job_video", return_value="job-test-123"):
             response = self.client.post(
                 "/repondre_flux", data={"message": "Fais une vidéo d'une ville futuriste."}
             )
@@ -160,31 +160,38 @@ class ProviderRouteTests(unittest.TestCase):
         self.assertIn('"tool_job_id": "job-test-123"', body)
 
     def test_video_job_flux_renders_completed_artifact(self):
-        from web import _OUTIL_JOBS, _OUTIL_JOBS_LOCK
-        with _OUTIL_JOBS_LOCK:
-            _OUTIL_JOBS["job-progress-test"] = {
-                "id":"job-progress-test","type":"video","status":"succeeded","progress":100.0,
-                "provider_job_id":"operations/test","result":{"artifact":{
-                    "type":"video","mime_type":"video/mp4","filename":"video.mp4","data":"dm"
-                }}, "error":None, "user_id":None, "conversation_id":None,
-                "updated_at": web.perf_counter()
-            }
+        from database import VideoGenerationJob, session_base
+        from datetime import datetime, timedelta
+        with self.client.session_transaction() as state:
+            state["video_visitor_key"] = "tool-test-visitor"
+        visitor = web.video_jobs.visitor_key("tool-test-visitor", str(web.app.config.get("SECRET_KEY", "dashle")))
+        now = datetime.utcnow()
+        with session_base() as db:
+            db.add(VideoGenerationJob(
+                id="job-progress-test", user_id=None, visitor_key=visitor, conversation_id=None,
+                provider="gemini", tool_type="video_generation", prompt="test", status="completed",
+                progress=100.0, status_message="Génération terminée", provider_job_id="operations/test",
+                result_mime_type="video/mp4", result_filename="video.mp4", result_data=b"video",
+                result_size_bytes=5, expires_at=now + timedelta(hours=1),
+                retention_until=now + timedelta(days=7), completed_at=now,
+            ))
         try:
             response = self.client.get("/api/outils/jobs/job-progress-test/flux")
             body = response.get_data(as_text=True)
             self.assertEqual(response.status_code, 200)
             self.assertIn('"event": "action_completed"', body)
             self.assertIn('"mime_type": "video/mp4"', body)
+            self.assertIn('/api/outils/jobs/job-progress-test/result', body)
         finally:
-            with _OUTIL_JOBS_LOCK:
-                _OUTIL_JOBS.pop("job-progress-test", None)
+            with session_base() as db:
+                db.query(VideoGenerationJob).filter_by(id="job-progress-test").delete()
 
     def test_image_edit_route_passes_source_image_to_provider(self):
         from tool_providers import ImageArtifact
         class FakeEdit:
             def edit(self, image_bytes, mime_type, prompt, *, timeout_s):
-                self.assertEqual(image_bytes, b"fake-image")
-                self.assertEqual(mime_type, "image/png")
+                assert image_bytes == b"fake-image"
+                assert mime_type == "image/png"
                 return ImageArtifact(b"edited-image", "image/png", "edited.png")
         with patch.object(web.PROVIDER_REGISTRY, "available", return_value=True),              patch.object(web.PROVIDER_REGISTRY, "get", return_value=FakeEdit()),              patch.object(web, "_consommer_quota_image", return_value=True),              patch.object(web, "_enregistrer_element_bibliotheque", return_value=False),              patch.object(web, "detecter_type_media", return_value="image/png"):
             response = self.client.post(
