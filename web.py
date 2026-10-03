@@ -6502,10 +6502,17 @@ def repondre_flux():
                 type(err).__name__,
             )
             if action_type:
-                if isinstance(err, ProviderUnavailable):
+                if isinstance(err, ProviderUnavailable) or (
+                    isinstance(err, ProviderError) and action_type in {"video", "recherche_web"}
+                ):
+                    message_indisponible = (
+                        "aucun fournisseur vidéo n'est configuré sur DASHLE."
+                        if action_type == "video"
+                        else "aucun fournisseur de navigation Web n'est configuré sur DASHLE."
+                    )
                     yield _evenement_action(
                         "action_failed", action_id, action_type, "provider_unavailable",
-                        str(err), erreur=str(err), statut="provider_unavailable"
+                        message_indisponible, erreur=message_indisponible, statut="provider_unavailable"
                     )
                 else:
                     yield _evenement_action(
