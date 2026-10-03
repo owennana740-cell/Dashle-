@@ -2712,7 +2712,8 @@ function creerSuiviAction(action) {
   bloc.dataset.actionId = action.id || '';
   bloc.innerHTML = '<div class="suivi-action-entete"><span class="suivi-action-indicateur"></span><strong class="suivi-action-titre"></strong><button type="button" class="suivi-action-annuler" title="Annuler" aria-label="Annuler">Annuler</button></div><div class="suivi-action-etapes"></div>';
   const titre = bloc.querySelector('.suivi-action-titre');
-  titre.textContent = action.type === 'image' ? 'Génération d’image' : action.type === 'pdf' ? 'Génération de PDF' : action.type === 'video' ? 'Génération de vidéo' : action.type === 'recherche_web' ? 'Recherche Web' : 'Action Dashle';
+  const titres = { image:'Génération d’image', pdf:'Génération de PDF', video:'Génération de vidéo', recherche_web:'Recherche Web' };
+  titre.textContent = titres[action.type] || 'Action Dashle';
   const annuler = bloc.querySelector('.suivi-action-annuler');
   annuler.style.display = action.cancelable ? '' : 'none';
   annuler.addEventListener('click', function() {
@@ -2723,7 +2724,7 @@ function creerSuiviAction(action) {
     reponseEnCours = false;
     mettreAJourSuiviAction(bloc, {
       id: bloc.dataset.actionId, type: action.type, step: 'annule',
-      message: 'Action annulée', event: 'action_cancelled'
+      message: 'Suivi interrompu', event: 'action_cancelled'
     });
   });
   chat.appendChild(bloc);
@@ -2735,19 +2736,12 @@ function mettreAJourSuiviAction(bloc, action) {
   if (!bloc) return;
   const etapes = bloc.querySelector('.suivi-action-etapes');
   const indicateur = bloc.querySelector('.suivi-action-indicateur');
-  const messages = { preparation: 'Préparation de l’image…', generation: 'Génération en cours…', finalisation: 'Finalisation…' };
+  const messages = { preparation: 'Préparation…', generation: 'Génération en cours…', finalisation: 'Finalisation…', en_attente: 'En attente du fournisseur…' };
   const libelle = action.message || messages[action.step] || 'Action en cours…';
   if (action.event === 'action_failed') {
     indicateur.className = 'suivi-action-indicateur echec';
     const ligne = document.createElement('div'); ligne.className = 'suivi-action-etape echec';
-    ligne.textContent = action.message || '✕ Génération échouée'; etapes.appendChild(ligne);
-    if (!bloc.querySelector('.suivi-action-image-retry') && action.type === 'image') {
-      const bouton = document.createElement('button');
-      bouton.type = 'button'; bouton.className = 'primaire suivi-action-image-retry';
-      bouton.textContent = 'Réessayer';
-      bouton.addEventListener('click', function(){ genererArtifactDansChat(bloc.dataset.prompt || '', 'image'); });
-      etapes.appendChild(bouton);
-    }
+    ligne.textContent = action.message || '✕ L’opération a échoué'; etapes.appendChild(ligne);
     bloc.dataset.generationState = action.status || 'failed';
     bloc.dataset.generationActive = 'false';
     return;
@@ -2755,29 +2749,34 @@ function mettreAJourSuiviAction(bloc, action) {
   if (action.event === 'action_cancelled' || action.step === 'annule') {
     indicateur.className = 'suivi-action-indicateur annule';
     const ligne = document.createElement('div'); ligne.className = 'suivi-action-etape annule';
-    ligne.textContent = '— Génération annulée'; etapes.appendChild(ligne);
+    ligne.textContent = '— Suivi interrompu'; etapes.appendChild(ligne);
     bloc.dataset.generationState = 'cancelled';
     bloc.dataset.generationActive = 'false';
     return;
   }
   if (action.event === 'action_completed' || action.step === 'termine') {
     indicateur.className = 'suivi-action-indicateur termine';
+    const labels = { image:'✓ Génération terminée', pdf:'✓ PDF terminé', video:'✓ Vidéo terminée', recherche_web:'✓ Recherche Web effectuée' };
     const ligne = document.createElement('div'); ligne.className = 'suivi-action-etape termine';
-    ligne.textContent = '✓ Image générée'; etapes.appendChild(ligne);
+    ligne.textContent = labels[action.type] || '✓ Action terminée'; etapes.appendChild(ligne);
     bloc.dataset.generationState = 'completed';
     bloc.dataset.generationActive = 'false';
     return;
   }
   indicateur.className = 'suivi-action-indicateur actif';
-  const precedent = etapes.querySelector('.suivi-action-etape.actif');
-  if (precedent) precedent.classList.remove('actif');
-  if (action.type === 'image') {
+  if (action.type === 'image' || action.type === 'video') {
     bloc.dataset.generationState = action.step || 'generation';
     bloc.dataset.generationActive = 'true';
     let carte = bloc.querySelector('.suivi-action-image-progress');
     if (!carte) { carte = document.createElement('div'); carte.className = 'suivi-action-image-progress'; etapes.appendChild(carte); }
-    carte.innerHTML = '<div class="titre"></div><div class="sous-titre">Une image originale se prépare.</div><div class="barre" aria-hidden="true"></div>';
+    const progress = action.result && typeof action.result.progress === 'number' ? action.result.progress : null;
+    const pct = progress !== null ? Math.max(0, Math.min(100, progress)) : null;
+    carte.innerHTML = '<div class="titre"></div><div class="sous-titre"></div><div class="barre" aria-hidden="true"></div>';
     carte.querySelector('.titre').textContent = libelle;
+    carte.querySelector('.sous-titre').textContent = pct === null ? 'Traitement en cours…' : ('Traitement en cours… ' + pct + ' %');
+    const barre = carte.querySelector('.barre');
+    if (pct === null) { barre.classList.add('indeterminee'); barre.style.width = ''; }
+    else { barre.classList.remove('indeterminee'); barre.style.width = pct + '%'; }
   } else {
     const ligne = document.createElement('div'); ligne.className = 'suivi-action-etape actif';
     ligne.innerHTML = '<span class="suivi-action-points">•••</span> <span></span>';
