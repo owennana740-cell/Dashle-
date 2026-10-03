@@ -11,6 +11,7 @@ os.environ["DATABASE_URL"] = "sqlite://"
 os.environ["SESSION_COOKIE_SECURE"] = "0"
 
 import web
+from tool_providers import ProviderUnavailable
 import brain
 import artifact_tools
 from artifact_tools import (
@@ -288,7 +289,7 @@ class ArtifactToolsTests(unittest.TestCase):
         image.assert_not_called()
 
     def test_sse_video_generation_emits_provider_unavailable_state(self):
-        with patch.object(web.PROVIDER_REGISTRY, "available", return_value=False), patch.object(web, "streamer_message") as texte, patch.object(web, "generer_image") as image:
+        with patch.object(web.PROVIDER_REGISTRY, "available", return_value=False), patch.object(web, "streamer_message") as texte, patch.object(web, "generer_image") as image, patch.object(web, "_lancer_job_video", side_effect=ProviderUnavailable("aucun fournisseur vidéo n'est configuré sur DASHLE.")):
             response = self.client.post(
                 "/repondre_flux", data={"message": "Génère une vidéo futuriste."},
                 headers={"X-CSRF-Token": "artifact-token"},
