@@ -5946,9 +5946,9 @@ def repondre():
             return jsonify({"reponse": "La génération vidéo n'est pas encore configurée sur DASHLE.",
                             "status": "provider_unavailable"}), 501
         try:
-            job = provider.create(message, timeout_s=30)
-            return jsonify({"reponse": "Génération vidéo lancée.", "status": job.status,
-                            "job_id": job.job_id, "progress": job.progress}), 202
+            job_id = _lancer_job_video(message, user_id, session.get("conversation_id"))
+            return jsonify({"reponse": "Génération vidéo lancée.", "status": "queued",
+                            "job_id": job_id, "progress": None}), 202
         except ProviderUnavailable as exc:
             return jsonify({"reponse": str(exc), "status": "provider_unavailable"}), 501
         except ProviderTimeout:
@@ -6062,6 +6062,28 @@ def _evenement_action(nom_evenement, action_id, action_type, etape, message,
     return "data: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
 
 
+def _video_visitor_key():
+    raw = session.get("video_visitor_key")
+    if not raw:
+        raw = secrets.token_urlsafe(24)
+        session["video_visitor_key"] = raw
+        session.modified = True
+    return video_jobs.visitor_key(raw, str(app.config.get("SECRET_KEY", "dashle")))
+
+def _video_job_owner():
+    user_id = session.get("user_id")
+    return user_id, None if user_id is not None else _video_visitor_key()
+
+def _lancer_job_video(message, user_id, conversation_id):
+    visitor = None if user_id is not None else _video_visitor_key()
+    job = video_jobs.create_job(message, user_id=user_id, visitor_key_value=visitor, conversation_id=conversation_id)
+    video_jobs.start(job.id)
+    app.logger.info("tool=video_generation provider=gemini job_id=%s status=queued", job.id)
+    return job.id
+
+def _outil_job_nettoyer():
+    video_jobs.cleanup_expired_jobs()
+
 def _demande_action_longue(message):
     """Retourne l'outil choisi par le routeur naturel, avec compatibilité historique."""
     intention = detect_tool_intent(message)
@@ -6084,54 +6106,39 @@ def _demande_action_longue(message):
     return None
 
 
+@app.route("/api/outils/jobs")
+def lister_jobs_outils():
+    user_id, visitor = _video_job_owner()
+    jobs = video_jobs.list_owned(user_id=user_id, visitor_key_value=visitor)
+    return jsonify({"jobs": [{
+        "job_id": j["id"], "type": "video", "status": j["status"],
+        "progress": j["progress"], "message": j["status_message"],
+        "prompt": j["prompt"], "conversation_id": j["conversation_id"]
+    } for j in jobs]})
+
+@app.route("/api/outils/jobs/<job_id>/result")
+def resultat_job_outil(job_id):
+    user_id, visitor = _video_job_owner()
+    result = video_jobs.result_for_owned(job_id, user_id=user_id, visitor_key_value=visitor)
+    if result is None:
+        return jsonify({"status": "not_found"}), 404
+    response = send_file(io.BytesIO(result["data"]), mimetype=result["mime_type"],
+                         as_attachment=False, download_name=result["filename"], conditional=True)
+    response.headers["Cache-Control"] = "private, max-age=3600"
+    return response
+
 @app.route("/api/outils/jobs/<job_id>/flux")
 def flux_job_outil(job_id):
     _outil_job_nettoyer()
-    user_id = session.get("user_id")
-    with _OUTIL_JOBS_LOCK:
-        job = _OUTIL_JOBS.get(job_id)
-        if job is None or (job.get("user_id") is not None and job.get("user_id") != user_id):
-            return jsonify({"status": "not_found"}), 404
+    user_id, visitor = _video_job_owner()
+    if video_jobs.get_owned(job_id, user_id=user_id, visitor_key_value=visitor) is None:
+        return jsonify({"status": "not_found"}), 404
     def generate():
-        dernier = None
-        while True:
-            with _OUTIL_JOBS_LOCK:
-                current = dict(_OUTIL_JOBS.get(job_id, {}))
-            if not current:
-                yield "data: " + json.dumps({"event":"action_failed","status":"expired"}, ensure_ascii=False) + "\n\n"
-                return
-            snapshot = (
-                current.get("status"), current.get("progress"),
-                current.get("error"), current.get("result")
-            )
-            if snapshot != dernier:
-                dernier = snapshot
-                if current.get("status") in {"succeeded"}:
-                    yield "data: " + json.dumps({
-                        "event":"action_completed", "action":{"id":job_id,"type":"video","step":"termine",
-                        "message":"Génération vidéo terminée.","result":current.get("result") or {}}
-                    }, ensure_ascii=False) + "\n\n"
-                    return
-                if current.get("status") in {"failed","provider_unavailable"}:
-                    yield "data: " + json.dumps({
-                        "event":"action_failed", "action":{"id":job_id,"type":"video",
-                        "step":current.get("status"),"message":(
-                            "La génération vidéo n'est pas encore configurée sur DASHLE."
-                            if current.get("status") == "provider_unavailable"
-                            else "La génération vidéo a échoué."
-                        ),"status":current.get("status")}
-                    }, ensure_ascii=False) + "\n\n"
-                    return
-                yield "data: " + json.dumps({
-                    "event":"action_progress","action":{"id":job_id,"type":"video",
-                    "step":current.get("status") or "generation",
-                    "message":(
-                        f"Génération en cours… {current['progress']:g} %"
-                        if isinstance(current.get("progress"), (int,float))
-                        else "Génération en cours…"
-                    ),"result":{"progress":current.get("progress")}}
-                }, ensure_ascii=False) + "\n\n"
-            time.sleep(2)
+        for event in video_jobs.stream_events(job_id, user_id=user_id, visitor_key_value=visitor):
+            if event is None:
+                yield ": keepalive\n\n"
+            else:
+                yield "data: " + json.dumps(event, ensure_ascii=False) + "\n\n"
     return Response(stream_with_context(generate()), mimetype="text/event-stream",
                     headers={"Cache-Control":"no-cache","X-Accel-Buffering":"no"})
 
