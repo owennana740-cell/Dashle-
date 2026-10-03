@@ -147,6 +147,12 @@ class ProviderRouteTests(unittest.TestCase):
         self.assertEqual(response.json["sources"][0]["url"], "https://example.com/source")
         self.assertEqual(response.json["reponse"], "Réponse fraîche.")
 
+    def test_visitor_can_reconnect_to_video_job_endpoints(self):
+        with patch.object(web, "active_for_owner", return_value=[]):
+            response = self.client.get("/api/outils/jobs/actifs")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["jobs"], [])
+
     def test_video_sse_launches_background_job_without_blocking_chat(self):
         with patch.object(web, "_lancer_job_video", return_value="job-test-123"):
             response = self.client.post(
