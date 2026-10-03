@@ -104,9 +104,11 @@ class VideoJobPersistenceTests(unittest.TestCase):
         with Session() as db:
             db.add(User(id=7, email="video-race-test@example.invalid", password_hash="test"))
             db.commit()
+
         barrier = threading.Barrier(2)
         insert_barrier = threading.Barrier(2)
         provider_calls = 0
+        spawn_calls = 0
         provider_lock = threading.Lock()
 
         @contextmanager
@@ -125,14 +127,17 @@ class VideoJobPersistenceTests(unittest.TestCase):
             if "INSERT INTO video_generation_jobs" in statement:
                 insert_barrier.wait(timeout=5)
 
+        def fake_spawn(job_id, provider):
+            nonlocal provider_calls, spawn_calls
+            with provider_lock:
+                spawn_calls += 1
+                provider.create("même demande vidéo", timeout_s=30)
+                provider_calls += 1
+
         event.listen(engine, "before_cursor_execute", before_cursor_execute)
 
         class ConcurrentProvider(FakeVideoProvider):
-            def create(self, prompt, *, timeout_s):
-                nonlocal provider_calls
-                with provider_lock:
-                    provider_calls += 1
-                return super().create(prompt, timeout_s=timeout_s)
+            pass
 
         provider = ConcurrentProvider()
         results = []
@@ -151,7 +156,7 @@ class VideoJobPersistenceTests(unittest.TestCase):
 
         threads = [threading.Thread(target=create_from_worker) for _ in range(2)]
         try:
-            with patch.object(video_jobs, "session_base", concurrent_session):
+            with patch.object(video_jobs, "session_base", concurrent_session),                  patch.object(video_jobs, "_spawn_active_job", fake_spawn):
                 for thread in threads:
                     thread.start()
                 for thread in threads:
@@ -171,9 +176,7 @@ class VideoJobPersistenceTests(unittest.TestCase):
                 self.assertEqual(len(rows), 1)
                 self.assertEqual(rows[0].id, results[0])
                 self.assertEqual(rows[0].user_id, 7)
-            deadline = time.monotonic() + 2
-            while provider_calls < 1 and time.monotonic() < deadline:
-                time.sleep(0.01)
+            self.assertEqual(spawn_calls, 1)
             self.assertEqual(provider_calls, 1)
         finally:
             event.remove(engine, "before_cursor_execute", before_cursor_execute)
