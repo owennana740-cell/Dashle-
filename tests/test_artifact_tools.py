@@ -275,7 +275,7 @@ class ArtifactToolsTests(unittest.TestCase):
         self.assertIn("pas pu générer", response.json["reponse"])
 
     def test_video_generation_is_reported_unavailable_without_provider_call(self):
-        with patch.object(web, "streamer_message") as texte, patch.object(web, "generer_image") as image:
+        with patch.object(web.PROVIDER_REGISTRY, "available", return_value=False), patch.object(web, "streamer_message") as texte, patch.object(web, "generer_image") as image:
             response = self.client.post(
                 "/repondre", data={"message": "Crée une vidéo d'une voiture volante."},
                 headers={"X-CSRF-Token": "artifact-token"},
@@ -287,7 +287,7 @@ class ArtifactToolsTests(unittest.TestCase):
         image.assert_not_called()
 
     def test_sse_video_generation_emits_provider_unavailable_state(self):
-        with patch.object(web, "streamer_message") as texte, patch.object(web, "generer_image") as image:
+        with patch.object(web.PROVIDER_REGISTRY, "available", return_value=False), patch.object(web, "streamer_message") as texte, patch.object(web, "generer_image") as image:
             response = self.client.post(
                 "/repondre_flux", data={"message": "Génère une vidéo futuriste."},
                 headers={"X-CSRF-Token": "artifact-token"},
@@ -303,7 +303,7 @@ class ArtifactToolsTests(unittest.TestCase):
         image.assert_not_called()
 
     def test_general_web_search_is_reported_unavailable_without_search_provider(self):
-        with patch.object(web, "streamer_message") as texte:
+        with patch.object(web.PROVIDER_REGISTRY, "available", return_value=False), patch.object(web, "streamer_message") as texte:
             response = self.client.post(
                 "/repondre", data={"message": "Fais une recherche sur Internet sur DASHLE."},
                 headers={"X-CSRF-Token": "artifact-token"},
@@ -314,7 +314,7 @@ class ArtifactToolsTests(unittest.TestCase):
         texte.assert_not_called()
 
     def test_sse_general_web_search_emits_provider_unavailable_state(self):
-        with patch.object(web, "streamer_message") as texte:
+        with patch.object(web.PROVIDER_REGISTRY, "available", return_value=False), patch.object(web, "streamer_message") as texte:
             response = self.client.post(
                 "/repondre_flux", data={"message": "Cherche sur le Web les sources officielles."},
                 headers={"X-CSRF-Token": "artifact-token"},
