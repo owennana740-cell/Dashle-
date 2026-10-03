@@ -12,7 +12,7 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
 import video_jobs
-from database import Base, VideoGenerationJob
+from database import Base, User, VideoGenerationJob
 
 
 class FakeVideoProvider:
@@ -98,8 +98,12 @@ class VideoJobPersistenceTests(unittest.TestCase):
             self.skipTest("VIDEO_JOBS_TEST_DATABASE_URL non configurée")
 
         engine = create_engine(database_url, pool_pre_ping=True)
+        User.__table__.create(engine, checkfirst=True)
         VideoGenerationJob.__table__.create(engine, checkfirst=True)
         Session = sessionmaker(bind=engine, expire_on_commit=False)
+        with Session() as db:
+            db.add(User(id=7, email="video-race-test@example.invalid", password_hash="test"))
+            db.commit()
         barrier = threading.Barrier(2)
         insert_barrier = threading.Barrier(2)
         provider_calls = 0
@@ -175,6 +179,7 @@ class VideoJobPersistenceTests(unittest.TestCase):
             event.remove(engine, "before_cursor_execute", before_cursor_execute)
             with engine.begin() as connection:
                 connection.execute(VideoGenerationJob.__table__.delete())
+                connection.execute(User.__table__.delete())
             engine.dispose()
 
     def test_same_idempotency_key_is_scoped_to_owner(self):
