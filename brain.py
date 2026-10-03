@@ -274,6 +274,8 @@ def _instruction_systeme(
         "répondre vocalement ; la disponibilité dépend du navigateur et de ses permissions. "
         "Dashle peut analyser une image ou une vidéo envoyée dans la conversation et peut "
         "aussi générer des images lorsque l'utilisateur le demande explicitement. "
+        "Aucun fournisseur de génération vidéo, d'édition d'image ou de recherche Web générale "
+        "n'est actuellement connecté : ne prétends jamais avoir lancé ces opérations ni consulté le Web. "
         "Dashle SAIT générer des PDF sur le sujet demandé par l'utilisateur grâce à sa "
         "fonctionnalité de génération de documents. Il est interdit de dire qu'il n'a pas "
         "d'outil PDF, de prétendre que le PDF doit être copié dans Word ou Excel, ou de "

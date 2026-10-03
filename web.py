@@ -49,6 +49,9 @@ from database import (
 from statistiques import analyser_fichier
 from temps_reel import actualites_recentes, meteo_du_jour
 from artifact_tools import (detecter_demande_pdf, detecter_demande_image,
+                            detecter_demande_generation_video,
+                            detecter_demande_recherche_web,
+                            detecter_demande_modification_image,
                             demande_illustration_pedagogique, extraire_contenu_fourni,
                             structurer_document, rendre_pdf, generer_image, extraire_texte_structure)
 
@@ -905,8 +908,8 @@ body {
   margin: 0;
   background: var(--fond);
   color: var(--texte);
-  height: 100vh;
-  height: 100dvh;
+  height: var(--dashle-viewport-height, 100vh);
+  height: var(--dashle-viewport-height, 100dvh);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -1086,8 +1089,8 @@ header button.icon-btn:hover { background: rgba(255,255,255,0.18); }
   left: 0;
   width: 82%;
   max-width: 320px;
-  height: 100%;
-  height: 100dvh;
+  height: var(--dashle-viewport-height, 100%);
+  height: var(--dashle-viewport-height, 100dvh);
   background: var(--sidebar-bg);
   z-index: 6;
   overflow-y: auto;
@@ -1145,6 +1148,7 @@ header button.icon-btn:hover { background: rgba(255,255,255,0.18); }
 /* ---- Zone de chat ---- */
 #chat {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: 16px;
   width: min(900px, 100%);
@@ -1874,6 +1878,20 @@ if ('serviceWorker' in navigator) {
 <style>{{ css }}</style>
 </head>
 <body class="theme-{{ preferences.theme }}">
+
+<script>
+(function(){
+  if (!/DASHLE-Android/i.test(navigator.userAgent) || !window.visualViewport) return;
+  const root = document.documentElement;
+  const updateViewport = function(){
+    if (window.visualViewport.scale !== 1) return;
+    root.style.setProperty('--dashle-viewport-height', Math.round(window.visualViewport.height) + 'px');
+  };
+  window.visualViewport.addEventListener('resize', updateViewport, {passive:true});
+  window.addEventListener('resize', updateViewport, {passive:true});
+  updateViewport();
+})();
+</script>
 
 <header>
   <button class="icon-btn" onclick="document.getElementById('sidebar').style.display='block';document.getElementById('voile').style.display='block';" aria-label="Menu" title="Menu">&#9776;</button>
@@ -2691,7 +2709,7 @@ function creerSuiviAction(action) {
   bloc.dataset.actionId = action.id || '';
   bloc.innerHTML = '<div class="suivi-action-entete"><span class="suivi-action-indicateur"></span><strong class="suivi-action-titre"></strong><button type="button" class="suivi-action-annuler" title="Annuler" aria-label="Annuler">Annuler</button></div><div class="suivi-action-etapes"></div>';
   const titre = bloc.querySelector('.suivi-action-titre');
-  titre.textContent = action.type === 'image' ? 'Génération d’image' : action.type === 'pdf' ? 'Génération de PDF' : 'Action Dashle';
+  titre.textContent = action.type === 'image' ? 'Génération d’image' : action.type === 'pdf' ? 'Génération de PDF' : action.type === 'video' ? 'Génération de vidéo' : action.type === 'recherche_web' ? 'Recherche Web' : 'Action Dashle';
   const annuler = bloc.querySelector('.suivi-action-annuler');
   annuler.style.display = action.cancelable ? '' : 'none';
   annuler.addEventListener('click', function() {
@@ -2719,7 +2737,7 @@ function mettreAJourSuiviAction(bloc, action) {
   if (action.event === 'action_failed') {
     indicateur.className = 'suivi-action-indicateur echec';
     const ligne = document.createElement('div'); ligne.className = 'suivi-action-etape echec';
-    ligne.textContent = '✕ Génération échouée'; etapes.appendChild(ligne);
+    ligne.textContent = action.message || '✕ Génération échouée'; etapes.appendChild(ligne);
     if (!bloc.querySelector('.suivi-action-image-retry') && action.type === 'image') {
       const bouton = document.createElement('button');
       bouton.type = 'button'; bouton.className = 'primaire suivi-action-image-retry';
@@ -2727,7 +2745,7 @@ function mettreAJourSuiviAction(bloc, action) {
       bouton.addEventListener('click', function(){ genererArtifactDansChat(bloc.dataset.prompt || '', 'image'); });
       etapes.appendChild(bouton);
     }
-    bloc.dataset.generationState = 'failed';
+    bloc.dataset.generationState = action.status || 'failed';
     bloc.dataset.generationActive = 'false';
     return;
   }
@@ -2946,7 +2964,7 @@ async function genererArtifactDansChat(texte, type) {
           if (!suivi) suivi = creerSuiviAction(ev.action);
           mettreAJourSuiviAction(suivi, ev.action);
           if (ev.action.result && ev.action.result.quota) afficherQuotaImage(suivi, ev.action.result.quota, texte);
-          else afficherEchecImage(suivi, texte, ev.action.error);
+          else if (ev.action.type === 'image') afficherEchecImage(suivi, texte, ev.action.error);
         } else if (ev.event === 'action_cancelled') {
           if (!suivi) suivi = creerSuiviAction(ev.action);
           mettreAJourSuiviAction(suivi, ev.action);
@@ -4305,7 +4323,7 @@ form.addEventListener('submit', async function(e) {
         mettreAJourSuiviAction(suiviActionSse, ev.action);
         if (ev.event === 'action_failed') {
           if (ev.action.result && ev.action.result.quota) afficherQuotaImage(suiviActionSse, ev.action.result.quota, texte);
-          else afficherEchecImage(suiviActionSse, texte, ev.action.error);
+          else if (ev.action.type === 'image') afficherEchecImage(suiviActionSse, texte, ev.action.error);
         }
         return true;
       }
@@ -5819,6 +5837,16 @@ def repondre():
     message = request.form.get("message", "").strip()
     if not message:
         return jsonify({"reponse": ""})
+    if detecter_demande_generation_video(message):
+        return jsonify({
+            "reponse": "La génération de vidéo n’est pas disponible : aucun fournisseur vidéo n’est connecté à DASHLE.",
+            "status": "provider_unavailable",
+        }), 501
+    if detecter_demande_recherche_web(message):
+        return jsonify({
+            "reponse": "La recherche Web générale n’est pas disponible : aucun fournisseur de navigation Web n’est connecté à DASHLE.",
+            "status": "provider_unavailable",
+        }), 501
     if detecter_demande_image(message):
         bloque, quota = _quota_image_bloque(user_id)
         if bloque:
@@ -5887,7 +5915,7 @@ def repondre():
 
 
 def _evenement_action(nom_evenement, action_id, action_type, etape, message,
-                         resultats=None, erreur=None):
+                         resultats=None, erreur=None, statut=None):
     """Construit un événement SSE générique de suivi d'action."""
     payload = {
         "event": nom_evenement,
@@ -5903,11 +5931,17 @@ def _evenement_action(nom_evenement, action_id, action_type, etape, message,
         payload["action"]["result"] = resultats
     if erreur is not None:
         payload["action"]["error"] = erreur
+    if statut is not None:
+        payload["action"]["status"] = statut
     return "data: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
 
 
 def _demande_action_longue(message):
     """Retourne le type d'action multimédia gérée directement par le flux SSE."""
+    if detecter_demande_generation_video(message):
+        return "video"
+    if detecter_demande_recherche_web(message):
+        return "recherche_web"
     if detecter_demande_image(message):
         return "image"
     if detecter_demande_pdf(message):
@@ -5984,8 +6018,44 @@ def repondre_flux():
             if action_type:
                 yield _evenement_action(
                     "action_started", action_id, action_type, "preparation",
-                    "Ton idée prend forme…" if action_type == "image" else "Préparation du document…",
+                    "Ton idée prend forme..." if action_type == "image" else (
+                        "Vérification du fournisseur vidéo..." if action_type == "video"
+                        else "Vérification du fournisseur Web..." if action_type == "recherche_web"
+                        else "Préparation du document..."
+                    ),
                 )
+                if action_type in {"video", "recherche_web"}:
+                    if action_type == "video":
+                        message_indisponible = (
+                            "La génération de vidéo n’est pas disponible : "
+                            "aucun fournisseur vidéo n’est connecté à DASHLE."
+                        )
+                    else:
+                        message_indisponible = (
+                            "La recherche Web générale n’est pas disponible : "
+                            "aucun fournisseur de navigation Web n’est connecté à DASHLE."
+                        )
+                    message_id_indisponible = None
+                    if user_id and conserver and conversation_id:
+                        message_id_indisponible = ajouter_message(
+                            user_id, conversation_id, message_indisponible, "bot"
+                        )
+                    yield _evenement_action(
+                        "action_failed", action_id, action_type, "provider_unavailable",
+                        message_indisponible, erreur=message_indisponible,
+                        statut="provider_unavailable",
+                    )
+                    if not user_id:
+                        yield "data: " + json.dumps(
+                            {"termine": True, "reponse": message_indisponible},
+                            ensure_ascii=False,
+                        ) + "\n\n"
+                    else:
+                        yield "data: " + json.dumps(
+                            {"termine": True, "message_id": message_id_indisponible},
+                            ensure_ascii=False,
+                        ) + "\n\n"
+                    return
                 if action_type == "image":
                     bloque, quota = _quota_image_bloque(user_id)
                     if bloque:
@@ -6344,6 +6414,15 @@ def repondre_image():
             "code": "image_invalide",
             "retryable": True,
         }), 400
+
+    if mime_type.startswith("image/") and detecter_demande_modification_image(message):
+        return jsonify({
+            "reponse": (
+                "Je peux analyser cette image, mais sa modification directe n’est pas "
+                "disponible : aucun outil d’édition d’image n’est connecté à DASHLE."
+            ),
+            "status": "provider_unavailable",
+        }), 501
 
     if mime_type.startswith("image/") and PIL_DISPONIBLE:
         try:

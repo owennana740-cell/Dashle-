@@ -15,6 +15,9 @@ import brain
 import artifact_tools
 from artifact_tools import (
     detecter_demande_image,
+    detecter_demande_generation_video,
+    detecter_demande_recherche_web,
+    detecter_demande_modification_image,
     detecter_demande_pdf,
     demande_pdf_sans_sujet,
     demande_illustration_pedagogique,
@@ -95,6 +98,14 @@ class ArtifactToolsTests(unittest.TestCase):
         self.assertTrue(detecter_demande_image("Je veux que tu me génères. L'image d'une ville futuriste avec des voitures volantes."))
         self.assertTrue(detecter_demande_image("Peux-tu me créer une image d'une ville futuriste ?"))
         self.assertFalse(demande_illustration_pedagogique("Quelle est la définition de HTTP ?"))
+        self.assertTrue(detecter_demande_generation_video("Crée une vidéo d'une voiture volante"))
+        self.assertTrue(detecter_demande_generation_video("Génère un clip futuriste"))
+        self.assertFalse(detecter_demande_generation_video("Résume cette vidéo"))
+        self.assertTrue(detecter_demande_recherche_web("Cherche sur le Web les sources officielles"))
+        self.assertTrue(detecter_demande_recherche_web("Fais une recherche sur Internet"))
+        self.assertFalse(detecter_demande_recherche_web("Quelle est la météo aujourd'hui ?"))
+        self.assertTrue(detecter_demande_modification_image("Transforme cette image en style futuriste"))
+        self.assertFalse(detecter_demande_modification_image("Décris cette image"))
         self.assertTrue(demande_illustration_pedagogique(
             "Explique-moi comment fonctionne le système solaire et son organisation."
         ))
@@ -239,6 +250,59 @@ class ArtifactToolsTests(unittest.TestCase):
             )
         self.assertEqual(response.status_code, 502)
         self.assertIn("pas pu générer", response.json["reponse"])
+
+    def test_video_generation_is_reported_unavailable_without_provider_call(self):
+        with patch.object(web, "streamer_message") as texte, patch.object(web, "generer_image") as image:
+            response = self.client.post(
+                "/repondre", data={"message": "Crée une vidéo d'une voiture volante."},
+                headers={"X-CSRF-Token": "artifact-token"},
+            )
+        self.assertEqual(response.status_code, 501)
+        self.assertEqual(response.json["status"], "provider_unavailable")
+        self.assertIn("aucun fournisseur vidéo", response.json["reponse"])
+        texte.assert_not_called()
+        image.assert_not_called()
+
+    def test_sse_video_generation_emits_provider_unavailable_state(self):
+        with patch.object(web, "streamer_message") as texte, patch.object(web, "generer_image") as image:
+            response = self.client.post(
+                "/repondre_flux", data={"message": "Génère une vidéo futuriste."},
+                headers={"X-CSRF-Token": "artifact-token"},
+            )
+        body = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('"status": "provider_unavailable"', body)
+        self.assertIn('"step": "provider_unavailable"', body)
+        self.assertIn('"type": "video"', body)
+        self.assertIn('"termine": true', body)
+        self.assertIn("aucun fournisseur vidéo", body)
+        texte.assert_not_called()
+        image.assert_not_called()
+
+    def test_general_web_search_is_reported_unavailable_without_search_provider(self):
+        with patch.object(web, "streamer_message") as texte:
+            response = self.client.post(
+                "/repondre", data={"message": "Fais une recherche sur Internet sur DASHLE."},
+                headers={"X-CSRF-Token": "artifact-token"},
+            )
+        self.assertEqual(response.status_code, 501)
+        self.assertEqual(response.json["status"], "provider_unavailable")
+        self.assertIn("aucun fournisseur de navigation Web", response.json["reponse"])
+        texte.assert_not_called()
+
+    def test_sse_general_web_search_emits_provider_unavailable_state(self):
+        with patch.object(web, "streamer_message") as texte:
+            response = self.client.post(
+                "/repondre_flux", data={"message": "Cherche sur le Web les sources officielles."},
+                headers={"X-CSRF-Token": "artifact-token"},
+            )
+        body = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('"type": "recherche_web"', body)
+        self.assertIn('"status": "provider_unavailable"', body)
+        self.assertIn('"termine": true', body)
+        self.assertIn("aucun fournisseur de navigation Web", body)
+        texte.assert_not_called()
 
 
     def test_sse_image_action_lifecycle(self):
@@ -458,6 +522,7 @@ class ArtifactToolsTests(unittest.TestCase):
         self.assertIn("navigator.share", source)
         self.assertIn("Télécharger", source)
         self.assertIn("Régénérer", source)
+        self.assertEqual(source.count("else if (ev.action.type === 'image') afficherEchecImage"), 2)
 
 
 if __name__ == "__main__":

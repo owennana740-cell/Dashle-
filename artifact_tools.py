@@ -80,6 +80,48 @@ def detecter_demande_image(message: str) -> bool:
     return bool(verbe_image and objet_image)
 
 
+def detecter_demande_generation_video(message: str) -> bool:
+    """Recognize explicit video creation requests; no video provider is wired yet."""
+    t = _normaliser(message)
+    t = "".join(
+        caractere for caractere in unicodedata.normalize("NFD", t)
+        if unicodedata.category(caractere) != "Mn"
+    )
+    creation = re.search(
+        r"\b(?:genere(?:r|e|es|ez)?|cree(?:r|e|es|ez)?|fabrique(?:r|e|es|ez)?|"
+        r"produi(?:s|re|t|sez)|realise(?:r|e|es|ez)?|fais(?:-moi)?|faire)\b", t
+    )
+    video = re.search(r"\b(?:video|film|clip|animation)\b", t)
+    return bool(creation and video)
+
+
+def detecter_demande_recherche_web(message: str) -> bool:
+    """Recognize explicit general web browsing requests, separate from live feeds."""
+    t = _normaliser(message)
+    t = "".join(
+        caractere for caractere in unicodedata.normalize("NFD", t)
+        if unicodedata.category(caractere) != "Mn"
+    )
+    return bool(re.search(
+        r"\b(?:sur internet|sur le web|sur google|dans le web|recherche web|"
+        r"recherche sur internet|recherche sur le web|cherche sur internet|"
+        r"cherche sur le web|navigue sur|ouvre des sites|trouve des sources web)\b", t
+    ))
+
+
+def detecter_demande_modification_image(message: str) -> bool:
+    """Recognize explicit image editing requests separately from image analysis."""
+    t = _normaliser(message)
+    t = "".join(
+        caractere for caractere in unicodedata.normalize("NFD", t)
+        if unicodedata.category(caractere) != "Mn"
+    )
+    return bool(re.search(
+        r"\b(?:modifie|modifier|retouche|retoucher|transforme|transformer|"
+        r"edite|editer|change|changer|ajoute|ajouter|supprime|supprimer)\b", t
+    ))
+
+
 def demande_illustration_pedagogique(message: str) -> bool:
     t = _normaliser(message)
     if detecter_demande_image(message):

@@ -108,6 +108,24 @@ class MultimodalContractTests(unittest.TestCase):
         self.assertEqual(analyse.call_args.args[:3], ("Résume cette vidéo.", base64.b64encode(b"fake-video").decode("utf-8"), "video/mp4"))
         consommer.assert_not_called()
 
+    def test_image_edit_is_not_misrepresented_as_analysis_or_generation(self):
+        with (
+            patch.object(web, "detecter_type_media", return_value="image/png"),
+            patch.object(web, "traiter_message_image") as analyse,
+        ):
+            response = self.client.post(
+                "/repondre_image",
+                data={
+                    "message": "Transforme cette image en style futuriste.",
+                    "image": (io.BytesIO(b"fake-png"), "photo.png"),
+                },
+            )
+
+        self.assertEqual(response.status_code, 501)
+        self.assertEqual(response.get_json()["status"], "provider_unavailable")
+        self.assertIn("aucun outil d’édition d’image", response.get_json()["reponse"])
+        analyse.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
