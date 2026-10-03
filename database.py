@@ -131,6 +131,9 @@ class VideoGenerationJob(Base):
     status_message: Mapped[str] = mapped_column(String(300), default="", nullable=False)
     provider_job_id: Mapped[str | None] = mapped_column(String(500), nullable=True, index=True)
     idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    # Conservé uniquement pendant la phase de création distante, puis effacé.
+    # Il permet de reprendre une création restée queued après un redémarrage.
+    prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
     result_data: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     result_mime_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
     result_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -409,6 +412,13 @@ class AdminAuditLog(Base):
 
 def initialiser_base():
     Base.metadata.create_all(engine)
+    # Migration additive du champ de reprise vidéo : les bases existantes peuvent avoir été créées avant son ajout.
+    if inspect(engine).has_table("video_generation_jobs"):
+        colonnes_jobs_video = {colonne["name"] for colonne in inspect(engine).get_columns("video_generation_jobs")}
+        if "prompt" not in colonnes_jobs_video:
+            with engine.begin() as connexion:
+                connexion.execute(text("ALTER TABLE video_generation_jobs ADD COLUMN prompt TEXT NULL"))
+
     colonnes_utilisateurs = {
         "nom": "VARCHAR(160) NULL",
         "palier": "VARCHAR(20) NULL",
