@@ -5933,7 +5933,11 @@ def repondre():
             conversation_id = session.get("conversation_id")
             historique = _messages_conversation(user_id, conversation_id, limite=MAX_MESSAGES_CONTEXTE) if conversation_id else []
             contexte = "\n".join(str(x.get("texte", "")) for x in historique[-12:])
-            raw, mime = generer_image(message, contexte)
+            image_provider = PROVIDER_REGISTRY.get("image_generation")
+            if image_provider is None or not PROVIDER_REGISTRY.available("image_generation"):
+                raise ProviderUnavailable("La génération d'image n'est pas configurée sur DASHLE.")
+            edited = image_provider.generate(message, contexte, timeout_s=90)
+            raw, mime = edited.data, edited.mime_type
             if not _consommer_quota_image(user_id):
                 bloque, quota = _quota_image_bloque(user_id)
                 return jsonify({"reponse": quota["message"], "quota": quota}), 429
@@ -6254,7 +6258,11 @@ def repondre_flux():
                     )
                     debut_image = perf_counter()
                     try:
-                        raw, mime = generer_image(message, contexte_action)
+                        image_provider = PROVIDER_REGISTRY.get("image_generation")
+                        if image_provider is None or not PROVIDER_REGISTRY.available("image_generation"):
+                            raise ProviderUnavailable("La génération d'image n'est pas configurée sur DASHLE.")
+                        generated = image_provider.generate(message, contexte_action, timeout_s=90)
+                        raw, mime = generated.data, generated.mime_type
                     except Exception:
                         _journaliser_image(observabilite, debut_image, "error")
                         raise
