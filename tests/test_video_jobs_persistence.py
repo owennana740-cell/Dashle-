@@ -73,7 +73,7 @@ class VideoJobPersistenceTests(unittest.TestCase):
             finally:
                 db.close()
 
-        self.session_patch = unittest.mock.patch.object(video_jobs, "session_base", isolated_session)
+        self.session_patch = mock.patch.object(video_jobs, "session_base", isolated_session)
         self.session_patch.start()
 
     def tearDown(self):
@@ -85,7 +85,7 @@ class VideoJobPersistenceTests(unittest.TestCase):
     def test_create_persists_job_without_provider_call_until_worker(self):
         provider = FakeVideoProvider()
         store = video_jobs.VideoJobStore(FakeRegistry(provider))
-        with unittest.mock.patch.object(store, "_start_worker"):
+        with mock.patch.object(store, "_start_worker"):
             job_id = store.create("une ville futuriste", user_id=7, visitor_key_hash=None, conversation_id=11)
         with self.SessionLocal() as db:
             job = db.get(VideoGenerationJob, job_id)
@@ -98,7 +98,7 @@ class VideoJobPersistenceTests(unittest.TestCase):
     def test_processing_job_survives_store_restart_and_completes(self):
         provider = FakeVideoProvider()
         first = video_jobs.VideoJobStore(FakeRegistry(provider))
-        with unittest.mock.patch.object(first, "_start_worker"):
+        with mock.patch.object(first, "_start_worker"):
             job_id = first.create("ville", user_id=7, visitor_key_hash=None, conversation_id=11)
         first._process_job(job_id)
 
@@ -195,6 +195,26 @@ class VideoJobPersistenceTests(unittest.TestCase):
         with self.SessionLocal() as db:
             self.assertEqual(db.get(VideoGenerationJob, first).status, "completed")
             self.assertEqual(db.get(VideoGenerationJob, second).status, "completed")
+
+    def test_sse_reports_real_provider_progress_without_fabrication(self):
+        provider = FakeVideoProvider()
+        store = video_jobs.VideoJobStore(FakeRegistry(provider))
+        now = datetime.utcnow()
+        with self.SessionLocal() as db:
+            db.add(VideoGenerationJob(
+                id="progress-job", user_id=6, visitor_key_hash=None, provider="gemini",
+                tool_type="video_generation", status="processing", progress=37.0,
+                message="Génération en cours… 37 %", provider_job_id="operations/progress",
+                prompt=None, error_code=None, error_message=None, result_data=None,
+                result_mime_type=None, result_filename=None, result_size_bytes=None,
+                conversation_id=None, created_at=now, updated_at=now,
+                expires_at=now + timedelta(hours=2), lease_until=now + timedelta(seconds=10),
+                last_checked_at=now, completed_at=None,
+            ))
+        stream = store.stream("progress-job", user_id=6, visitor_key_hash=None)
+        event = next(stream)
+        self.assertIn('"progress": 37.0', event)
+        self.assertIn("Génération en cours… 37 %", event)
 
     def test_cancel_stops_local_tracking_and_reports_remote_limit(self):
         provider = FakeVideoProvider()
