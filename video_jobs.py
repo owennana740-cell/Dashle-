@@ -36,8 +36,9 @@ def _owner_matches(job: VideoGenerationJob, user_id: int | None, visitor_key_has
 
 
 class VideoJobStore:
-    def __init__(self, provider_registry):
+    def __init__(self, provider_registry, session_context=None):
         self.registry = provider_registry
+        self._session_context = session_context or session_base
         self._threads: dict[str, threading.Thread] = {}
         self._threads_lock = threading.Lock()
 
@@ -53,7 +54,7 @@ class VideoJobStore:
         self._provider()
         job_id = uuid.uuid4().hex
         now = _now()
-        with session_base() as db:
+        with self._session_context() as db:
             db.add(VideoGenerationJob(
                 id=job_id,
                 user_id=user_id,
@@ -107,7 +108,7 @@ class VideoJobStore:
 
     def _claim(self, job_id: str) -> bool:
         now = _now()
-        with session_base() as db:
+        with self._session_context() as db:
             job = db.query(VideoGenerationJob).filter_by(id=job_id).with_for_update().one_or_none()
             if job is None or job.status not in ACTIVE_STATUSES:
                 return False
@@ -137,7 +138,7 @@ class VideoJobStore:
 
     def _renew_lease(self, job_id: str) -> bool:
         now = _now()
-        with session_base() as db:
+        with self._session_context() as db:
             job = db.query(VideoGenerationJob).filter_by(id=job_id).one_or_none()
             if job is None or job.status != "processing":
                 return False
@@ -150,7 +151,7 @@ class VideoJobStore:
             return True
 
     def _save_provider_job(self, job_id: str, provider_job_id: str, progress: float | None = None) -> None:
-        with session_base() as db:
+        with self._session_context() as db:
             job = db.query(VideoGenerationJob).filter_by(id=job_id).one_or_none()
             if job is None or job.status != "processing":
                 return
@@ -162,7 +163,7 @@ class VideoJobStore:
 
     def _update_progress(self, job_id: str, progress: float | None) -> bool:
         now = _now()
-        with session_base() as db:
+        with self._session_context() as db:
             job = db.query(VideoGenerationJob).filter_by(id=job_id).one_or_none()
             if job is None or job.status != "processing":
                 return False
@@ -178,7 +179,7 @@ class VideoJobStore:
 
     def _fail(self, job_id: str, code: str, message: str) -> None:
         now = _now()
-        with session_base() as db:
+        with self._session_context() as db:
             job = db.query(VideoGenerationJob).filter_by(id=job_id).one_or_none()
             if job is None or job.status in TERMINAL_STATUSES:
                 return
@@ -195,7 +196,7 @@ class VideoJobStore:
 
     def _expire(self, job_id: str) -> None:
         now = _now()
-        with session_base() as db:
+        with self._session_context() as db:
             job = db.query(VideoGenerationJob).filter_by(id=job_id).one_or_none()
             if job is None or job.status in TERMINAL_STATUSES:
                 return
@@ -204,7 +205,7 @@ class VideoJobStore:
 
     def _cancel_local(self, job_id: str, message: str) -> None:
         now = _now()
-        with session_base() as db:
+        with self._session_context() as db:
             job = db.query(VideoGenerationJob).filter_by(id=job_id).one_or_none()
             if job is None or job.status in TERMINAL_STATUSES:
                 return
@@ -224,7 +225,7 @@ class VideoJobStore:
         if not data or len(data) > MAX_RESULT_BYTES:
             raise ProviderError("Le résultat vidéo est vide ou trop volumineux.")
         now = _now()
-        with session_base() as db:
+        with self._session_context() as db:
             job = db.query(VideoGenerationJob).filter_by(id=job_id).one_or_none()
             if job is None or job.status in TERMINAL_STATUSES:
                 return
@@ -248,7 +249,7 @@ class VideoJobStore:
             return
         try:
             provider = self._provider()
-            with session_base() as db:
+            with self._session_context() as db:
                 job = db.query(VideoGenerationJob).filter_by(id=job_id).one_or_none()
                 if job is None or job.status != "processing":
                     return
@@ -315,7 +316,7 @@ class VideoJobStore:
 
     def cancel(self, job_id: str, *, user_id: int | None, visitor_key_hash: str | None) -> dict:
         now = _now()
-        with session_base() as db:
+        with self._session_context() as db:
             job = db.query(VideoGenerationJob).filter_by(id=job_id).one_or_none()
             if job is None or not _owner_matches(job, user_id, visitor_key_hash):
                 return {"status": "not_found"}
@@ -372,7 +373,7 @@ class VideoJobStore:
 
     def get(self, job_id: str, *, user_id: int | None, visitor_key_hash: str | None) -> dict | None:
         self.cleanup()
-        with session_base() as db:
+        with self._session_context() as db:
             job = db.query(VideoGenerationJob).filter_by(id=job_id).one_or_none()
             if job is None or not _owner_matches(job, user_id, visitor_key_hash):
                 return None
@@ -381,7 +382,7 @@ class VideoJobStore:
     def list_for_owner(self, *, user_id: int | None, visitor_key_hash: str | None) -> list[dict]:
         self.cleanup()
         since = _now() - TERMINAL_TTL
-        with session_base() as db:
+        with self._session_context() as db:
             query = db.query(VideoGenerationJob)
             if user_id is not None:
                 query = query.filter(VideoGenerationJob.user_id == user_id)
@@ -471,7 +472,7 @@ class VideoJobStore:
         return "data: " + json.dumps({"event": "action_progress", "action": action}, ensure_ascii=False) + "\\n\\n"
 
     def result(self, job_id: str, *, user_id: int | None, visitor_key_hash: str | None):
-        with session_base() as db:
+        with self._session_context() as db:
             job = db.query(VideoGenerationJob).filter_by(id=job_id).one_or_none()
             if job is None or not _owner_matches(job, user_id, visitor_key_hash):
                 return None
@@ -485,7 +486,7 @@ class VideoJobStore:
 
     def cleanup(self) -> None:
         now = _now()
-        with session_base() as db:
+        with self._session_context() as db:
             jobs = db.query(VideoGenerationJob).filter(
                 VideoGenerationJob.status.in_(TERMINAL_STATUSES),
                 VideoGenerationJob.expires_at <= now,
@@ -495,7 +496,7 @@ class VideoJobStore:
 
     def resume_active_jobs(self) -> None:
         self.cleanup()
-        with session_base() as db:
+        with self._session_context() as db:
             ids = [
                 row.id for row in db.query(VideoGenerationJob.id).filter(
                     VideoGenerationJob.status.in_(ACTIVE_STATUSES)
