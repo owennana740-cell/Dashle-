@@ -125,11 +125,12 @@ class ArtifactToolsTests(unittest.TestCase):
             WebSearchProvider()
 
     def test_natural_latest_news_query_reports_web_provider_unavailable(self):
-        response = self.client.post(
-            "/repondre",
-            data={"message": "Cherche les dernières nouvelles sur le climat"},
-            headers={"X-CSRF-Token": "artifact-token"},
-        )
+        with patch.object(web.PROVIDER_REGISTRY, "available", return_value=False):
+            response = self.client.post(
+                "/repondre",
+                data={"message": "Cherche les dernières nouvelles sur le climat"},
+                headers={"X-CSRF-Token": "artifact-token"},
+            )
         self.assertEqual(response.status_code, 501)
         self.assertEqual(response.json["status"], "provider_unavailable")
 
