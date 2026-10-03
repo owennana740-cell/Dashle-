@@ -8,11 +8,11 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 from unittest.mock import Mock, patch
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
 import video_jobs
-from database import Base, VideoGenerationJob
+from database import Base, User, VideoGenerationJob
 
 
 class FakeVideoProvider:
@@ -91,6 +91,99 @@ class VideoJobPersistenceTests(unittest.TestCase):
             self.assertEqual(job.provider_job_id, "operations/fake-1")
             self.assertEqual(job.status, "queued")
 
+
+    def test_concurrent_idempotent_creation_postgresql(self):
+        database_url = os.environ.get("VIDEO_JOBS_TEST_DATABASE_URL")
+        if not database_url:
+            self.skipTest("VIDEO_JOBS_TEST_DATABASE_URL non configurée")
+
+        engine = create_engine(database_url, pool_pre_ping=True)
+        User.__table__.create(engine, checkfirst=True)
+        VideoGenerationJob.__table__.create(engine, checkfirst=True)
+        Session = sessionmaker(bind=engine, expire_on_commit=False)
+        with Session() as db:
+            db.add(User(id=7, email="video-race-test@example.invalid", password_hash="test"))
+            db.commit()
+
+        barrier = threading.Barrier(2)
+        insert_barrier = threading.Barrier(2)
+        provider_calls = 0
+        spawn_calls = 0
+        provider_lock = threading.Lock()
+
+        @contextmanager
+        def concurrent_session():
+            db = Session()
+            try:
+                yield db
+                db.commit()
+            except Exception:
+                db.rollback()
+                raise
+            finally:
+                db.close()
+
+        def before_cursor_execute(conn, cursor, statement, parameters, context, executemany):
+            if "INSERT INTO video_generation_jobs" in statement:
+                insert_barrier.wait(timeout=5)
+
+        def fake_spawn(job_id, provider):
+            nonlocal provider_calls, spawn_calls
+            with provider_lock:
+                spawn_calls += 1
+                provider.create("même demande vidéo", timeout_s=30)
+                provider_calls += 1
+
+        event.listen(engine, "before_cursor_execute", before_cursor_execute)
+
+        class ConcurrentProvider(FakeVideoProvider):
+            pass
+
+        provider = ConcurrentProvider()
+        results = []
+        errors = []
+
+        def create_from_worker():
+            try:
+                barrier.wait(timeout=5)
+                results.append(video_jobs.create_job(
+                    provider, prompt="même demande vidéo", user_id=7,
+                    owner_token_hash=None, conversation_id=None,
+                    idempotency_key="concurrent-action"
+                ))
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=create_from_worker) for _ in range(2)]
+        try:
+            with patch.object(video_jobs, "session_base", concurrent_session),                  patch.object(video_jobs, "_spawn_active_job", fake_spawn):
+                for thread in threads:
+                    thread.start()
+                for thread in threads:
+                    thread.join(timeout=10)
+            self.assertFalse(any(thread.is_alive() for thread in threads))
+            self.assertEqual(errors, [])
+            self.assertEqual(len(results), 2)
+            self.assertEqual(results[0], results[1])
+            with Session() as db:
+                rows = (
+                    db.query(VideoGenerationJob)
+                    .filter_by(idempotency_key=video_jobs._scoped_idempotency_key(
+                        "concurrent-action", user_id=7, owner_token_hash=None
+                    ))
+                    .all()
+                )
+                self.assertEqual(len(rows), 1)
+                self.assertEqual(rows[0].id, results[0])
+                self.assertEqual(rows[0].user_id, 7)
+            self.assertEqual(spawn_calls, 1)
+            self.assertEqual(provider_calls, 1)
+        finally:
+            event.remove(engine, "before_cursor_execute", before_cursor_execute)
+            with engine.begin() as connection:
+                connection.execute(VideoGenerationJob.__table__.delete())
+                connection.execute(User.__table__.delete())
+            engine.dispose()
 
     def test_same_idempotency_key_is_scoped_to_owner(self):
         provider = FakeVideoProvider()

@@ -1,6 +1,7 @@
 """Persistance PostgreSQL et reprise des jobs vidéo Dashle."""
 from __future__ import annotations
 import hashlib, logging, os, secrets, threading, time
+from sqlalchemy.exc import IntegrityError
 from datetime import datetime, timedelta
 from database import VideoGenerationJob, session_base
 from tool_providers import ProviderError, ProviderTimeout, ProviderUnavailable, VideoGenerationProvider
@@ -46,22 +47,44 @@ def _mark_creation_failed(job_id, message):
 def create_job(provider, *, prompt, user_id, owner_token_hash, conversation_id, idempotency_key):
     now = datetime.utcnow()
     scoped_key = _scoped_idempotency_key(idempotency_key, user_id=user_id, owner_token_hash=owner_token_hash)
+    created = False
     with session_base() as db:
         existing = db.query(VideoGenerationJob).filter_by(idempotency_key=scoped_key).with_for_update().one_or_none()
         if existing:
             job_id = existing.id
         else:
             job_id = secrets.token_urlsafe(24)
-            db.add(VideoGenerationJob(
-                id=job_id, user_id=user_id, owner_token_hash=owner_token_hash,
-                conversation_id=conversation_id, provider="veo", tool="video_generation",
-                status="queued", progress=None, status_message="Préparation de la génération…",
-                provider_job_id=None, idempotency_key=scoped_key,
-                prompt=str(prompt)[:24000], created_at=now, updated_at=now,
-                expires_at=now + timedelta(minutes=MAX_RUNTIME_MINUTES),
-            ))
-    _spawn_active_job(job_id, provider)
-    LOGGER.info("tool=video_generation provider=veo job_id=%s status=queued", job_id)
+            try:
+                # Le SELECT FOR UPDATE ne verrouille aucune ligne si la clé n'existe
+                # pas encore. Le SAVEPOINT permet de récupérer proprement la course
+                # sur la contrainte UNIQUE sans invalider la transaction/session.
+                with db.begin_nested():
+                    db.add(VideoGenerationJob(
+                        id=job_id, user_id=user_id, owner_token_hash=owner_token_hash,
+                        conversation_id=conversation_id, provider="veo", tool="video_generation",
+                        status="queued", progress=None, status_message="Préparation de la génération…",
+                        provider_job_id=None, idempotency_key=scoped_key,
+                        prompt=str(prompt)[:24000], created_at=now, updated_at=now,
+                        expires_at=now + timedelta(minutes=MAX_RUNTIME_MINUTES),
+                    ))
+                    db.flush()
+                created = True
+            except IntegrityError:
+                # Une autre transaction a gagné la même clé. Le SAVEPOINT a
+                # restauré la session ; on relit alors le job gagnant dans
+                # une transaction exploitable, sans réutiliser l'objet échoué.
+                existing = (
+                    db.query(VideoGenerationJob)
+                    .filter_by(idempotency_key=scoped_key)
+                    .with_for_update()
+                    .one()
+                )
+                job_id = existing.id
+    if created:
+        _spawn_active_job(job_id, provider)
+        LOGGER.info("tool=video_generation provider=veo job_id=%s status=queued", job_id)
+    else:
+        LOGGER.info("tool=video_generation provider=veo job_id=%s status=idempotent_reuse", job_id)
     return job_id
 
 def _persist_creation(job_id, worker, remote):
