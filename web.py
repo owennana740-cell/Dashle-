@@ -23,6 +23,7 @@ import requests
 import threading
 import unicodedata
 from time import perf_counter
+import time
 from datetime import datetime, timedelta, timezone
 import calendar
 from html import escape as html_escape
