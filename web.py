@@ -2833,28 +2833,54 @@ function afficherQuotaImage(bloc, quota, prompt) {
 }
 
 function finaliserSuiviAction(bloc, result) {
-  if (!bloc || !result || !result.artifact || !result.artifact.data) return;
+  if (!bloc || !result) return;
+  if (result.web_search) {
+    const zone = document.createElement('div'); zone.className = 'suivi-action-web-resultat';
+    const answer = document.createElement('div'); answer.className = 'suivi-action-web-answer';
+    answer.textContent = result.web_search.answer || '';
+    zone.appendChild(answer);
+    const sources = result.web_search.sources || [];
+    if (sources.length) {
+      const titre = document.createElement('strong'); titre.textContent = 'Sources Web'; zone.appendChild(titre);
+      const liste = document.createElement('ul'); liste.className = 'suivi-action-sources';
+      sources.forEach(function(source) {
+        if (!source.url) return;
+        const li=document.createElement('li'); const a=document.createElement('a');
+        a.href=source.url; a.target='_blank'; a.rel='noopener noreferrer'; a.textContent=source.title || source.url;
+        li.appendChild(a); liste.appendChild(li);
+      });
+      zone.appendChild(liste);
+    }
+    bloc.appendChild(zone); chat.scrollTop=chat.scrollHeight; return;
+  }
+  if (!result.artifact || !result.artifact.data) return;
   const artifact = result.artifact;
   try {
     const bytes = Uint8Array.from(atob(String(artifact.data)), function(c){ return c.charCodeAt(0); });
     const mime = String(artifact.mime_type || 'application/octet-stream').toLowerCase();
-    if (artifact.type === 'image' && !mime.startsWith('image/')) throw new Error('MIME image invalide');
     const blob = new Blob([bytes], { type: mime });
     const url = URL.createObjectURL(blob);
     const contenu = document.createElement('div'); contenu.className = 'suivi-action-resultat suivi-action-image-resultat';
     if (artifact.type === 'image') {
+      if (!mime.startsWith('image/')) throw new Error('MIME image invalide');
       const lien = document.createElement('a'); lien.className = 'image-message-lien'; lien.href = url; lien.setAttribute('aria-label','Ouvrir l’image générée');
       const image = document.createElement('img'); image.className = 'image-message'; image.src = url; image.alt = 'Image générée par DASHLE';
       image.onclick = function(e){ e.preventDefault(); ouvrirVisionneuseImage(url, image.alt, bloc.dataset.prompt || '', artifact.filename || 'image-dashle.png'); };
       image.onerror = function(){ contenu.dataset.imageError='true'; image.alt='Image générée indisponible'; };
       lien.appendChild(image); contenu.appendChild(lien);
+    } else if (artifact.type === 'video') {
+      if (!mime.startsWith('video/')) throw new Error('MIME vidéo invalide');
+      const video = document.createElement('video'); video.controls = true; video.preload = 'metadata';
+      video.playsInline = true; video.className = 'dashle-video-resultat'; video.src = url;
+      contenu.appendChild(video);
+      const lien = document.createElement('a'); lien.href=url; lien.download=artifact.filename || 'video-dashle.mp4'; lien.className='pdf-telechargement-chat'; lien.textContent='Ouvrir / télécharger la vidéo'; contenu.appendChild(lien);
     } else {
       const lien = document.createElement('a'); lien.href=url; lien.download=artifact.filename || 'dashle-document.pdf'; lien.className='pdf-telechargement-chat'; lien.textContent='Ouvrir / télécharger le PDF'; contenu.appendChild(lien);
     }
     bloc.appendChild(contenu); chat.scrollTop=chat.scrollHeight;
   } catch(erreur) {
     console.error('[DASHLE] Artefact reçu mais rendu impossible', erreur);
-    const erreurEl=document.createElement('div'); erreurEl.className='suivi-action-etape echec'; erreurEl.textContent='✕ L’image générée n’a pas pu être affichée.'; bloc.appendChild(erreurEl);
+    const erreurEl=document.createElement('div'); erreurEl.className='suivi-action-etape echec'; erreurEl.textContent='✕ Le résultat n’a pas pu être affiché.'; bloc.appendChild(erreurEl);
   }
 }
 
