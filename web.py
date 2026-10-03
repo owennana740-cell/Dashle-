@@ -2804,7 +2804,7 @@ async function suivreJobOutil(bloc, jobId) {
 async function restaurerJobsOutils() {
   try {
     const response = await fetch('/api/outils/jobs/actifs', {cache:'no-store'});
-    if (!response.ok) return;
+    if (!response.ok || typeof response.json !== 'function') return;
     const payload = await response.json();
     (payload.jobs || []).forEach(function(job) {
       const bloc = creerSuiviAction({

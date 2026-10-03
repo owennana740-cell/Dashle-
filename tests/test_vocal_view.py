@@ -462,8 +462,13 @@ class VocalViewTests(unittest.TestCase):
           });
           const w = dom.window;
           let fetches = 0;
+          let chatFetches = 0;
           w.fetch = (url, options) => {
+            if (String(url).includes("/api/outils/jobs/actifs")) {
+              return Promise.resolve({ok:true, json:() => Promise.resolve({jobs:[]})});
+            }
             fetches += 1;
+            chatFetches += 1;
             let reader;
             const body = {
               getReader() {
@@ -472,7 +477,7 @@ class VocalViewTests(unittest.TestCase):
                     return new Promise((resolve, reject) => {
                       reader.resolve = resolve;
                       reader.reject = reject;
-                      if (fetches === 2) setTimeout(() => reader.resolve({done:true, value:undefined}), 40);
+                      if (chatFetches === 2) setTimeout(() => reader.resolve({done:true, value:undefined}), 40);
                     });
                   }
                 };
@@ -502,7 +507,7 @@ class VocalViewTests(unittest.TestCase):
             form.dispatchEvent(new w.Event("submit", {bubbles:true,cancelable:true}));
           }, 100);
           setTimeout(() => {
-            if (fetches !== 2) throw new Error("le nouveau message n'a pas pris la main");
+            if (chatFetches !== 2) throw new Error("le nouveau message n'a pas pris la main");
             const botFinal = w.document.querySelectorAll(".message-wrap.bot .msg").length;
             if (botFinal !== botInitial + 1) throw new Error("message fantôme ou double réponse: initial=" + botInitial + " final=" + botFinal);
             if (w.document.querySelectorAll(".message-wrap.user .msg").length < 2) throw new Error("nouveau message absent");
