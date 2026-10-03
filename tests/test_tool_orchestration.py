@@ -152,7 +152,7 @@ class ProviderRouteTests(unittest.TestCase):
             response = self.client.post(
                 "/repondre_flux", data={"message": "Fais une vidéo d'une ville futuriste."}
             )
-        body = response.get_data(as_text=True)
+            body = response.get_data(as_text=True)
         self.assertEqual(response.status_code, 200)
         self.assertIn('"type": "video"', body)
         self.assertIn('"step": "en_attente"', body)
@@ -182,8 +182,8 @@ class ProviderRouteTests(unittest.TestCase):
         from tool_providers import ImageArtifact
         class FakeEdit:
             def edit(self, image_bytes, mime_type, prompt, *, timeout_s):
-                self.assertEqual(image_bytes, b"fake-image")
-                self.assertEqual(mime_type, "image/png")
+                if image_bytes != b"fake-image": raise AssertionError("image source incorrect")
+                if mime_type != "image/png": raise AssertionError("image MIME incorrect")
                 return ImageArtifact(b"edited-image", "image/png", "edited.png")
         with patch.object(web.PROVIDER_REGISTRY, "available", return_value=True),              patch.object(web.PROVIDER_REGISTRY, "get", return_value=FakeEdit()),              patch.object(web, "_consommer_quota_image", return_value=True),              patch.object(web, "_enregistrer_element_bibliotheque", return_value=False),              patch.object(web, "detecter_type_media", return_value="image/png"):
             response = self.client.post(
