@@ -731,13 +731,26 @@ def _actualiser_resume_en_arriere_plan(user_id, conversation_id):
         )
 
 
-def _preferences(user_id):
-    with session_base() as db:
-        prefs = db.query(UserPreference).filter_by(user_id=user_id).one_or_none()
-        if prefs is None:
+def _obtenir_preferences(db, user_id):
+    """Retourne les préférences en résistant à une création concurrente."""
+    prefs = db.query(UserPreference).filter_by(user_id=user_id).one_or_none()
+    if prefs is not None:
+        return prefs
+    try:
+        with db.begin_nested():
             prefs = UserPreference(user_id=user_id)
             db.add(prefs)
             db.flush()
+    except IntegrityError:
+        prefs = db.query(UserPreference).filter_by(user_id=user_id).one_or_none()
+        if prefs is None:
+            raise
+    return prefs
+
+
+def _preferences(user_id):
+    with session_base() as db:
+        prefs = _obtenir_preferences(db, user_id)
         return {
             "theme": prefs.theme,
             "voix_active": prefs.voix_active,
@@ -5790,10 +5803,7 @@ def parametres():
             user.pays = pays
             user.telephone = telephone
             user.telephone_national = telephone_national
-            prefs = db.query(UserPreference).filter_by(user_id=user_id).one_or_none()
-            if prefs is None:
-                prefs = UserPreference(user_id=user_id)
-                db.add(prefs)
+            prefs = _obtenir_preferences(db, user_id)
             theme = request.form.get("theme")
             prefs.theme = theme if theme in {"clair", "sombre", "systeme"} else "clair"
             prefs.voix_active = request.form.get("voix_active") == "on"
