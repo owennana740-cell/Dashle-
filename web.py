@@ -6730,7 +6730,7 @@ def repondre_image():
         provider = PROVIDER_REGISTRY.get("image_editing")
         if provider is None or not PROVIDER_REGISTRY.available("image_editing"):
             return jsonify({
-                "reponse": "L'édition d'image n'est pas encore configurée sur DASHLE.",
+                "reponse": "aucun outil d’édition d’image n’est configuré sur DASHLE.",
                 "status": "provider_unavailable",
             }), 501
         if _quota_image_bloque(user_id)[0]:
