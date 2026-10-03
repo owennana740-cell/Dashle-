@@ -2625,6 +2625,24 @@ function afficherMarkdownStreaming(message, texte) { message.dataset.markdownSou
 
 function afficherMarkdownInitial() { document.querySelectorAll('#chat .msg.bot').forEach(function(message) { afficherMarkdown(message, message.textContent); }); }
 document.addEventListener('DOMContentLoaded', afficherMarkdownInitial);
+
+async function reprendreJobsVideo() {
+  try {
+    const response = await fetch('/api/outils/jobs', { cache: 'no-store' });
+    if (!response.ok) return;
+    const payload = await response.json();
+    (payload.jobs || []).forEach(function(job) {
+      const deja = Array.from(document.querySelectorAll('.suivi-action')).some(function(el){ return el.dataset.toolJobId === job.job_id; });
+      if (deja) return;
+      const bloc = creerSuiviAction({id: job.job_id, type:'video', cancelable:false});
+      bloc.dataset.toolJobId = job.job_id; bloc.dataset.prompt = job.prompt || '';
+      mettreAJourSuiviAction(bloc, {id: job.job_id, type:'video', step:job.status, message:job.message || 'Génération en cours…', result:{progress:job.progress}});
+      bloc.dataset.toolJobFollowed = 'true';
+      suivreJobOutil(bloc, job.job_id);
+    });
+  } catch (e) { console.warn('[DASHLE] Reprise des jobs vidéo indisponible', e); }
+}
+document.addEventListener('DOMContentLoaded', reprendreJobsVideo);
 function ajouterMessage(texte, classe) {
   const accueil = document.querySelector('.accueil-vide');
   if (accueil) accueil.remove();
@@ -2748,35 +2766,35 @@ function creerSuiviAction(action) {
 }
 
 async function suivreJobOutil(bloc, jobId) {
-  try {
-    const response = await fetch('/api/outils/jobs/' + encodeURIComponent(jobId) + '/flux', {
-      headers: { 'Accept': 'text/event-stream' }, cache: 'no-store'
-    });
-    if (!response.ok || !response.body) throw new Error('Suivi du job indisponible');
-    const lecteur = response.body.getReader();
-    const decodeur = new TextDecoder();
-    let tampon = '';
-    while (true) {
-      const {done, value} = await lecteur.read();
-      if (done) break;
-      tampon += decodeur.decode(value, {stream:true});
-      const lignes = tampon.split('\n'); tampon = lignes.pop();
-      for (const ligne of lignes) {
-        if (!ligne.startsWith('data:')) continue;
-        let ev; try { ev = JSON.parse(ligne.slice(5).trim()); } catch(e) { continue; }
-        if (!ev || !ev.event) continue;
-        if (ev.action) {
-          mettreAJourSuiviAction(bloc, ev.action);
-          if (ev.event === 'action_completed') finaliserSuiviAction(bloc, ev.action.result || {});
-          if (ev.event === 'action_completed' || ev.event === 'action_failed') return;
+  while (bloc && bloc.isConnected && bloc.dataset.generationState !== 'completed' && bloc.dataset.generationState !== 'failed' && bloc.dataset.generationState !== 'expired') {
+    try {
+      const response = await fetch('/api/outils/jobs/' + encodeURIComponent(jobId) + '/flux', {
+        headers: { 'Accept': 'text/event-stream' }, cache: 'no-store'
+      });
+      if (!response.ok || !response.body) throw new Error('Suivi du job indisponible');
+      const lecteur = response.body.getReader(); const decodeur = new TextDecoder(); let tampon = '';
+      while (true) {
+        const {done, value} = await lecteur.read(); if (done) break;
+        tampon += decodeur.decode(value, {stream:true});
+        const lignes = tampon.split('\n'); tampon = lignes.pop();
+        for (const ligne of lignes) {
+          if (!ligne.startsWith('data:')) continue;
+          let ev; try { ev = JSON.parse(ligne.slice(5).trim()); } catch(e) { continue; }
+          if (!ev || !ev.event) continue;
+          if (ev.action) {
+            mettreAJourSuiviAction(bloc, ev.action);
+            if (ev.event === 'action_completed') { finaliserSuiviAction(bloc, ev.action.result || {}); return; }
+            if (ev.event === 'action_failed') return;
+          }
         }
       }
+      if (bloc.dataset.generationActive === 'false') return;
+      throw new Error('Flux terminé sans état final');
+    } catch (e) {
+      if (!bloc || !bloc.isConnected || bloc.dataset.generationActive === 'false') return;
+      mettreAJourSuiviAction(bloc, { id: jobId, type:'video', step:'reconnexion', message:'Reconnexion du suivi vidéo…' });
+      await new Promise(function(resolve){ setTimeout(resolve, 3000); });
     }
-  } catch (e) {
-    mettreAJourSuiviAction(bloc, {
-      id: jobId, type:'video', event:'action_failed', step:'erreur',
-      message:'Le suivi de la génération a été interrompu.'
-    });
   }
 }
 
@@ -2786,7 +2804,7 @@ function mettreAJourSuiviAction(bloc, action) {
   const indicateur = bloc.querySelector('.suivi-action-indicateur');
   const messages = { preparation: 'Préparation…', generation: 'Génération en cours…', finalisation: 'Finalisation…', en_attente: 'En attente du fournisseur…' };
   const libelle = action.message || messages[action.step] || 'Action en cours…';
-  if (action.result && action.result.job_id && !bloc.dataset.toolJobFollowed) {
+  if (action.result && action.result.job_id && !bloc.dataset.toolJobFollowed) {\n    bloc.dataset.toolJobId = action.result.job_id;
     bloc.dataset.toolJobFollowed = 'true';
     suivreJobOutil(bloc, action.result.job_id);
   }
@@ -2905,8 +2923,16 @@ function finaliserSuiviAction(bloc, result) {
     }
     bloc.appendChild(zone); chat.scrollTop=chat.scrollHeight; return;
   }
-  if (!result.artifact || !result.artifact.data) return;
+  if (!result.artifact) return;
   const artifact = result.artifact;
+  if (artifact.url && artifact.type === 'video') {
+    const contenu = document.createElement('div'); contenu.className = 'suivi-action-resultat suivi-action-image-resultat';
+    const video = document.createElement('video'); video.controls = true; video.preload = 'metadata'; video.playsInline = true; video.className = 'dashle-video-resultat'; video.src = artifact.url;
+    contenu.appendChild(video);
+    const lien = document.createElement('a'); lien.href = artifact.url; lien.download = artifact.filename || 'video-dashle.mp4'; lien.className = 'pdf-telechargement-chat'; lien.textContent = 'Ouvrir / télécharger la vidéo'; contenu.appendChild(lien);
+    bloc.appendChild(contenu); chat.scrollTop = chat.scrollHeight; return;
+  }
+  if (!artifact.data) return;
   try {
     const bytes = Uint8Array.from(atob(String(artifact.data)), function(c){ return c.charCodeAt(0); });
     const mime = String(artifact.mime_type || 'application/octet-stream').toLowerCase();
