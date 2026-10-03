@@ -147,25 +147,37 @@ class ProviderRouteTests(unittest.TestCase):
         self.assertEqual(response.json["sources"][0]["url"], "https://example.com/source")
         self.assertEqual(response.json["reponse"], "Réponse fraîche.")
 
-    def test_video_sse_uses_provider_job_without_fake_percentage(self):
-        from tool_providers import VideoArtifact, VideoJob
-        class FakeVideo:
-            def create(self, prompt, *, timeout_s):
-                return VideoJob("operations/test-video", "queued", None)
-            def status(self, job_id, *, timeout_s):
-                return VideoJob(job_id, "succeeded", 100.0)
-            def retrieve(self, job_id, *, timeout_s):
-                return VideoArtifact(b"video-bytes", "video/mp4", "video.mp4")
-        with patch.object(web.PROVIDER_REGISTRY, "available", return_value=True),              patch.object(web.PROVIDER_REGISTRY, "get", return_value=FakeVideo()),              patch("web.time.sleep", return_value=None),              patch.object(web, "_enregistrer_element_bibliotheque", return_value=False):
+    def test_video_sse_launches_background_job_without_blocking_chat(self):
+        with patch.object(web, "_lancer_job_video", return_value="job-test-123"):
             response = self.client.post(
                 "/repondre_flux", data={"message": "Fais une vidéo d'une ville futuriste."}
             )
         body = response.get_data(as_text=True)
         self.assertEqual(response.status_code, 200)
         self.assertIn('"type": "video"', body)
-        self.assertIn('"event": "action_completed"', body)
-        self.assertIn('"mime_type": "video/mp4"', body)
-        self.assertIn('"progress": 100.0', body)
+        self.assertIn('"step": "en_attente"', body)
+        self.assertIn('"job_id": "job-test-123"', body)
+        self.assertIn('"tool_job_id": "job-test-123"', body)
+
+    def test_video_job_flux_renders_completed_artifact(self):
+        from web import _OUTIL_JOBS, _OUTIL_JOBS_LOCK
+        with _OUTIL_JOBS_LOCK:
+            _OUTIL_JOBS["job-progress-test"] = {
+                "id":"job-progress-test","type":"video","status":"succeeded","progress":100.0,
+                "provider_job_id":"operations/test","result":{"artifact":{
+                    "type":"video","mime_type":"video/mp4","filename":"video.mp4","data":"dm"
+                }}, "error":None, "user_id":None, "conversation_id":None,
+                "updated_at": web.perf_counter()
+            }
+        try:
+            response = self.client.get("/api/outils/jobs/job-progress-test/flux")
+            body = response.get_data(as_text=True)
+            self.assertEqual(response.status_code, 200)
+            self.assertIn('"event": "action_completed"', body)
+            self.assertIn('"mime_type": "video/mp4"', body)
+        finally:
+            with _OUTIL_JOBS_LOCK:
+                _OUTIL_JOBS.pop("job-progress-test", None)
 
     def test_image_edit_route_passes_source_image_to_provider(self):
         from tool_providers import ImageArtifact
