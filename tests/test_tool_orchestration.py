@@ -152,7 +152,7 @@ class ProviderRouteTests(unittest.TestCase):
             response = self.client.post(
                 "/repondre_flux", data={"message": "Fais une vidéo d'une ville futuriste."}
             )
-        body = response.get_data(as_text=True)
+            body = response.get_data(as_text=True)
         self.assertEqual(response.status_code, 200)
         self.assertIn('"type": "video"', body)
         self.assertIn('"step": "en_attente"', body)
@@ -176,7 +176,7 @@ class ProviderRouteTests(unittest.TestCase):
                 retention_until=now + timedelta(days=7), completed_at=now,
             ))
         try:
-            response = self.client.get("/api/outils/jobs/job-progress-test/flux")
+            response = self.client.get("/api/outils/jobs/job-progress-test/flux", headers={"X-CSRF-Token": "tool-test"})
             body = response.get_data(as_text=True)
             self.assertEqual(response.status_code, 200)
             self.assertIn('"event": "action_completed"', body)
@@ -199,6 +199,7 @@ class ProviderRouteTests(unittest.TestCase):
                 data={"message": "Transforme cette photo en style futuriste.",
                       "image": (io.BytesIO(b"fake-image"), "photo.png")},
                 content_type="multipart/form-data",
+                headers={"X-CSRF-Token": "tool-test"},
             )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json["status"], "success")
