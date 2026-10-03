@@ -6042,6 +6042,57 @@ def _demande_action_longue(message):
     return None
 
 
+@app.route("/api/outils/jobs/<job_id>/flux")
+def flux_job_outil(job_id):
+    _outil_job_nettoyer()
+    user_id = session.get("user_id")
+    with _OUTIL_JOBS_LOCK:
+        job = _OUTIL_JOBS.get(job_id)
+        if job is None or (job.get("user_id") is not None and job.get("user_id") != user_id):
+            return jsonify({"status": "not_found"}), 404
+    def generate():
+        dernier = None
+        while True:
+            with _OUTIL_JOBS_LOCK:
+                current = dict(_OUTIL_JOBS.get(job_id, {}))
+            if not current:
+                yield "data: " + json.dumps({"event":"action_failed","status":"expired"}, ensure_ascii=False) + "\n\n"
+                return
+            snapshot = (
+                current.get("status"), current.get("progress"),
+                current.get("error"), current.get("result")
+            )
+            if snapshot != dernier:
+                dernier = snapshot
+                if current.get("status") in {"succeeded"}:
+                    yield "data: " + json.dumps({
+                        "event":"action_completed", "action":{"id":job_id,"type":"video","step":"termine",
+                        "message":"Génération vidéo terminée.","result":current.get("result") or {}}
+                    }, ensure_ascii=False) + "\n\n"
+                    return
+                if current.get("status") in {"failed","provider_unavailable"}:
+                    yield "data: " + json.dumps({
+                        "event":"action_failed", "action":{"id":job_id,"type":"video",
+                        "step":current.get("status"),"message":(
+                            "La génération vidéo n'est pas encore configurée sur DASHLE."
+                            if current.get("status") == "provider_unavailable"
+                            else "La génération vidéo a échoué."
+                        ),"status":current.get("status")}
+                    }, ensure_ascii=False) + "\n\n"
+                    return
+                yield "data: " + json.dumps({
+                    "event":"action_progress","action":{"id":job_id,"type":"video",
+                    "step":current.get("status") or "generation",
+                    "message":(
+                        f"Génération en cours… {current['progress']:g} %"
+                        if isinstance(current.get("progress"), (int,float))
+                        else "Génération en cours…"
+                    ),"result":{"progress":current.get("progress")}}
+                }, ensure_ascii=False) + "\n\n"
+            time.sleep(2)
+    return Response(stream_with_context(generate()), mimetype="text/event-stream",
+                    headers={"Cache-Control":"no-cache","X-Accel-Buffering":"no"})
+
 @app.route("/repondre_flux", methods=["POST"])
 def repondre_flux():
     """Diffuse une réponse SSE. Gère visiteur et utilisateur connecté.
@@ -6117,86 +6168,23 @@ def repondre_flux():
                 )
 
                 if action_type == "video":
-                    provider = PROVIDER_REGISTRY.get("video_generation")
-                    if provider is None or not PROVIDER_REGISTRY.available("video_generation"):
-                        message_indisponible = "La génération vidéo n'est pas encore configurée sur DASHLE."
+                    try:
+                        job_id = _lancer_job_video(message, user_id, conversation_id)
+                    except ProviderUnavailable as exc:
+                        message_indisponible = str(exc)
                         yield _evenement_action("action_failed", action_id, "video", "provider_unavailable",
                                                  message_indisponible, erreur=message_indisponible,
                                                  statut="provider_unavailable")
-                        if not user_id:
-                            yield "data: " + json.dumps({"termine": True, "reponse": message_indisponible}, ensure_ascii=False) + "\n\n"
-                        else:
-                            yield "data: " + json.dumps({"termine": True}, ensure_ascii=False) + "\n\n"
                         return
-                    try:
-                        debut_outil = perf_counter()
-                        job = provider.create(message, timeout_s=30)
-                        yield _evenement_action(
-                            "action_progress", action_id, "video", "en_attente",
-                            "En attente du fournisseur…", resultats={"job_id": job.job_id}
-                        )
-                        polls = 0
-                        while job.status not in {"succeeded", "failed", "cancelled"} and polls < 108:
-                            time.sleep(5)
-                            job = provider.status(job.job_id, timeout_s=20)
-                            polls += 1
-                            message_progress = "Génération en cours…"
-                            if job.progress is not None:
-                                message_progress = f"Génération en cours… {job.progress:g} %"
-                            yield _evenement_action(
-                                "action_progress", action_id, "video", "generation",
-                                message_progress,
-                                resultats={"job_id": job.job_id, "progress": job.progress}
-                            )
-                        if job.status != "succeeded":
-                            if polls >= 108:
-                                raise ProviderTimeout("La génération vidéo a dépassé le délai maximal de suivi.")
-                            raise ProviderError(job.error or "La génération vidéo a échoué.")
-                        artifact_video = provider.retrieve(job.job_id, timeout_s=60)
-                        app.logger.info(
-                            "tool=video_generation provider=gemini job_id=%s duration_ms=%s status=success",
-                            job.job_id, round((perf_counter() - debut_outil) * 1000, 1),
-                        )
-                        saved = _enregistrer_element_bibliotheque(
-                            user_id, "video", "video-dashle", artifact_video.mime_type,
-                            artifact_video.data, conversation_id
-                        ) if user_id else False
-                        artifact = {
-                            "type": "video",
-                            "mime_type": artifact_video.mime_type,
-                            "filename": artifact_video.filename or "video-dashle.mp4",
-                            "data": base64.b64encode(artifact_video.data).decode("ascii"),
-                            "saved": saved,
-                        }
-                        message_action = "Génération vidéo terminée."
-                    except ProviderUnavailable as exc:
-                        yield _evenement_action("action_failed", action_id, "video", "provider_unavailable",
-                                                 str(exc), erreur=str(exc), statut="provider_unavailable")
-                        return
-                    except ProviderTimeout as exc:
-                        app.logger.warning("tool=video_generation provider=gemini status=timeout")
-                        yield _evenement_action("action_failed", action_id, "video", "erreur",
-                                                 "La génération vidéo a dépassé le délai autorisé.",
-                                                 erreur=type(exc).__name__, statut="timeout")
-                        return
-                    except ProviderError:
-                        app.logger.warning("tool=video_generation provider=gemini status=error")
-                        yield _evenement_action("action_failed", action_id, "video", "erreur",
-                                                 "La génération vidéo a échoué.",
-                                                 erreur="ProviderError", statut="error")
-                        return
-                    message_id_action = None
-                    if user_id and conserver and conversation_id:
-                        message_id_action = ajouter_message(user_id, conversation_id, message_action, "bot")
                     yield _evenement_action(
-                        "action_completed", action_id, "video", "termine", message_action,
-                        resultats={"artifact": artifact, "message_id": message_id_action,
-                                   "conversation_id": conversation_id}
+                        "action_progress", action_id, "video", "en_attente",
+                        "Génération lancée. Suivi en arrière-plan…",
+                        resultats={"job_id": job_id}
                     )
-                    payload_fin = {"termine": True, "message_id": message_id_action, "action_id": action_id}
-                    if not user_id:
-                        payload_fin["reponse"] = message_action
-                    yield "data: " + json.dumps(payload_fin, ensure_ascii=False) + "\n\n"
+                    yield "data: " + json.dumps(
+                        {"termine": True, "action_id": action_id, "tool_job_id": job_id},
+                        ensure_ascii=False
+                    ) + "\n\n"
                     return
 
                 if action_type == "recherche_web":
