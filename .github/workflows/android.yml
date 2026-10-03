@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - "android/**"
+      - "web.py"
       - ".github/workflows/android.yml"
   pull_request:
     paths:
