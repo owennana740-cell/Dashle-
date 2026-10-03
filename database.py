@@ -115,6 +115,35 @@ class ImageGenerationUsage(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
 
+class VideoGenerationJob(Base):
+    """État durable d'une génération vidéo asynchrone."""
+    __tablename__ = "video_generation_jobs"
+    __table_args__ = (UniqueConstraint("idempotency_key", name="uq_video_job_idempotency"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=True)
+    owner_token_hash: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    conversation_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
+    provider: Mapped[str] = mapped_column(String(40), nullable=False)
+    tool: Mapped[str] = mapped_column(String(40), nullable=False, default="video_generation")
+    status: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    progress: Mapped[float | None] = mapped_column(Float, nullable=True)
+    status_message: Mapped[str] = mapped_column(String(300), default="", nullable=False)
+    provider_job_id: Mapped[str | None] = mapped_column(String(500), nullable=True, index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    result_data: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    result_mime_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    result_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    lease_owner: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+
+
 class Project(Base):
     __tablename__ = "projects"
 
