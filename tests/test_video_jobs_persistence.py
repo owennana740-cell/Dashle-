@@ -1,10 +1,11 @@
+import os
+import tempfile
 import unittest
 from unittest import mock
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 
 from sqlalchemy import create_engine
-from sqlalchemy.pool import StaticPool
 from sqlalchemy.orm import sessionmaker
 
 import video_jobs
@@ -56,9 +57,22 @@ class FakeRegistry:
 class VideoJobPersistenceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+        handle, cls.db_path = tempfile.mkstemp(prefix="dashle-video-jobs-", suffix=".sqlite")
+        os.close(handle)
+        cls.engine = create_engine(
+            "sqlite:///" + cls.db_path,
+            connect_args={"check_same_thread": False},
+        )
         Base.metadata.create_all(cls.engine)
         cls.Session = sessionmaker(bind=cls.engine, expire_on_commit=False)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.engine.dispose()
+        try:
+            os.unlink(cls.db_path)
+        except FileNotFoundError:
+            pass
 
     def setUp(self):
         self.SessionLocal = self.Session
