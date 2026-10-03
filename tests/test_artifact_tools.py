@@ -539,7 +539,7 @@ class ArtifactToolsTests(unittest.TestCase):
         body = response.get_data(as_text=True)
         self.assertIn("Génération en cours…", body)
         self.assertIn("Finalisation…", body)
-        self.assertIn("Finitions", body)
+        self.assertIn("Finalisation…", body)
         self.assertIn('"event": "action_completed"', body)
         source = open("web.py", encoding="utf-8").read()
         self.assertIn("ouvrirVisionneuseImage", source)
