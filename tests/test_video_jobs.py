@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from unittest.mock import Mock, patch
 
 from sqlalchemy import create_engine
+from sqlalchemy.pool import StaticPool
 from sqlalchemy.orm import sessionmaker
 
 import video_jobs
@@ -34,7 +35,11 @@ class FakeVideoProvider:
 
 class VideoJobPersistenceTests(unittest.TestCase):
     def setUp(self):
-        self.engine = create_engine("sqlite+pysqlite:///:memory:")
+        self.engine = create_engine(
+            "sqlite+pysqlite:///:memory:",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
         Base.metadata.create_all(self.engine)
         self.Session = sessionmaker(bind=self.engine, expire_on_commit=False)
 
@@ -80,6 +85,18 @@ class VideoJobPersistenceTests(unittest.TestCase):
             self.assertEqual(job.provider_job_id, "operations/fake-1")
             self.assertEqual(job.status, "queued")
 
+
+    def test_same_idempotency_key_is_scoped_to_owner(self):
+        provider = FakeVideoProvider()
+        first = video_jobs.create_job(
+            provider, prompt="vidéo A", user_id=7, owner_token_hash=None,
+            conversation_id=None, idempotency_key="same-action"
+        )
+        second = video_jobs.create_job(
+            provider, prompt="vidéo B", user_id=8, owner_token_hash=None,
+            conversation_id=None, idempotency_key="same-action"
+        )
+        self.assertNotEqual(first, second)
 
     def test_creation_returns_without_waiting_for_provider(self):
         started = threading.Event()
