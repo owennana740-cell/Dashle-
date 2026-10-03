@@ -5036,7 +5036,7 @@ DATA_PAGE = """
 """
 
 CONDITIONS_PAGE = """
-<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Conditions d'utilisation - Dashle</title>
+<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Conditions d'utilisation - Dashle</title><meta name="description" content="Consultez les conditions d'utilisation de Dashle."><meta name="robots" content="index,follow"><link rel="canonical" href="https://dashle.onrender.com/conditions">
 <style>body{font:16px/1.6 'Segoe UI',sans-serif;color:#17251f;background:#f4f8f6;margin:0}.page{max-width:760px;margin:auto;padding:28px 18px}main{background:#fff;border:1px solid #dceae4;border-radius:14px;padding:22px}a{color:#22C55E}</style></head>
 <body><main class="page"><a href="{{ url_for('accueil') }}">&larr; Dashle</a><h1>Conditions d'utilisation</h1>
 <p>Dashle est un assistant personnel. Les r&eacute;ponses peuvent contenir des erreurs : v&eacute;rifie les informations importantes.</p>
@@ -5047,7 +5047,7 @@ CONDITIONS_PAGE = """
 
 NEWS_PAGE = """
 <!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Nouveaut&eacute;s DASHLE</title>
+<title>Nouveautés DASHLE</title><meta name="description" content="Découvrez les nouveautés et informations de Dashle."><meta name="robots" content="index,follow"><link rel="canonical" href="https://dashle.onrender.com/actualites">
 <style>
 body{font:16px/1.6 'Segoe UI',sans-serif;color:#17251f;background:#f4f8f6;margin:0}
 .page{max-width:760px;margin:auto;padding:28px 18px 48px}
@@ -5116,7 +5116,7 @@ button{border:0;border-radius:9px;background:linear-gradient(110deg,#22C55E,#3B8
 """
 
 TEMPS_REEL_PAGE = """
-<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Temps réel — DASHLE</title>
+<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Temps réel — DASHLE</title><meta name="description" content="Consultez les informations météo et actualités en temps réel avec Dashle."><meta name="robots" content="index,follow"><link rel="canonical" href="https://dashle.onrender.com/temps-reel">
 <style>:root{font-family:Inter,Segoe UI,sans-serif;color:#18352c;background:#f3f8f6}*{box-sizing:border-box}body{margin:0;padding:26px 16px}.wrap{max-width:900px;margin:auto}a{color:#16765b;text-decoration:none;font-weight:600}h1{font-size:clamp(28px,5vw,40px);margin:28px 0 8px}.intro{color:#627970}.card{background:#fff;border:1px solid #dce9e4;border-radius:16px;padding:20px;margin:16px 0;box-shadow:0 10px 28px #173a2b0c}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:14px}.field{display:flex;gap:8px;margin-top:14px}input{flex:1;min-width:0;padding:10px;border:1px solid #d5e3dd;border-radius:9px;font:inherit}button{padding:10px 14px;border:0;border-radius:9px;background:linear-gradient(110deg,#25bd80,#3b82f6);color:white;font:600 14px Inter,Segoe UI,sans-serif;cursor:pointer}#clock{font-size:24px;font-weight:700;color:#19765d}.subtle{font-size:13px;color:#6b7e76}.weather{line-height:1.65}.weather-dashboard{position:relative;overflow:hidden;margin-top:14px;padding:22px;border-radius:14px;background:linear-gradient(120deg,#e2f8e9,#e6f1ff);border:1px solid #cfe9df}.weather-top{display:flex;align-items:center;gap:16px}.weather-icon{font-size:54px;line-height:1}.weather-place{font-weight:700;font-size:18px}.weather-description{color:#526d64;text-transform:capitalize;margin-top:4px}.weather-temperature{font-size:clamp(42px,10vw,60px);font-weight:750;letter-spacing:-2px;color:#176b54;line-height:1.15;margin:14px 0}.weather-metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:10px;margin-top:18px}.weather-metric{background:#ffffffb8;border:1px solid #ffffff;border-radius:11px;padding:11px 13px}.weather-metric strong{display:block;font-size:18px;margin-top:4px}.humidity-track{height:6px;background:#d9e6e1;border-radius:9px;margin-top:8px;overflow:hidden}.humidity-track span{display:block;height:100%;border-radius:9px;background:linear-gradient(90deg,#25bd80,#3b82f6)}.news{padding-left:20px;line-height:1.6}.news li{margin:9px 0}.error{color:#9b3828}.source{font-size:12px;color:#6b7e76}</style></head>
 <body><main class="wrap"><a href="{{ url_for('accueil') }}">← Retour à DASHLE</a><h1>Le temps, maintenant</h1><p class="intro">Date et heure locales, météo du jour et titres récents de sources identifiées.</p>
 <div class="grid"><section class="card"><h2>Date et heure locales</h2><div id="clock">—</div><p class="subtle">Affichées selon le fuseau horaire de ton appareil.</p></section>
@@ -5168,7 +5168,7 @@ STATISTIQUES_PAGE = """
 
 TARIFS_PAGE = """
 <!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Tarifs — DASHLE</title><style>
+<title>Tarifs — DASHLE</title><meta name="description" content="Découvrez les offres et tarifs de Dashle."><meta name="robots" content="index,follow"><link rel="canonical" href="https://dashle.onrender.com/tarifs"><style>
 :root{font-family:Inter,Segoe UI,sans-serif;color:#18352c;background:#f3f8f6}*{box-sizing:border-box}body{margin:0;padding:28px 16px 48px}
 header{max-width:1100px;margin:0 auto 28px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}header a{color:#187a60;text-decoration:none;font-weight:600}
 h1{text-align:center;font-size:clamp(30px,5vw,44px);margin:18px 0 8px}.intro{text-align:center;color:#657b73;margin:0 auto 10px;max-width:680px}
