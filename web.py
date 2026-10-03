@@ -6258,6 +6258,14 @@ def repondre_flux():
                                                  message_indisponible, erreur=message_indisponible,
                                                  statut="provider_unavailable")
                         return
+                    except ProviderError as exc:
+                        if type(exc).__name__ == "ProviderUnavailable":
+                            message_indisponible = "aucun fournisseur vidéo n'est configuré sur DASHLE."
+                            yield _evenement_action("action_failed", action_id, "video", "provider_unavailable",
+                                                     message_indisponible, erreur=message_indisponible,
+                                                     statut="provider_unavailable")
+                            return
+                        raise
                     yield _evenement_action(
                         "action_progress", action_id, "video", "en_attente",
                         "Génération lancée. Suivi en arrière-plan…",
@@ -6299,6 +6307,14 @@ def repondre_flux():
                                                  "provider_unavailable", str(exc), erreur=str(exc),
                                                  statut="provider_unavailable")
                         return
+                    except ProviderError as exc:
+                        if type(exc).__name__ == "ProviderUnavailable":
+                            message_indisponible = "aucun fournisseur de navigation Web n'est configuré sur DASHLE."
+                            yield _evenement_action("action_failed", action_id, "recherche_web",
+                                                     "provider_unavailable", message_indisponible,
+                                                     erreur=message_indisponible, statut="provider_unavailable")
+                            return
+                        raise
                     except ProviderTimeout:
                         yield _evenement_action("action_failed", action_id, "recherche_web", "erreur",
                                                  "La recherche Web a dépassé le délai autorisé.",
