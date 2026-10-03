@@ -125,7 +125,8 @@ class ArtifactToolsTests(unittest.TestCase):
             WebSearchProvider()
 
     def test_natural_latest_news_query_reports_web_provider_unavailable(self):
-        response = self.client.post(
+        with patch.object(web.PROVIDER_REGISTRY, "available", return_value=False):
+            response = self.client.post(
             "/repondre",
             data={"message": "Cherche les dernières nouvelles sur le climat"},
             headers={"X-CSRF-Token": "artifact-token"},
@@ -314,7 +315,9 @@ class ArtifactToolsTests(unittest.TestCase):
         texte.assert_not_called()
 
     def test_sse_general_web_search_emits_provider_unavailable_state(self):
-        with patch.object(web.PROVIDER_REGISTRY, "available", return_value=False), patch.object(web, "streamer_message") as texte:
+        with patch.object(web.PROVIDER_REGISTRY, "available", return_value=False), \
+             patch.object(web.PROVIDER_REGISTRY, "get", return_value=None), \
+             patch.object(web, "streamer_message") as texte:
             response = self.client.post(
                 "/repondre_flux", data={"message": "Cherche sur le Web les sources officielles."},
                 headers={"X-CSRF-Token": "artifact-token"},

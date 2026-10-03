@@ -6127,7 +6127,7 @@ def _video_owner_token_hash(user_id):
 def _lancer_job_video(message, user_id, conversation_id, idempotency_key):
     provider = PROVIDER_REGISTRY.get("video_generation")
     if provider is None or not PROVIDER_REGISTRY.available("video_generation"):
-        raise ProviderUnavailable("La génération vidéo n'est pas encore configurée sur DASHLE.")
+        raise ProviderUnavailable("aucun fournisseur vidéo n'est configuré sur DASHLE.")
     return create_persistent_video_job(
         provider,
         prompt=message,
@@ -6389,7 +6389,7 @@ def repondre_flux():
                         return
                     yield _evenement_action(
                         "action_progress", action_id, "image", "generation",
-                        "Génération en cours…"
+                        "Ton idée prend forme…"
                     )
                     debut_image = perf_counter()
                     try:
