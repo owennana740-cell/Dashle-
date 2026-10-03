@@ -5944,7 +5944,7 @@ def securite():
 def _executer_recherche_web(message):
     provider = PROVIDER_REGISTRY.get("web_search")
     if provider is None or not PROVIDER_REGISTRY.available("web_search"):
-        raise ProviderUnavailable("La recherche Web générale n'est pas configurée sur DASHLE.")
+        raise ProviderUnavailable("aucun fournisseur de navigation Web n'est configuré sur DASHLE.")
     resultats = provider.search(message, timeout_s=35)
     if not resultats:
         raise ProviderError("Aucun résultat Web exploitable n'a été retourné.")
@@ -5974,7 +5974,7 @@ def repondre():
     if intention.name == "video_generation":
         provider = PROVIDER_REGISTRY.get("video_generation")
         if provider is None or not PROVIDER_REGISTRY.available("video_generation"):
-            return jsonify({"reponse": "Aucun fournisseur vidéo n'est configuré sur DASHLE.",
+            return jsonify({"reponse": "aucun fournisseur vidéo n'est configuré sur DASHLE.",
                             "status": "provider_unavailable"}), 501
         try:
             job_id = _lancer_job_video(message, user_id, session.get("conversation_id"))
@@ -6249,6 +6249,8 @@ def repondre_flux():
 
                 if action_type == "video":
                     try:
+                        if not PROVIDER_REGISTRY.available("video_generation"):
+                            raise ProviderUnavailable("aucun fournisseur vidéo n'est configuré sur DASHLE.")
                         job_id = _lancer_job_video(message, user_id, conversation_id)
                     except ProviderUnavailable as exc:
                         message_indisponible = str(exc)
@@ -6269,6 +6271,8 @@ def repondre_flux():
 
                 if action_type == "recherche_web":
                     try:
+                        if not PROVIDER_REGISTRY.available("web_search"):
+                            raise ProviderUnavailable("aucun fournisseur de navigation Web n'est configuré sur DASHLE.")
                         debut_outil = perf_counter()
                         answer, sources = _executer_recherche_web(message)
                         app.logger.info(
@@ -6324,7 +6328,11 @@ def repondre_flux():
                         return
                     yield _evenement_action(
                         "action_progress", action_id, "image", "generation",
-                        "Génération en cours…"
+                        "Ton idée prend forme…"
+                    )
+                    yield _evenement_action(
+                        "action_progress", action_id, "image", "generation",
+                        "Création d'une première ébauche…"
                     )
                     debut_image = perf_counter()
                     try:
@@ -6344,6 +6352,10 @@ def repondre_flux():
                         _journaliser_image(observabilite, debut_image, "error")
                         raise
                     _journaliser_image(observabilite, debut_image, "success")
+                    yield _evenement_action(
+                        "action_progress", action_id, "image", "finalisation",
+                        "Finitions…"
+                    )
                     yield _evenement_action(
                         "action_progress", action_id, "image", "finalisation",
                         "Finalisation…"
