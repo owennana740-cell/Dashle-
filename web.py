@@ -59,7 +59,7 @@ from tool_router import detect_tool_intent
 from tool_providers import ProviderError, ProviderUnavailable, ProviderTimeout, ProviderRegistry
 import video_jobs
 
-PROVIDER_REGISTRY = ProviderRegistry(lambda: CLE_API, image_generator=generer_image)
+PROVIDER_REGISTRY = ProviderRegistry(lambda: CLE_API, image_generator=lambda prompt, context='': generer_image(prompt, context))
 video_jobs.configure(PROVIDER_REGISTRY)
 
 BUILD_COMMIT = os.environ.get("RENDER_GIT_COMMIT") or os.environ.get("DASHLE_BUILD_COMMIT") or "inconnu"
@@ -5974,7 +5974,7 @@ def repondre():
     if intention.name == "video_generation":
         provider = PROVIDER_REGISTRY.get("video_generation")
         if provider is None or not PROVIDER_REGISTRY.available("video_generation"):
-            return jsonify({"reponse": "La génération vidéo n'est pas encore configurée sur DASHLE.",
+            return jsonify({"reponse": "Aucun fournisseur vidéo n'est configuré sur DASHLE.",
                             "status": "provider_unavailable"}), 501
         try:
             job_id = _lancer_job_video(message, user_id, session.get("conversation_id"))
@@ -6474,11 +6474,17 @@ def repondre_flux():
                 type(err).__name__,
             )
             if action_type:
-                yield _evenement_action(
-                    "action_failed", action_id, action_type, "echec",
-                    "Échec de la génération",
+                if isinstance(err, ProviderUnavailable):
+                    yield _evenement_action(
+                        "action_failed", action_id, action_type, "provider_unavailable",
+                        str(err), erreur=str(err), statut="provider_unavailable"
+                    )
+                else:
+                    yield _evenement_action(
+                        "action_failed", action_id, action_type, "echec",
+                        "Échec de la génération",
                     erreur="La génération a échoué. Réessaie.",
-                )
+                    )
                 yield "data: " + json.dumps(
                     {"termine": True, "message_id": None, "action_id": action_id},
                     ensure_ascii=False,
