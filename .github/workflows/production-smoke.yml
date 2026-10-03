@@ -62,7 +62,7 @@ jobs:
                   if self.in_script:
                       self.buf.append(data)
 
-          for path in ("/tmp/dashle_.html", "/tmp/dashle__connexion.html", "/tmp/dashle__inscription.html"):
+          for path in ("/tmp/dashle_.html", "/tmp/dashle_connexion.html", "/tmp/dashle_inscription.html"):
               parser = Scripts()
               parser.feed(Path(path).read_text(encoding="utf-8"))
               for attrs, script in parser.items:
@@ -75,7 +75,7 @@ jobs:
                       sys.exit(1)
 
           inscription_parser = Scripts()
-          inscription_parser.feed(Path("/tmp/dashle__inscription.html").read_text(encoding="utf-8"))
+          inscription_parser.feed(Path("/tmp/dashle_inscription.html").read_text(encoding="utf-8"))
           try:
               indicatifs = json.loads(inscription_parser.json_data or "null")
           except json.JSONDecodeError as error:
