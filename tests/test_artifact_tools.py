@@ -316,7 +316,7 @@ class ArtifactToolsTests(unittest.TestCase):
         texte.assert_not_called()
 
     def test_sse_general_web_search_emits_provider_unavailable_state(self):
-        with patch.object(web.PROVIDER_REGISTRY, "available", return_value=False), patch.object(web, "streamer_message") as texte:
+        with patch.object(web.PROVIDER_REGISTRY, "available", return_value=False), patch.object(web, "streamer_message") as texte, patch.object(web, "_executer_recherche_web", side_effect=ProviderUnavailable("aucun fournisseur de navigation Web n'est configuré sur DASHLE.")):
             response = self.client.post(
                 "/repondre_flux", data={"message": "Cherche sur le Web les sources officielles."},
                 headers={"X-CSRF-Token": "artifact-token"},
