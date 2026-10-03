@@ -6167,7 +6167,7 @@ def flux_job_outil(job_id):
     if generate is None:
         return jsonify({"status": "not_found"}), 404
     return Response(
-        stream_with_context(generate()),
+        stream_with_context(generate),
         mimetype="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
