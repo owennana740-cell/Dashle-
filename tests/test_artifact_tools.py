@@ -97,18 +97,38 @@ class ArtifactToolsTests(unittest.TestCase):
         self.assertTrue(detecter_demande_image("Fais un schéma du fonctionnement d'un moteur"))
         self.assertTrue(detecter_demande_image("Je veux que tu me génères. L'image d'une ville futuriste avec des voitures volantes."))
         self.assertTrue(detecter_demande_image("Peux-tu me créer une image d'une ville futuriste ?"))
+        self.assertTrue(detecter_demande_image("Fais-moi une ville futuriste avec des voitures volantes"))
+        self.assertFalse(detecter_demande_image("Fais-moi un résumé sur cette ville"))
         self.assertFalse(demande_illustration_pedagogique("Quelle est la définition de HTTP ?"))
         self.assertTrue(detecter_demande_generation_video("Crée une vidéo d'une voiture volante"))
+        self.assertTrue(detecter_demande_generation_video("Fais une vidéo d'une voiture volante"))
         self.assertTrue(detecter_demande_generation_video("Génère un clip futuriste"))
         self.assertFalse(detecter_demande_generation_video("Résume cette vidéo"))
         self.assertTrue(detecter_demande_recherche_web("Cherche sur le Web les sources officielles"))
         self.assertTrue(detecter_demande_recherche_web("Fais une recherche sur Internet"))
+        self.assertTrue(detecter_demande_recherche_web("Cherche les dernières nouvelles sur le climat"))
         self.assertFalse(detecter_demande_recherche_web("Quelle est la météo aujourd'hui ?"))
         self.assertTrue(detecter_demande_modification_image("Transforme cette image en style futuriste"))
         self.assertFalse(detecter_demande_modification_image("Décris cette image"))
         self.assertTrue(demande_illustration_pedagogique(
             "Explique-moi comment fonctionne le système solaire et son organisation."
         ))
+
+    def test_provider_contracts_are_interfaces_only(self):
+        from tool_providers import VideoGenerationProvider, WebSearchProvider
+        with self.assertRaises(TypeError):
+            VideoGenerationProvider()
+        with self.assertRaises(TypeError):
+            WebSearchProvider()
+
+    def test_natural_latest_news_query_reports_web_provider_unavailable(self):
+        response = self.client.post(
+            "/repondre",
+            data={"message": "Cherche les dernières nouvelles sur le climat"},
+            headers={"X-CSRF-Token": "artifact-token"},
+        )
+        self.assertEqual(response.status_code, 501)
+        self.assertEqual(response.json["status"], "provider_unavailable")
 
     def test_structured_pdf_contains_real_content_not_request_sentence(self):
         structure = structurer_document(

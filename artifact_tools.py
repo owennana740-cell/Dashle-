@@ -77,7 +77,21 @@ def detecter_demande_image(message: str) -> bool:
         r"\b(?:image|illustration|logo|affiche|schema|diagramme|infographie|visuel|dessin)\b",
         t_sans_accents,
     )
-    return bool(verbe_image and objet_image)
+    # Les demandes naturelles omettent souvent le mot « image » : « fais-moi
+    # une ville futuriste », « dessine un portrait », etc. Limiter ce cas aux
+    # sujets visuels connus évite de router toute demande créative vers Gemini.
+    sujet_visuel = re.search(
+        r"\b(?:ville|paysage|portrait|personnage|voiture|maison|chateau|"
+        r"foret|montagne|planete|galaxie|robot|animal|fleur|bande dessinee|"
+        r"scene|carte|avatar)\b",
+        t_sans_accents,
+    )
+    intention_visuelle = re.search(
+        r"\b(?:futurist\w*|volant\w*|en 3d|style|colore\w*|"
+        r"realist\w*|fantast\w*|onir\w*|magnifi\w*|dessin\w*)\b",
+        t_sans_accents,
+    )
+    return bool(verbe_image and (objet_image or (sujet_visuel and intention_visuelle)))
 
 
 def detecter_demande_generation_video(message: str) -> bool:
@@ -102,11 +116,18 @@ def detecter_demande_recherche_web(message: str) -> bool:
         caractere for caractere in unicodedata.normalize("NFD", t)
         if unicodedata.category(caractere) != "Mn"
     )
-    return bool(re.search(
+    explicite = re.search(
         r"\b(?:sur internet|sur le web|sur google|dans le web|recherche web|"
         r"recherche sur internet|recherche sur le web|cherche sur internet|"
         r"cherche sur le web|navigue sur|ouvre des sites|trouve des sources web)\b", t
-    ))
+    )
+    recherche = re.search(r"\b(?:cherche|recherche|trouve|recherche-moi)\b", t)
+    cible_web = re.search(
+        r"\b(?:dernieres? nouvelles?|actualites?|articles?|informations?|"
+        r"sources?)\b", t
+    )
+    contexte_cible = re.search(r"\b(?:sur|concernant|a propos de)\b", t)
+    return bool(explicite or (recherche and cible_web and contexte_cible))
 
 
 def detecter_demande_modification_image(message: str) -> bool:
