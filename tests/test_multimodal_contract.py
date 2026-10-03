@@ -111,6 +111,7 @@ class MultimodalContractTests(unittest.TestCase):
     def test_image_edit_is_not_misrepresented_as_analysis_or_generation(self):
         with (
             patch.object(web, "detecter_type_media", return_value="image/png"),
+            patch.object(web.PROVIDER_REGISTRY, "available", return_value=False),
             patch.object(web, "traiter_message_image") as analyse,
         ):
             response = self.client.post(

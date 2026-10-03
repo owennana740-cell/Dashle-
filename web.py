@@ -44,7 +44,7 @@ from connectors.web import bp as connectors_bp
 from database import (
     AdminAuditLog, Conversation, ImageGenerationUsage, VoiceTranscriptionUsage, LibraryItem, Message, MessageFeedback, ShareLink, SubscriptionPayment, User,
     UserMemory, UserPreference, StatisticalAnalysisUsage, Project, ProjectFile, Reminder, UserPlugin,
-    ScheduledTask, ScheduledTaskRun, UserNotification,
+    ScheduledTask, ScheduledTaskRun, UserNotification, VideoGenerationJob,
     initialiser_base, session_base,
 )
 from statistiques import analyser_fichier
@@ -57,6 +57,10 @@ from artifact_tools import (detecter_demande_pdf, detecter_demande_image,
                             structurer_document, rendre_pdf, generer_image, extraire_texte_structure)
 from tool_router import detect_tool_intent
 from tool_providers import ProviderError, ProviderUnavailable, ProviderTimeout, ProviderRegistry
+import video_jobs
+
+PROVIDER_REGISTRY = ProviderRegistry(lambda: CLE_API, image_generator=lambda prompt, context='': generer_image(prompt, context))
+video_jobs.configure(PROVIDER_REGISTRY)
 
 BUILD_COMMIT = os.environ.get("RENDER_GIT_COMMIT") or os.environ.get("DASHLE_BUILD_COMMIT") or "inconnu"
 BUILD_COMMIT_SHORT = BUILD_COMMIT[:12] if BUILD_COMMIT != "inconnu" else BUILD_COMMIT
@@ -143,6 +147,7 @@ app.config.update(
     PERMANENT_SESSION_LIFETIME=timedelta(days=3650),
 )
 initialiser_base()
+video_jobs.resume_active_jobs()
 app.register_blueprint(connectors_bp)
 
 
@@ -2620,6 +2625,29 @@ function afficherMarkdownStreaming(message, texte) { message.dataset.markdownSou
 
 function afficherMarkdownInitial() { document.querySelectorAll('#chat .msg.bot').forEach(function(message) { afficherMarkdown(message, message.textContent); }); }
 document.addEventListener('DOMContentLoaded', afficherMarkdownInitial);
+
+async function reprendreJobsVideo() {
+  if (typeof fetch !== 'function') return;
+  try {
+    const response = await fetch('/api/outils/jobs', { cache: 'no-store' });
+    if (!response.ok || typeof response.json !== 'function') return;
+    const payload = await response.json();
+    (payload.jobs || []).forEach(function(job) {
+      const deja = Array.from(document.querySelectorAll('.suivi-action')).some(function(el){ return el.dataset.toolJobId === job.job_id; });
+      if (deja) return;
+      const bloc = creerSuiviAction({id: job.job_id, type:'video', cancelable:false});
+      bloc.dataset.toolJobId = job.job_id; bloc.dataset.prompt = job.prompt || '';
+      mettreAJourSuiviAction(bloc, {id: job.job_id, type:'video', step:job.status, message:job.message || 'Génération en cours…', result:{progress:job.progress}});
+      if (job.status === 'completed') {
+        finaliserSuiviAction(bloc, {artifact:{type:'video', mime_type:'video/mp4', filename:'video-dashle.mp4', url:'/api/outils/jobs/' + encodeURIComponent(job.job_id) + '/result'}});
+      } else {
+        bloc.dataset.toolJobFollowed = 'true';
+        suivreJobOutil(bloc, job.job_id);
+      }
+    });
+  } catch (e) { console.warn('[DASHLE] Reprise des jobs vidéo indisponible', e); }
+}
+document.addEventListener('DOMContentLoaded', reprendreJobsVideo);
 function ajouterMessage(texte, classe) {
   const accueil = document.querySelector('.accueil-vide');
   if (accueil) accueil.remove();
@@ -2743,35 +2771,35 @@ function creerSuiviAction(action) {
 }
 
 async function suivreJobOutil(bloc, jobId) {
-  try {
-    const response = await fetch('/api/outils/jobs/' + encodeURIComponent(jobId) + '/flux', {
-      headers: { 'Accept': 'text/event-stream' }, cache: 'no-store'
-    });
-    if (!response.ok || !response.body) throw new Error('Suivi du job indisponible');
-    const lecteur = response.body.getReader();
-    const decodeur = new TextDecoder();
-    let tampon = '';
-    while (true) {
-      const {done, value} = await lecteur.read();
-      if (done) break;
-      tampon += decodeur.decode(value, {stream:true});
-      const lignes = tampon.split('\n'); tampon = lignes.pop();
-      for (const ligne of lignes) {
-        if (!ligne.startsWith('data:')) continue;
-        let ev; try { ev = JSON.parse(ligne.slice(5).trim()); } catch(e) { continue; }
-        if (!ev || !ev.event) continue;
-        if (ev.action) {
-          mettreAJourSuiviAction(bloc, ev.action);
-          if (ev.event === 'action_completed') finaliserSuiviAction(bloc, ev.action.result || {});
-          if (ev.event === 'action_completed' || ev.event === 'action_failed') return;
+  while (bloc && bloc.isConnected && bloc.dataset.generationState !== 'completed' && bloc.dataset.generationState !== 'failed' && bloc.dataset.generationState !== 'expired') {
+    try {
+      const response = await fetch('/api/outils/jobs/' + encodeURIComponent(jobId) + '/flux', {
+        headers: { 'Accept': 'text/event-stream' }, cache: 'no-store'
+      });
+      if (!response.ok || !response.body) throw new Error('Suivi du job indisponible');
+      const lecteur = response.body.getReader(); const decodeur = new TextDecoder(); let tampon = '';
+      while (true) {
+        const {done, value} = await lecteur.read(); if (done) break;
+        tampon += decodeur.decode(value, {stream:true});
+        const lignes = tampon.split('\n'); tampon = lignes.pop();
+        for (const ligne of lignes) {
+          if (!ligne.startsWith('data:')) continue;
+          let ev; try { ev = JSON.parse(ligne.slice(5).trim()); } catch(e) { continue; }
+          if (!ev || !ev.event) continue;
+          if (ev.action) {
+            mettreAJourSuiviAction(bloc, ev.action);
+            if (ev.event === 'action_completed') { finaliserSuiviAction(bloc, ev.action.result || {}); return; }
+            if (ev.event === 'action_failed') return;
+          }
         }
       }
+      if (bloc.dataset.generationActive === 'false') return;
+      throw new Error('Flux terminé sans état final');
+    } catch (e) {
+      if (!bloc || !bloc.isConnected || bloc.dataset.generationActive === 'false') return;
+      mettreAJourSuiviAction(bloc, { id: jobId, type:'video', step:'reconnexion', message:'Reconnexion du suivi vidéo…' });
+      await new Promise(function(resolve){ setTimeout(resolve, 3000); });
     }
-  } catch (e) {
-    mettreAJourSuiviAction(bloc, {
-      id: jobId, type:'video', event:'action_failed', step:'erreur',
-      message:'Le suivi de la génération a été interrompu.'
-    });
   }
 }
 
@@ -2782,6 +2810,7 @@ function mettreAJourSuiviAction(bloc, action) {
   const messages = { preparation: 'Préparation…', generation: 'Génération en cours…', finalisation: 'Finalisation…', en_attente: 'En attente du fournisseur…' };
   const libelle = action.message || messages[action.step] || 'Action en cours…';
   if (action.result && action.result.job_id && !bloc.dataset.toolJobFollowed) {
+    bloc.dataset.toolJobId = action.result.job_id;
     bloc.dataset.toolJobFollowed = 'true';
     suivreJobOutil(bloc, action.result.job_id);
   }
@@ -2900,8 +2929,16 @@ function finaliserSuiviAction(bloc, result) {
     }
     bloc.appendChild(zone); chat.scrollTop=chat.scrollHeight; return;
   }
-  if (!result.artifact || !result.artifact.data) return;
+  if (!result.artifact) return;
   const artifact = result.artifact;
+  if (artifact.url && artifact.type === 'video') {
+    const contenu = document.createElement('div'); contenu.className = 'suivi-action-resultat suivi-action-image-resultat';
+    const video = document.createElement('video'); video.controls = true; video.preload = 'metadata'; video.playsInline = true; video.className = 'dashle-video-resultat'; video.src = artifact.url;
+    contenu.appendChild(video);
+    const lien = document.createElement('a'); lien.href = artifact.url; lien.download = artifact.filename || 'video-dashle.mp4'; lien.className = 'pdf-telechargement-chat'; lien.textContent = 'Ouvrir / télécharger la vidéo'; contenu.appendChild(lien);
+    bloc.appendChild(contenu); chat.scrollTop = chat.scrollHeight; return;
+  }
+  if (!artifact.data) return;
   try {
     const bytes = Uint8Array.from(atob(String(artifact.data)), function(c){ return c.charCodeAt(0); });
     const mime = String(artifact.mime_type || 'application/octet-stream').toLowerCase();
@@ -5908,7 +5945,7 @@ def securite():
 def _executer_recherche_web(message):
     provider = PROVIDER_REGISTRY.get("web_search")
     if provider is None or not PROVIDER_REGISTRY.available("web_search"):
-        raise ProviderUnavailable("La recherche Web générale n'est pas configurée sur DASHLE.")
+        raise ProviderUnavailable("aucun fournisseur de navigation Web n'est configuré sur DASHLE.")
     resultats = provider.search(message, timeout_s=35)
     if not resultats:
         raise ProviderError("Aucun résultat Web exploitable n'a été retourné.")
@@ -5938,12 +5975,12 @@ def repondre():
     if intention.name == "video_generation":
         provider = PROVIDER_REGISTRY.get("video_generation")
         if provider is None or not PROVIDER_REGISTRY.available("video_generation"):
-            return jsonify({"reponse": "La génération vidéo n'est pas encore configurée sur DASHLE.",
+            return jsonify({"reponse": "aucun fournisseur vidéo n'est configuré sur DASHLE.",
                             "status": "provider_unavailable"}), 501
         try:
-            job = provider.create(message, timeout_s=30)
-            return jsonify({"reponse": "Génération vidéo lancée.", "status": job.status,
-                            "job_id": job.job_id, "progress": job.progress}), 202
+            job_id = _lancer_job_video(message, user_id, session.get("conversation_id"))
+            return jsonify({"reponse": "Génération vidéo lancée.", "status": "queued",
+                            "job_id": job_id, "progress": None}), 202
         except ProviderUnavailable as exc:
             return jsonify({"reponse": str(exc), "status": "provider_unavailable"}), 501
         except ProviderTimeout:
@@ -6057,6 +6094,28 @@ def _evenement_action(nom_evenement, action_id, action_type, etape, message,
     return "data: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
 
 
+def _video_visitor_key():
+    raw = session.get("video_visitor_key")
+    if not raw:
+        raw = secrets.token_urlsafe(24)
+        session["video_visitor_key"] = raw
+        session.modified = True
+    return video_jobs.visitor_key(raw, str(app.config.get("SECRET_KEY", "dashle")))
+
+def _video_job_owner():
+    user_id = session.get("user_id")
+    return user_id, None if user_id is not None else _video_visitor_key()
+
+def _lancer_job_video(message, user_id, conversation_id):
+    visitor = None if user_id is not None else _video_visitor_key()
+    job = video_jobs.create_job(message, user_id=user_id, visitor_key_value=visitor, conversation_id=conversation_id)
+    video_jobs.start(job.id)
+    app.logger.info("tool=video_generation provider=gemini job_id=%s status=queued", job.id)
+    return job.id
+
+def _outil_job_nettoyer():
+    video_jobs.cleanup_expired_jobs()
+
 def _demande_action_longue(message):
     """Retourne l'outil choisi par le routeur naturel, avec compatibilité historique."""
     intention = detect_tool_intent(message)
@@ -6079,54 +6138,39 @@ def _demande_action_longue(message):
     return None
 
 
+@app.route("/api/outils/jobs")
+def lister_jobs_outils():
+    user_id, visitor = _video_job_owner()
+    jobs = video_jobs.list_owned(user_id=user_id, visitor_key_value=visitor)
+    return jsonify({"jobs": [{
+        "job_id": j["id"], "type": "video", "status": j["status"],
+        "progress": j["progress"], "message": j["status_message"],
+        "prompt": j["prompt"], "conversation_id": j["conversation_id"]
+    } for j in jobs]})
+
+@app.route("/api/outils/jobs/<job_id>/result")
+def resultat_job_outil(job_id):
+    user_id, visitor = _video_job_owner()
+    result = video_jobs.result_for_owned(job_id, user_id=user_id, visitor_key_value=visitor)
+    if result is None:
+        return jsonify({"status": "not_found"}), 404
+    response = send_file(io.BytesIO(result["data"]), mimetype=result["mime_type"],
+                         as_attachment=False, download_name=result["filename"], conditional=True)
+    response.headers["Cache-Control"] = "private, max-age=3600"
+    return response
+
 @app.route("/api/outils/jobs/<job_id>/flux")
 def flux_job_outil(job_id):
     _outil_job_nettoyer()
-    user_id = session.get("user_id")
-    with _OUTIL_JOBS_LOCK:
-        job = _OUTIL_JOBS.get(job_id)
-        if job is None or (job.get("user_id") is not None and job.get("user_id") != user_id):
-            return jsonify({"status": "not_found"}), 404
+    user_id, visitor = _video_job_owner()
+    if video_jobs.get_owned(job_id, user_id=user_id, visitor_key_value=visitor) is None:
+        return jsonify({"status": "not_found"}), 404
     def generate():
-        dernier = None
-        while True:
-            with _OUTIL_JOBS_LOCK:
-                current = dict(_OUTIL_JOBS.get(job_id, {}))
-            if not current:
-                yield "data: " + json.dumps({"event":"action_failed","status":"expired"}, ensure_ascii=False) + "\n\n"
-                return
-            snapshot = (
-                current.get("status"), current.get("progress"),
-                current.get("error"), current.get("result")
-            )
-            if snapshot != dernier:
-                dernier = snapshot
-                if current.get("status") in {"succeeded"}:
-                    yield "data: " + json.dumps({
-                        "event":"action_completed", "action":{"id":job_id,"type":"video","step":"termine",
-                        "message":"Génération vidéo terminée.","result":current.get("result") or {}}
-                    }, ensure_ascii=False) + "\n\n"
-                    return
-                if current.get("status") in {"failed","provider_unavailable"}:
-                    yield "data: " + json.dumps({
-                        "event":"action_failed", "action":{"id":job_id,"type":"video",
-                        "step":current.get("status"),"message":(
-                            "La génération vidéo n'est pas encore configurée sur DASHLE."
-                            if current.get("status") == "provider_unavailable"
-                            else "La génération vidéo a échoué."
-                        ),"status":current.get("status")}
-                    }, ensure_ascii=False) + "\n\n"
-                    return
-                yield "data: " + json.dumps({
-                    "event":"action_progress","action":{"id":job_id,"type":"video",
-                    "step":current.get("status") or "generation",
-                    "message":(
-                        f"Génération en cours… {current['progress']:g} %"
-                        if isinstance(current.get("progress"), (int,float))
-                        else "Génération en cours…"
-                    ),"result":{"progress":current.get("progress")}}
-                }, ensure_ascii=False) + "\n\n"
-            time.sleep(2)
+        for event in video_jobs.stream_events(job_id, user_id=user_id, visitor_key_value=visitor):
+            if event is None:
+                yield ": keepalive\n\n"
+            else:
+                yield "data: " + json.dumps(event, ensure_ascii=False) + "\n\n"
     return Response(stream_with_context(generate()), mimetype="text/event-stream",
                     headers={"Cache-Control":"no-cache","X-Accel-Buffering":"no"})
 
@@ -6154,6 +6198,29 @@ def repondre_flux():
 
     if not message:
         return jsonify({"erreur": "Aucun message reçu."}), 400
+
+    # Les providers absents sont signalés avant d'ouvrir le générateur SSE.
+    action_precheck = _demande_action_longue(message)
+    if action_precheck in {"video", "recherche_web"}:
+        provider_key = "video_generation" if action_precheck == "video" else "web_search"
+        if not PROVIDER_REGISTRY.available(provider_key):
+            action_id_precheck = secrets.token_hex(12)
+            label = "aucun fournisseur vidéo n'est configuré sur DASHLE." if action_precheck == "video" else "aucun fournisseur de navigation Web n'est configuré sur DASHLE."
+            started = _evenement_action(
+                "action_started", action_id_precheck, action_precheck, "preparation",
+                "Analyse de votre demande…"
+            )
+            failed = _evenement_action(
+                "action_failed", action_id_precheck, action_precheck, "provider_unavailable",
+                label, erreur=label, statut="provider_unavailable"
+            )
+            done = "data: " + json.dumps(
+                {"termine": True, "action_id": action_id_precheck, "message_id": None},
+                ensure_ascii=False
+            ) + "\n\n"
+            return Response(started + failed + done, mimetype="text/event-stream",
+                            headers={"Cache-Control":"no-cache, no-store, must-revalidate",
+                                     "Pragma":"no-cache", "X-Accel-Buffering":"no"})
 
     # --- Collecte du contexte selon le mode ---
     if user_id:
@@ -6206,6 +6273,8 @@ def repondre_flux():
 
                 if action_type == "video":
                     try:
+                        if not PROVIDER_REGISTRY.available("video_generation"):
+                            raise ProviderUnavailable("aucun fournisseur vidéo n'est configuré sur DASHLE.")
                         job_id = _lancer_job_video(message, user_id, conversation_id)
                     except ProviderUnavailable as exc:
                         message_indisponible = str(exc)
@@ -6213,6 +6282,14 @@ def repondre_flux():
                                                  message_indisponible, erreur=message_indisponible,
                                                  statut="provider_unavailable")
                         return
+                    except ProviderError as exc:
+                        if type(exc).__name__ == "ProviderUnavailable":
+                            message_indisponible = "aucun fournisseur vidéo n'est configuré sur DASHLE."
+                            yield _evenement_action("action_failed", action_id, "video", "provider_unavailable",
+                                                     message_indisponible, erreur=message_indisponible,
+                                                     statut="provider_unavailable")
+                            return
+                        raise
                     yield _evenement_action(
                         "action_progress", action_id, "video", "en_attente",
                         "Génération lancée. Suivi en arrière-plan…",
@@ -6226,6 +6303,8 @@ def repondre_flux():
 
                 if action_type == "recherche_web":
                     try:
+                        if not PROVIDER_REGISTRY.available("web_search"):
+                            raise ProviderUnavailable("aucun fournisseur de navigation Web n'est configuré sur DASHLE.")
                         debut_outil = perf_counter()
                         answer, sources = _executer_recherche_web(message)
                         app.logger.info(
@@ -6252,6 +6331,14 @@ def repondre_flux():
                                                  "provider_unavailable", str(exc), erreur=str(exc),
                                                  statut="provider_unavailable")
                         return
+                    except ProviderError as exc:
+                        if type(exc).__name__ == "ProviderUnavailable":
+                            message_indisponible = "aucun fournisseur de navigation Web n'est configuré sur DASHLE."
+                            yield _evenement_action("action_failed", action_id, "recherche_web",
+                                                     "provider_unavailable", message_indisponible,
+                                                     erreur=message_indisponible, statut="provider_unavailable")
+                            return
+                        raise
                     except ProviderTimeout:
                         yield _evenement_action("action_failed", action_id, "recherche_web", "erreur",
                                                  "La recherche Web a dépassé le délai autorisé.",
@@ -6281,7 +6368,11 @@ def repondre_flux():
                         return
                     yield _evenement_action(
                         "action_progress", action_id, "image", "generation",
-                        "Génération en cours…"
+                        "Ton idée prend forme…"
+                    )
+                    yield _evenement_action(
+                        "action_progress", action_id, "image", "generation",
+                        "Création d'une première ébauche…"
                     )
                     debut_image = perf_counter()
                     try:
@@ -6301,6 +6392,10 @@ def repondre_flux():
                         _journaliser_image(observabilite, debut_image, "error")
                         raise
                     _journaliser_image(observabilite, debut_image, "success")
+                    yield _evenement_action(
+                        "action_progress", action_id, "image", "finalisation",
+                        "Finitions…"
+                    )
                     yield _evenement_action(
                         "action_progress", action_id, "image", "finalisation",
                         "Finalisation…"
@@ -6431,11 +6526,24 @@ def repondre_flux():
                 type(err).__name__,
             )
             if action_type:
-                yield _evenement_action(
-                    "action_failed", action_id, action_type, "echec",
-                    "Échec de la génération",
-                    erreur="La génération a échoué. Réessaie.",
-                )
+                if isinstance(err, ProviderUnavailable) or (
+                    isinstance(err, ProviderError) and action_type in {"video", "recherche_web"}
+                ):
+                    message_indisponible = (
+                        "aucun fournisseur vidéo n'est configuré sur DASHLE."
+                        if action_type == "video"
+                        else "aucun fournisseur de navigation Web n'est configuré sur DASHLE."
+                    )
+                    yield _evenement_action(
+                        "action_failed", action_id, action_type, "provider_unavailable",
+                        message_indisponible, erreur=message_indisponible, statut="provider_unavailable"
+                    )
+                else:
+                    yield _evenement_action(
+                        "action_failed", action_id, action_type, "echec",
+                        "Échec de la génération",
+                        erreur="La génération a échoué. Réessaie.",
+                    )
                 yield "data: " + json.dumps(
                     {"termine": True, "message_id": None, "action_id": action_id},
                     ensure_ascii=False,
@@ -6622,7 +6730,7 @@ def repondre_image():
         provider = PROVIDER_REGISTRY.get("image_editing")
         if provider is None or not PROVIDER_REGISTRY.available("image_editing"):
             return jsonify({
-                "reponse": "L'édition d'image n'est pas encore configurée sur DASHLE.",
+                "reponse": "aucun outil d’édition d’image n’est configuré sur DASHLE.",
                 "status": "provider_unavailable",
             }), 501
         if _quota_image_bloque(user_id)[0]:
