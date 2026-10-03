@@ -163,12 +163,11 @@ class ProviderRouteTests(unittest.TestCase):
         from database import VideoGenerationJob, session_base
         from datetime import datetime, timedelta
         with self.client.session_transaction() as state:
-            state["video_visitor_key"] = "tool-test-visitor"
-        visitor = web.video_jobs.visitor_key("tool-test-visitor", str(web.app.config.get("SECRET_KEY", "dashle")))
+            state["user_id"] = 999
         now = datetime.utcnow()
         with session_base() as db:
             db.add(VideoGenerationJob(
-                id="job-progress-test", user_id=None, visitor_key=visitor, conversation_id=None,
+                id="job-progress-test", user_id=999, visitor_key=None, conversation_id=None,
                 provider="gemini", tool_type="video_generation", prompt="test", status="completed",
                 progress=100.0, status_message="Génération terminée", provider_job_id="operations/test",
                 result_mime_type="video/mp4", result_filename="video.mp4", result_data=b"video",
