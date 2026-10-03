@@ -145,6 +145,10 @@ app.config.update(
 initialiser_base()
 app.register_blueprint(connectors_bp)
 
+PROVIDER_REGISTRY = ProviderRegistry(lambda: CLE_API, image_generator=generer_image)
+VIDEO_JOB_STORE = VideoJobStore(PROVIDER_REGISTRY)
+VIDEO_JOB_STORE.resume_active_jobs()
+
 
 @app.after_request
 def definir_charset_json_utf8(response):
