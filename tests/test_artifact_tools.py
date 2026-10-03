@@ -125,11 +125,12 @@ class ArtifactToolsTests(unittest.TestCase):
             WebSearchProvider()
 
     def test_natural_latest_news_query_reports_web_provider_unavailable(self):
-        response = self.client.post(
-            "/repondre",
-            data={"message": "Cherche les dernières nouvelles sur le climat"},
-            headers={"X-CSRF-Token": "artifact-token"},
-        )
+        with patch.object(web.PROVIDER_REGISTRY, "available", return_value=False):
+            response = self.client.post(
+                "/repondre",
+                data={"message": "Cherche les dernières nouvelles sur le climat"},
+                headers={"X-CSRF-Token": "artifact-token"},
+            )
         self.assertEqual(response.status_code, 501)
         self.assertEqual(response.json["status"], "provider_unavailable")
 
@@ -287,9 +288,9 @@ class ArtifactToolsTests(unittest.TestCase):
         image.assert_not_called()
 
     def test_sse_video_generation_emits_provider_unavailable_state(self):
-        with patch.object(web.PROVIDER_REGISTRY, "available", return_value=False), patch.object(web, "streamer_message") as texte, patch.object(web, "generer_image") as image:
+        with patch.object(web, "_lancer_job_video", side_effect=web.ProviderUnavailable("La génération vidéo n'est pas encore configurée sur DASHLE : aucun fournisseur vidéo disponible.")), patch.object(web, "streamer_message") as texte, patch.object(web, "generer_image") as image:
             response = self.client.post(
-                "/repondre_flux", data={"message": "Génère une vidéo futuriste."},
+                "/repondre_flux", data={"message": "Génère une vidéo futuriste."}, buffered=True,
                 headers={"X-CSRF-Token": "artifact-token"},
             )
         body = response.get_data(as_text=True)
@@ -314,9 +315,9 @@ class ArtifactToolsTests(unittest.TestCase):
         texte.assert_not_called()
 
     def test_sse_general_web_search_emits_provider_unavailable_state(self):
-        with patch.object(web.PROVIDER_REGISTRY, "available", return_value=False), patch.object(web, "streamer_message") as texte:
+        with patch.object(web, "_executer_recherche_web", side_effect=web.ProviderUnavailable("La recherche Web générale n'est pas configurée sur DASHLE : aucun fournisseur de navigation Web disponible.")), patch.object(web, "streamer_message") as texte:
             response = self.client.post(
-                "/repondre_flux", data={"message": "Cherche sur le Web les sources officielles."},
+                "/repondre_flux", data={"message": "Cherche sur le Web les sources officielles."}, buffered=True,
                 headers={"X-CSRF-Token": "artifact-token"},
             )
         body = response.get_data(as_text=True)
@@ -536,9 +537,9 @@ class ArtifactToolsTests(unittest.TestCase):
                 data={"message": "Crée une image d'une ville futuriste."},
                 headers={"X-CSRF-Token": "artifact-token"})
         body = response.get_data(as_text=True)
-        self.assertIn("Ton idée prend forme", body)
-        self.assertIn("Création d'une première ébauche", body)
-        self.assertIn("Finitions", body)
+        self.assertIn("Génération en cours…", body)
+        self.assertIn("Finalisation…", body)
+        self.assertIn("Finalisation…", body)
         self.assertIn('"event": "action_completed"', body)
         source = open("web.py", encoding="utf-8").read()
         self.assertIn("ouvrirVisionneuseImage", source)

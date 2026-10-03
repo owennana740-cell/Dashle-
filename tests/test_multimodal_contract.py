@@ -31,6 +31,7 @@ class MultimodalContractTests(unittest.TestCase):
         with (
             patch.object(web, "IMAGE_UPLOAD_MAX_BYTES", 4),
             patch.object(web, "traiter_message_image") as analyse,
+            patch.object(web.PROVIDER_REGISTRY, "available", return_value=False),
         ):
             response = self.client.post(
                 "/repondre_image",
