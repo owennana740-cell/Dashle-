@@ -27,6 +27,13 @@ def ensure_owner_token(session: dict) -> str:
 def _retention_deadline(now):
     return now + timedelta(hours=RETENTION_HOURS)
 
+
+def _scoped_idempotency_key(idempotency_key, *, user_id, owner_token_hash):
+    """Isole la déduplication d'action entre propriétaires différents."""
+    owner = "user:" + str(user_id) if user_id is not None else "visitor:" + str(owner_token_hash or "")
+    raw = owner + "|" + str(idempotency_key)[:128]
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
 def _mark_creation_failed(job_id, message):
     now = datetime.utcnow()
     with session_base() as db:
@@ -38,8 +45,9 @@ def _mark_creation_failed(job_id, message):
 
 def create_job(provider, *, prompt, user_id, owner_token_hash, conversation_id, idempotency_key):
     now = datetime.utcnow()
+    scoped_key = _scoped_idempotency_key(idempotency_key, user_id=user_id, owner_token_hash=owner_token_hash)
     with session_base() as db:
-        existing = db.query(VideoGenerationJob).filter_by(idempotency_key=idempotency_key).with_for_update().one_or_none()
+        existing = db.query(VideoGenerationJob).filter_by(idempotency_key=scoped_key).with_for_update().one_or_none()
         if existing:
             job_id = existing.id
         else:
@@ -48,7 +56,7 @@ def create_job(provider, *, prompt, user_id, owner_token_hash, conversation_id, 
                 id=job_id, user_id=user_id, owner_token_hash=owner_token_hash,
                 conversation_id=conversation_id, provider="veo", tool="video_generation",
                 status="queued", progress=None, status_message="Préparation de la génération…",
-                provider_job_id=None, idempotency_key=idempotency_key,
+                provider_job_id=None, idempotency_key=scoped_key,
                 prompt=str(prompt)[:24000], created_at=now, updated_at=now,
                 expires_at=now + timedelta(minutes=MAX_RUNTIME_MINUTES),
             ))
