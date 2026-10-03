@@ -474,7 +474,8 @@ _ROUTES_PUBLIQUES = {
     "confirmer_message", "nouvelle_conv", "conditions_utilisation",
     "health", "robots_txt", "sitemap_xml", "tarifs", "paiement_retour",
     "cinetpay_notification", "paydunya_callback", "stripe_webhook", "temps_reel", "api_temps_reel",
-    "telecharger_pdf_temps_reel", "generer_image_endpoint", "generer_pdf_endpoint", "admin", "executer_taches_cron",\n    "liste_jobs_outils", "flux_job_outil", "resultat_job_outil", "annuler_job_outil",
+    "telecharger_pdf_temps_reel", "generer_image_endpoint", "generer_pdf_endpoint", "admin", "executer_taches_cron",
+    "liste_jobs_outils", "flux_job_outil", "resultat_job_outil", "annuler_job_outil",
 }
 
 
