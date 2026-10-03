@@ -177,7 +177,7 @@ class ProviderRouteTests(unittest.TestCase):
         try:
             response = self.client.get("/api/outils/jobs/job-progress-test/flux", headers={"X-CSRF-Token": "tool-test"})
             body = response.get_data(as_text=True)
-            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.status_code, 200, f"status={response.status_code} location={response.location!r}")
             self.assertIn('"event": "action_completed"', body)
             self.assertIn('"mime_type": "video/mp4"', body)
             self.assertIn('/api/outils/jobs/job-progress-test/result', body)
