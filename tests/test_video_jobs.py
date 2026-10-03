@@ -147,10 +147,11 @@ class VideoJobPersistenceTests(unittest.TestCase):
 
         threads = [threading.Thread(target=create_from_worker) for _ in range(2)]
         try:
-            for thread in threads:
-                thread.start()
-            for thread in threads:
-                thread.join(timeout=10)
+            with patch.object(video_jobs, "session_base", concurrent_session):
+                for thread in threads:
+                    thread.start()
+                for thread in threads:
+                    thread.join(timeout=10)
             self.assertFalse(any(thread.is_alive() for thread in threads))
             self.assertEqual(errors, [])
             self.assertEqual(len(results), 2)
