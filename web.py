@@ -148,7 +148,7 @@ app.config.update(
     PERMANENT_SESSION_LIFETIME=timedelta(days=3650),
 )
 initialiser_base()
-PROVIDER_REGISTRY = ProviderRegistry(lambda: CLE_API, generer_image)
+PROVIDER_REGISTRY = ProviderRegistry(lambda: CLE_API, image_generator=lambda prompt, context: generer_image(prompt, context))
 cleanup_expired()
 _resume_jobs_video = resume_active_jobs(PROVIDER_REGISTRY.get("video_generation"))
 app.logger.info("tool=video_generation recovery_active_jobs=%s", _resume_jobs_video)
@@ -5970,7 +5970,7 @@ def securite():
 def _executer_recherche_web(message):
     provider = PROVIDER_REGISTRY.get("web_search")
     if provider is None or not PROVIDER_REGISTRY.available("web_search"):
-        raise ProviderUnavailable("La recherche Web générale n'est pas configurée sur DASHLE.")
+        raise ProviderUnavailable("aucun fournisseur de navigation Web n'est configuré sur DASHLE.")
     resultats = provider.search(message, timeout_s=35)
     if not resultats:
         raise ProviderError("Aucun résultat Web exploitable n'a été retourné.")
