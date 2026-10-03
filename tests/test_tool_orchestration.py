@@ -166,6 +166,7 @@ class ProviderRouteTests(unittest.TestCase):
             user = User(email="video-job-test@example.invalid", password_hash="test", nom="Video Job Test")
             db.add(user); db.flush()
             owner_id = user.id
+            now = datetime.utcnow()
             db.add(VideoGenerationJob(
                 id="job-progress-test", user_id=owner_id, visitor_key=None, conversation_id=None,
                 provider="gemini", tool_type="video_generation", prompt="test", status="completed",
@@ -174,6 +175,8 @@ class ProviderRouteTests(unittest.TestCase):
                 result_size_bytes=5, expires_at=now + timedelta(hours=1),
                 retention_until=now + timedelta(days=7), completed_at=now,
             ))
+        with self.client.session_transaction() as state:
+            state["user_id"] = owner_id
         try:
             response = self.client.get("/api/outils/jobs/job-progress-test/flux", headers={"X-CSRF-Token": "tool-test"})
             body = response.get_data(as_text=True)
