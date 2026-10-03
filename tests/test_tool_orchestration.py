@@ -160,14 +160,14 @@ class ProviderRouteTests(unittest.TestCase):
         self.assertIn('"tool_job_id": "job-test-123"', body)
 
     def test_video_job_flux_renders_completed_artifact(self):
-        from database import VideoGenerationJob, session_base
+        from database import User, VideoGenerationJob, session_base
         from datetime import datetime, timedelta
-        with self.client.session_transaction() as state:
-            state["user_id"] = 999
-        now = datetime.utcnow()
         with session_base() as db:
+            user = User(email="video-job-test@example.invalid", password_hash="test", nom="Video Job Test")
+            db.add(user); db.flush()
+            owner_id = user.id
             db.add(VideoGenerationJob(
-                id="job-progress-test", user_id=999, visitor_key=None, conversation_id=None,
+                id="job-progress-test", user_id=owner_id, visitor_key=None, conversation_id=None,
                 provider="gemini", tool_type="video_generation", prompt="test", status="completed",
                 progress=100.0, status_message="Génération terminée", provider_job_id="operations/test",
                 result_mime_type="video/mp4", result_filename="video.mp4", result_data=b"video",
@@ -177,13 +177,14 @@ class ProviderRouteTests(unittest.TestCase):
         try:
             response = self.client.get("/api/outils/jobs/job-progress-test/flux", headers={"X-CSRF-Token": "tool-test"})
             body = response.get_data(as_text=True)
-            self.assertEqual(response.status_code, 200, f"status={response.status_code} location={response.location!r}")
+            self.assertEqual(response.status_code, 200)
             self.assertIn('"event": "action_completed"', body)
             self.assertIn('"mime_type": "video/mp4"', body)
             self.assertIn('/api/outils/jobs/job-progress-test/result', body)
         finally:
             with session_base() as db:
                 db.query(VideoGenerationJob).filter_by(id="job-progress-test").delete()
+                db.query(User).filter_by(id=owner_id).delete()
 
     def test_image_edit_route_passes_source_image_to_provider(self):
         from tool_providers import ImageArtifact
