@@ -6198,6 +6198,29 @@ def repondre_flux():
     if not message:
         return jsonify({"erreur": "Aucun message reçu."}), 400
 
+    # Les providers absents sont signalés avant d'ouvrir le générateur SSE.
+    action_precheck = _demande_action_longue(message)
+    if action_precheck in {"video", "recherche_web"}:
+        provider_key = "video_generation" if action_precheck == "video" else "web_search"
+        if not PROVIDER_REGISTRY.available(provider_key):
+            action_id_precheck = secrets.token_hex(12)
+            label = "aucun fournisseur vidéo n'est configuré sur DASHLE." if action_precheck == "video" else "aucun fournisseur de navigation Web n'est configuré sur DASHLE."
+            started = _evenement_action(
+                "action_started", action_id_precheck, action_precheck, "preparation",
+                "Analyse de votre demande…"
+            )
+            failed = _evenement_action(
+                "action_failed", action_id_precheck, action_precheck, "provider_unavailable",
+                label, erreur=label, statut="provider_unavailable"
+            )
+            done = "data: " + json.dumps(
+                {"termine": True, "action_id": action_id_precheck, "message_id": None},
+                ensure_ascii=False
+            ) + "\n\n"
+            return Response(started + failed + done, mimetype="text/event-stream",
+                            headers={"Cache-Control":"no-cache, no-store, must-revalidate",
+                                     "Pragma":"no-cache", "X-Accel-Buffering":"no"})
+
     # --- Collecte du contexte selon le mode ---
     if user_id:
         conserver = _conserver_historique(user_id)
