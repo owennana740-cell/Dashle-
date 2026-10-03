@@ -6019,7 +6019,7 @@ def repondre():
     if intention.name == "video_generation":
         provider = PROVIDER_REGISTRY.get("video_generation")
         if provider is None or not PROVIDER_REGISTRY.available("video_generation"):
-            return jsonify({"reponse": "La génération vidéo n'est pas encore configurée sur DASHLE.",
+            return jsonify({"reponse": "La génération vidéo n'est pas encore configurée sur DASHLE : aucun fournisseur vidéo disponible.",
                             "status": "provider_unavailable"}), 501
         try:
             job = provider.create(message, timeout_s=30)
