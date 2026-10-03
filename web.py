@@ -56,7 +56,7 @@ from artifact_tools import (detecter_demande_pdf, detecter_demande_image,
                             demande_illustration_pedagogique, extraire_contenu_fourni,
                             structurer_document, rendre_pdf, generer_image, extraire_texte_structure)
 from tool_router import detect_tool_intent
-from tool_providers import ProviderError, ProviderUnavailable, ProviderTimeout, ProviderRegistry
+from tool_providers import ProviderError, ProviderUnavailable, ProviderTimeout, ProviderRegistry\nfrom video_jobs import VideoJobStore
 
 BUILD_COMMIT = os.environ.get("RENDER_GIT_COMMIT") or os.environ.get("DASHLE_BUILD_COMMIT") or "inconnu"
 BUILD_COMMIT_SHORT = BUILD_COMMIT[:12] if BUILD_COMMIT != "inconnu" else BUILD_COMMIT
@@ -170,6 +170,29 @@ IMAGE_DAILY_LIMITS = {
 def _debut_jour_suivant_utc():
     maintenant = datetime.now(timezone.utc)
     return maintenant.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+
+def _cle_visiteur_video():
+    owner = session.get("_dashle_video_owner")
+    if not owner:
+        owner = secrets.token_urlsafe(32)
+        session["_dashle_video_owner"] = owner
+        session.modified = True
+    secret = app.config.get("SECRET_KEY", "dashle")
+    return hashlib.sha256((str(secret) + "|video-owner|" + owner).encode("utf-8")).hexdigest()
+
+
+def _lancer_job_video(message, user_id, conversation_id):
+    visitor_key_hash = None if user_id else _cle_visiteur_video()
+    return VIDEO_JOB_STORE.create(
+        message, user_id=user_id, visitor_key_hash=visitor_key_hash,
+        conversation_id=conversation_id,
+    )
+
+
+def _video_job_owner():
+    user_id = session.get("user_id")
+    return user_id, None if user_id else _cle_visiteur_video()
+
 
 def _cle_visiteur_image():
     forwarded = request.headers.get("X-Forwarded-For", "")
@@ -446,7 +469,7 @@ _ROUTES_PUBLIQUES = {
     "confirmer_message", "nouvelle_conv", "conditions_utilisation",
     "health", "robots_txt", "sitemap_xml", "tarifs", "paiement_retour",
     "cinetpay_notification", "paydunya_callback", "stripe_webhook", "temps_reel", "api_temps_reel",
-    "telecharger_pdf_temps_reel", "generer_image_endpoint", "generer_pdf_endpoint", "admin", "executer_taches_cron",
+    "telecharger_pdf_temps_reel", "generer_image_endpoint", "generer_pdf_endpoint", "admin", "executer_taches_cron",\n    "liste_jobs_outils", "flux_job_outil", "resultat_job_outil", "annuler_job_outil",
 }
 
 
@@ -2743,37 +2766,42 @@ function creerSuiviAction(action) {
 }
 
 async function suivreJobOutil(bloc, jobId) {
-  try {
-    const response = await fetch('/api/outils/jobs/' + encodeURIComponent(jobId) + '/flux', {
-      headers: { 'Accept': 'text/event-stream' }, cache: 'no-store'
-    });
-    if (!response.ok || !response.body) throw new Error('Suivi du job indisponible');
-    const lecteur = response.body.getReader();
-    const decodeur = new TextDecoder();
-    let tampon = '';
-    while (true) {
-      const {done, value} = await lecteur.read();
-      if (done) break;
-      tampon += decodeur.decode(value, {stream:true});
-      const lignes = tampon.split('\n'); tampon = lignes.pop();
-      for (const ligne of lignes) {
-        if (!ligne.startsWith('data:')) continue;
-        let ev; try { ev = JSON.parse(ligne.slice(5).trim()); } catch(e) { continue; }
-        if (!ev || !ev.event) continue;
-        if (ev.action) {
+  let delai = 1500;
+  while (true) {
+    try {
+      const response = await fetch('/api/outils/jobs/' + encodeURIComponent(jobId) + '/flux', {
+        headers: { 'Accept': 'text/event-stream' }, cache: 'no-store'
+      });
+      if (!response.ok || !response.body) throw new Error('Suivi du job indisponible');
+      const lecteur = response.body.getReader();
+      const decodeur = new TextDecoder();
+      let tampon = '';
+      while (true) {
+        const {done, value} = await lecteur.read();
+        if (done) break;
+        tampon += decodeur.decode(value, {stream:true});
+        const lignes = tampon.split('\n'); tampon = lignes.pop();
+        for (const ligne of lignes) {
+          if (!ligne.startsWith('data:')) continue;
+          let ev; try { ev = JSON.parse(ligne.slice(5).trim()); } catch(e) { continue; }
+          if (!ev || !ev.event || !ev.action) continue;
           mettreAJourSuiviAction(bloc, ev.action);
-          if (ev.event === 'action_completed') finaliserSuiviAction(bloc, ev.action.result || {});
-          if (ev.event === 'action_completed' || ev.event === 'action_failed') return;
+          if (ev.event === 'action_completed') {
+            finaliserSuiviAction(bloc, ev.action.result || {});
+            return;
+          }
+          if (ev.event === 'action_failed' || ev.event === 'action_cancelled') return;
         }
       }
+      throw new Error('Flux SSE fermé');
+    } catch (e) {
+      if (['completed','failed','cancelled','expired'].includes(bloc.dataset.generationState)) return;
+      await new Promise(resolve => setTimeout(resolve, delai));
+      delai = Math.min(8000, delai * 2);
     }
-  } catch (e) {
-    mettreAJourSuiviAction(bloc, {
-      id: jobId, type:'video', event:'action_failed', step:'erreur',
-      message:'Le suivi de la génération a été interrompu.'
-    });
   }
 }
+
 
 function mettreAJourSuiviAction(bloc, action) {
   if (!bloc) return;
@@ -2917,10 +2945,11 @@ function finaliserSuiviAction(bloc, result) {
       lien.appendChild(image); contenu.appendChild(lien);
     } else if (artifact.type === 'video') {
       if (!mime.startsWith('video/')) throw new Error('MIME vidéo invalide');
+      const sourceUrl = artifact.url || url;
       const video = document.createElement('video'); video.controls = true; video.preload = 'metadata';
-      video.playsInline = true; video.className = 'dashle-video-resultat'; video.src = url;
+      video.playsInline = true; video.className = 'dashle-video-resultat'; video.src = sourceUrl;
       contenu.appendChild(video);
-      const lien = document.createElement('a'); lien.href=url; lien.download=artifact.filename || 'video-dashle.mp4'; lien.className='pdf-telechargement-chat'; lien.textContent='Ouvrir / télécharger la vidéo'; contenu.appendChild(lien);
+      const lien = document.createElement('a'); lien.href=sourceUrl; lien.download=artifact.filename || 'video-dashle.mp4'; lien.className='pdf-telechargement-chat'; lien.textContent='Ouvrir / télécharger la vidéo'; contenu.appendChild(lien);
     } else {
       const lien = document.createElement('a'); lien.href=url; lien.download=artifact.filename || 'dashle-document.pdf'; lien.className='pdf-telechargement-chat'; lien.textContent='Ouvrir / télécharger le PDF'; contenu.appendChild(lien);
     }
@@ -2930,6 +2959,39 @@ function finaliserSuiviAction(bloc, result) {
     const erreurEl=document.createElement('div'); erreurEl.className='suivi-action-etape echec'; erreurEl.textContent='✕ Le résultat n’a pas pu être affiché.'; bloc.appendChild(erreurEl);
   }
 }
+
+async function restaurerJobsOutils() {
+  try {
+    const response = await fetch('/api/outils/jobs', {cache:'no-store'});
+    if (!response.ok) return;
+    const data = await response.json();
+    const jobs = Array.isArray(data.jobs) ? data.jobs : [];
+    jobs.reverse().forEach(function(job) {
+      if (!job || !job.id) return;
+      const existing = document.querySelector('[data-job-id="' + CSS.escape(String(job.id)) + '"]');
+      if (existing) return;
+      const bloc = creerSuiviAction({
+        id: job.id, type: 'video',
+        cancelable: job.status === 'queued' || job.status === 'processing'
+      });
+      bloc.dataset.jobId = job.id;
+      bloc.dataset.generationState = job.status;
+      mettreAJourSuiviAction(bloc, {
+        id: job.id, type: 'video',
+        step: job.status === 'processing' ? 'generation' : (job.status === 'completed' ? 'termine' : 'preparation'),
+        message: job.message || 'Génération en cours…',
+        result: {progress: job.progress}
+      });
+      if (job.status === 'completed' && job.result) {
+        finaliserSuiviAction(bloc, job.result);
+      } else if (job.status === 'queued' || job.status === 'processing') {
+        bloc.dataset.toolJobFollowed = 'true';
+        suivreJobOutil(bloc, job.id);
+      }
+    });
+  } catch(e) {}
+}
+
 
 function afficherReflexion() {
   const div = document.createElement('div');
@@ -5202,7 +5264,7 @@ function syncIndicatif(){
 pays.addEventListener('change',syncIndicatif);
 pays.addEventListener('input',syncIndicatif);
 syncIndicatif();
-</script>{% endif %}
+\ntry { restaurerJobsOutils(); } catch(e) {}\n</script>{% endif %}
 </main></body></html>
 """
 
@@ -6079,56 +6141,52 @@ def _demande_action_longue(message):
     return None
 
 
+@app.route("/api/outils/jobs")
+def liste_jobs_outils():
+    user_id, visitor_key_hash = _video_job_owner()
+    return jsonify({"jobs": VIDEO_JOB_STORE.list_for_owner(
+        user_id=user_id, visitor_key_hash=visitor_key_hash
+    )})
+
+
 @app.route("/api/outils/jobs/<job_id>/flux")
 def flux_job_outil(job_id):
-    _outil_job_nettoyer()
-    user_id = session.get("user_id")
-    with _OUTIL_JOBS_LOCK:
-        job = _OUTIL_JOBS.get(job_id)
-        if job is None or (job.get("user_id") is not None and job.get("user_id") != user_id):
-            return jsonify({"status": "not_found"}), 404
-    def generate():
-        dernier = None
-        while True:
-            with _OUTIL_JOBS_LOCK:
-                current = dict(_OUTIL_JOBS.get(job_id, {}))
-            if not current:
-                yield "data: " + json.dumps({"event":"action_failed","status":"expired"}, ensure_ascii=False) + "\n\n"
-                return
-            snapshot = (
-                current.get("status"), current.get("progress"),
-                current.get("error"), current.get("result")
-            )
-            if snapshot != dernier:
-                dernier = snapshot
-                if current.get("status") in {"succeeded"}:
-                    yield "data: " + json.dumps({
-                        "event":"action_completed", "action":{"id":job_id,"type":"video","step":"termine",
-                        "message":"Génération vidéo terminée.","result":current.get("result") or {}}
-                    }, ensure_ascii=False) + "\n\n"
-                    return
-                if current.get("status") in {"failed","provider_unavailable"}:
-                    yield "data: " + json.dumps({
-                        "event":"action_failed", "action":{"id":job_id,"type":"video",
-                        "step":current.get("status"),"message":(
-                            "La génération vidéo n'est pas encore configurée sur DASHLE."
-                            if current.get("status") == "provider_unavailable"
-                            else "La génération vidéo a échoué."
-                        ),"status":current.get("status")}
-                    }, ensure_ascii=False) + "\n\n"
-                    return
-                yield "data: " + json.dumps({
-                    "event":"action_progress","action":{"id":job_id,"type":"video",
-                    "step":current.get("status") or "generation",
-                    "message":(
-                        f"Génération en cours… {current['progress']:g} %"
-                        if isinstance(current.get("progress"), (int,float))
-                        else "Génération en cours…"
-                    ),"result":{"progress":current.get("progress")}}
-                }, ensure_ascii=False) + "\n\n"
-            time.sleep(2)
-    return Response(stream_with_context(generate()), mimetype="text/event-stream",
-                    headers={"Cache-Control":"no-cache","X-Accel-Buffering":"no"})
+    user_id, visitor_key_hash = _video_job_owner()
+    generate = VIDEO_JOB_STORE.stream(
+        job_id, user_id=user_id, visitor_key_hash=visitor_key_hash
+    )
+    if generate is None:
+        return jsonify({"status": "not_found"}), 404
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.route("/api/outils/jobs/<job_id>/resultat")
+def resultat_job_outil(job_id):
+    user_id, visitor_key_hash = _video_job_owner()
+    result = VIDEO_JOB_STORE.result(
+        job_id, user_id=user_id, visitor_key_hash=visitor_key_hash
+    )
+    if result is None:
+        return jsonify({"status": "not_found"}), 404
+    data, mime_type, filename = result
+    return send_file(io.BytesIO(data), mimetype=mime_type, as_attachment=False,
+                     download_name=filename, max_age=3600)
+
+
+@app.post("/api/outils/jobs/<job_id>/annuler")
+def annuler_job_outil(job_id):
+    user_id, visitor_key_hash = _video_job_owner()
+    snapshot = VIDEO_JOB_STORE.cancel(
+        job_id, user_id=user_id, visitor_key_hash=visitor_key_hash
+    )
+    if snapshot.get("status") == "not_found":
+        return jsonify(snapshot), 404
+    return jsonify(snapshot)
+
 
 @app.route("/repondre_flux", methods=["POST"])
 def repondre_flux():
