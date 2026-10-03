@@ -6265,6 +6265,13 @@ def repondre_flux():
                             raise ProviderUnavailable("La génération d'image n'est pas configurée sur DASHLE.")
                         generated = image_provider.generate(message, contexte_action, timeout_s=90)
                         raw, mime = generated.data, generated.mime_type
+                    except ProviderUnavailable as exc:
+                        _journaliser_image(observabilite, debut_image, "error")
+                        yield _evenement_action(
+                            "action_failed", action_id, "image", "provider_unavailable",
+                            str(exc), erreur=str(exc), statut="provider_unavailable"
+                        )
+                        return
                     except Exception:
                         _journaliser_image(observabilite, debut_image, "error")
                         raise
