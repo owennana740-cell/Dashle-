@@ -1723,6 +1723,16 @@ video#apercu-fichier-media { object-fit: contain; }
 .suivi-action-image-progress .sous-titre { position:relative; margin-top:4px; color:var(--muted); font-size:13px; }
 .suivi-action-image-progress .barre { position:relative; height:5px; margin-top:13px; overflow:hidden; border-radius:99px; background:rgba(16,163,127,.10); }
 .suivi-action-image-progress .barre::after { content:""; display:block; width:38%; height:100%; border-radius:inherit; background:linear-gradient(90deg,#22c55e,#3b82f6); animation:dashleImageBar 1.8s ease-in-out infinite; }
+.suivi-action-image-progress .barre.indeterminee { width:100%; }
+.suivi-action-image-progress .barre.indeterminee::after { width:35%; animation:dashleImageBar 1.6s ease-in-out infinite; }
+.suivi-action-image-progress .barre { transition:width .25s ease; }
+.suivi-action-web-resultat { margin-top:12px; padding:13px 14px; border:1px solid var(--bordure); border-radius:14px; background:var(--fond); }
+.suivi-action-web-answer { white-space:pre-wrap; line-height:1.55; }
+.suivi-action-sources { margin:8px 0 0; padding-left:20px; }
+.suivi-action-sources a { color:var(--vert-fonce); text-decoration:none; }
+.suivi-action-sources a:hover { text-decoration:underline; }
+.dashle-video-resultat { display:block; width:min(100%,720px); max-height:480px; border-radius:14px; margin-top:4px; background:#000; }
+
 .suivi-action-image-resultat { margin-top:12px; }
 .suivi-action-image-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
 .suivi-action-image-actions button,.suivi-action-image-actions a { display:inline-flex; align-items:center; justify-content:center; min-height:38px; padding:8px 12px; border:1px solid var(--bordure); border-radius:10px; background:var(--fond); color:var(--texte); text-decoration:none; font:600 13px/1.2 inherit; cursor:pointer; }
