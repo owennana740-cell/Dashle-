@@ -1,5 +1,6 @@
 """Tests des contrats/providers réels avec réseau simulé uniquement au niveau du test."""
 import base64
+import hashlib
 import io
 import unittest
 from unittest.mock import patch
@@ -130,7 +131,7 @@ class ProviderRouteTests(unittest.TestCase):
         self.client = web.app.test_client()
         with self.client.session_transaction() as state:
             state["csrf_token"] = "tool-test"
-            state["user_id"] = 1
+            state["_dashle_video_owner"] = "route-test-owner"
 
     def test_web_search_route_renders_real_provider_sources(self):
         from tool_providers import WebSearchResult
@@ -164,9 +165,10 @@ class ProviderRouteTests(unittest.TestCase):
     def test_video_job_flux_renders_completed_artifact(self):
         from datetime import datetime, timedelta
         now = datetime.utcnow()
+        visitor_key_hash = hashlib.sha256((str(web.app.config["SECRET_KEY"]) + "|video-owner|route-test-owner").encode("utf-8")).hexdigest()
         with session_base() as db:
             db.add(VideoGenerationJob(
-                id="job-progress-test", user_id=1, visitor_key_hash=None,
+                id="job-progress-test", user_id=None, visitor_key_hash=visitor_key_hash,
                 provider="gemini", tool_type="video_generation", status="completed",
                 progress=100.0, message="Génération vidéo terminée.",
                 provider_job_id="operations/test", prompt=None, error_code=None,
