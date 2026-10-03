@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from datetime import datetime, date
 from pathlib import Path
 
-from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, LargeBinary, String, Text, UniqueConstraint, create_engine, event, inspect, text
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, LargeBinary, String, Text, UniqueConstraint, create_engine, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
 
 
@@ -30,14 +30,6 @@ if DATABASE_URL.startswith("sqlite"):
 
 engine = create_engine(DATABASE_URL, **options)
 
-if DATABASE_URL.startswith("sqlite"):
-    @event.listens_for(engine, "connect")
-    def _activer_cles_etrangeres_sqlite(dbapi_connection, _connection_record):
-        curseur = dbapi_connection.cursor()
-        try:
-            curseur.execute("PRAGMA foreign_keys=ON")
-        finally:
-            curseur.close()
 
 SessionLocale = sessionmaker(bind=engine, expire_on_commit=False)
 
