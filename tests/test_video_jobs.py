@@ -1,4 +1,6 @@
 """Tests isolés de la persistance PostgreSQL des jobs vidéo."""
+import time
+import threading
 import unittest
 from contextlib import contextmanager
 from datetime import datetime, timedelta
@@ -69,11 +71,61 @@ class VideoJobPersistenceTests(unittest.TestCase):
             conversation_id=3, idempotency_key="action-1"
         )
         self.assertEqual(first, second)
+        deadline = time.monotonic() + 2
+        while provider.create_calls < 1 and time.monotonic() < deadline:
+            time.sleep(0.01)
         self.assertEqual(provider.create_calls, 1)
         with self.Session() as db:
             job = db.get(VideoGenerationJob, first)
             self.assertEqual(job.provider_job_id, "operations/fake-1")
             self.assertEqual(job.status, "queued")
+
+
+    def test_creation_returns_without_waiting_for_provider(self):
+        started = threading.Event()
+        release = threading.Event()
+
+        class SlowProvider(FakeVideoProvider):
+            def create(self, prompt, *, timeout_s):
+                self.create_calls += 1
+                started.set()
+                release.wait(2)
+                return type("Job", (), {"job_id": "operations/slow", "status": "queued", "progress": None})()
+
+        provider = SlowProvider()
+        started_at = time.monotonic()
+        job_id = video_jobs.create_job(
+            provider, prompt="ville futuriste", user_id=7, owner_token_hash=None,
+            conversation_id=None, idempotency_key="slow-create"
+        )
+        elapsed = time.monotonic() - started_at
+        self.assertTrue(job_id)
+        self.assertLess(elapsed, 0.5)
+        self.assertTrue(started.wait(1))
+        release.set()
+
+    def test_restart_resume_recreates_queued_job_with_persisted_prompt(self):
+        now = datetime.utcnow()
+        with self.Session() as db:
+            db.add(VideoGenerationJob(
+                id="queued-restart", user_id=7, provider="veo", tool="video_generation",
+                status="queued", progress=None, status_message="Préparation de la génération…",
+                provider_job_id=None, idempotency_key="queued-restart-key",
+                prompt="reprendre cette vidéo", created_at=now, updated_at=now,
+                expires_at=now + timedelta(minutes=30),
+            ))
+            db.commit()
+        provider = FakeVideoProvider()
+        video_jobs.resume_active_jobs(provider)
+        deadline = time.monotonic() + 2
+        while provider.create_calls < 1 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertEqual(provider.create_calls, 1)
+        with self.Session() as db:
+            job = db.get(VideoGenerationJob, "queued-restart")
+            self.assertEqual(job.provider_job_id, "operations/fake-1")
+            self.assertIsNone(job.prompt)
+
 
     def test_restart_resume_uses_persisted_active_jobs(self):
         now = datetime.utcnow()
