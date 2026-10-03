@@ -24,7 +24,7 @@ from artifact_tools import (
     rendre_pdf,
     structurer_document,
 )
-from database import LibraryItem, User, VoiceTranscriptionUsage, session_base
+from database import LibraryItem, User, UserPreference, VoiceTranscriptionUsage, session_base
 
 
 FAKE_DOCUMENT_STRUCTURE = {"title":"Document test","author":"DASHLE","language":"fr","orientation":"portrait","footer":"DASHLE","sections":[{"heading":"Contenu","paragraphs":["Réponse JSON de test."],"bullets":[]}]}
@@ -79,6 +79,9 @@ class ArtifactToolsTests(unittest.TestCase):
             ).delete(synchronize_session=False)
             from database import ImageGenerationUsage
             db.query(ImageGenerationUsage).delete(synchronize_session=False)
+            db.query(UserPreference).filter(
+                UserPreference.user_id.in_([self.user_id, self.other_id])
+            ).delete(synchronize_session=False)
             db.query(User).filter(
                 User.id.in_([self.user_id, self.other_id])
             ).delete(synchronize_session=False)
