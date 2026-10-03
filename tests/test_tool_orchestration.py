@@ -1,7 +1,10 @@
 """Tests des contrats/providers réels avec réseau simulé uniquement au niveau du test."""
 import base64
+import io
 import unittest
 from unittest.mock import patch
+
+import web
 
 from tool_router import detect_tool_intent
 from tool_providers import (
@@ -118,3 +121,66 @@ class ProviderParsingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProviderRouteTests(unittest.TestCase):
+    def setUp(self):
+        web.app.config.update(TESTING=True, SESSION_COOKIE_SECURE=False)
+        self.client = web.app.test_client()
+        with self.client.session_transaction() as state:
+            state["csrf_token"] = "tool-test"
+
+    def test_web_search_route_renders_real_provider_sources(self):
+        from tool_providers import WebSearchResult
+        class FakeWeb:
+            def search(self, query, *, timeout_s):
+                return [WebSearchResult(
+                    title="Source officielle", url="https://example.com/source",
+                    snippet="Extrait", source="Example", answer="Réponse fraîche."
+                )]
+        with patch.object(web.PROVIDER_REGISTRY, "available", return_value=True),              patch.object(web.PROVIDER_REGISTRY, "get", return_value=FakeWeb()):
+            response = self.client.post(
+                "/repondre", data={"message": "Cherche sur Internet les dernières informations sur DASHLE."}
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["status"], "web_search")
+        self.assertEqual(response.json["sources"][0]["url"], "https://example.com/source")
+        self.assertEqual(response.json["reponse"], "Réponse fraîche.")
+
+    def test_video_sse_uses_provider_job_without_fake_percentage(self):
+        from tool_providers import VideoArtifact, VideoJob
+        class FakeVideo:
+            def create(self, prompt, *, timeout_s):
+                return VideoJob("operations/test-video", "queued", None)
+            def status(self, job_id, *, timeout_s):
+                return VideoJob(job_id, "succeeded", 100.0)
+            def retrieve(self, job_id, *, timeout_s):
+                return VideoArtifact(b"video-bytes", "video/mp4", "video.mp4")
+        with patch.object(web.PROVIDER_REGISTRY, "available", return_value=True),              patch.object(web.PROVIDER_REGISTRY, "get", return_value=FakeVideo()),              patch("web.time.sleep", return_value=None),              patch.object(web, "_enregistrer_element_bibliotheque", return_value=False):
+            response = self.client.post(
+                "/repondre_flux", data={"message": "Fais une vidéo d'une ville futuriste."}
+            )
+        body = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('"type": "video"', body)
+        self.assertIn('"event": "action_completed"', body)
+        self.assertIn('"mime_type": "video/mp4"', body)
+        self.assertIn('"progress": 100.0', body)
+
+    def test_image_edit_route_passes_source_image_to_provider(self):
+        from tool_providers import ImageArtifact
+        class FakeEdit:
+            def edit(self, image_bytes, mime_type, prompt, *, timeout_s):
+                self.assertEqual(image_bytes, b"fake-image")
+                self.assertEqual(mime_type, "image/png")
+                return ImageArtifact(b"edited-image", "image/png", "edited.png")
+        with patch.object(web.PROVIDER_REGISTRY, "available", return_value=True),              patch.object(web.PROVIDER_REGISTRY, "get", return_value=FakeEdit()),              patch.object(web, "_consommer_quota_image", return_value=True),              patch.object(web, "_enregistrer_element_bibliotheque", return_value=False),              patch.object(web, "detecter_type_media", return_value="image/png"):
+            response = self.client.post(
+                "/repondre_image",
+                data={"message": "Transforme cette photo en style futuriste.",
+                      "image": (io.BytesIO(b"fake-image"), "photo.png")},
+                content_type="multipart/form-data",
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["status"], "success")
+        self.assertEqual(response.json["artifact"]["filename"], "edited.png")
