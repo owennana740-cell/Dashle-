@@ -5979,7 +5979,16 @@ def _evenement_action(nom_evenement, action_id, action_type, etape, message,
 
 
 def _demande_action_longue(message):
-    """Retourne le type d'action multimédia gérée directement par le flux SSE."""
+    """Retourne l'outil choisi par le routeur naturel, avec compatibilité historique."""
+    intention = detect_tool_intent(message)
+    mapping = {
+        "video_generation": "video",
+        "web_search": "recherche_web",
+        "image_generation": "image",
+        "pdf_generation": "pdf",
+    }
+    if intention.name in mapping:
+        return mapping[intention.name]
     if detecter_demande_generation_video(message):
         return "video"
     if detecter_demande_recherche_web(message):
