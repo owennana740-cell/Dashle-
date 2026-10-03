@@ -54,6 +54,8 @@ from artifact_tools import (detecter_demande_pdf, detecter_demande_image,
                             detecter_demande_modification_image,
                             demande_illustration_pedagogique, extraire_contenu_fourni,
                             structurer_document, rendre_pdf, generer_image, extraire_texte_structure)
+from tool_router import detect_tool_intent
+from tool_providers import ProviderError, ProviderUnavailable, ProviderTimeout, ProviderRegistry
 
 BUILD_COMMIT = os.environ.get("RENDER_GIT_COMMIT") or os.environ.get("DASHLE_BUILD_COMMIT") or "inconnu"
 BUILD_COMMIT_SHORT = BUILD_COMMIT[:12] if BUILD_COMMIT != "inconnu" else BUILD_COMMIT
@@ -5830,6 +5832,28 @@ def securite():
 # Routes — endpoints IA (visiteur + connecté)
 # ---------------------------------------------------------------------------
 
+def _executer_recherche_web(message):
+    provider = PROVIDER_REGISTRY.get("web_search")
+    if provider is None or not PROVIDER_REGISTRY.available("web_search"):
+        raise ProviderUnavailable("La recherche Web générale n'est pas configurée sur DASHLE.")
+    resultats = provider.search(message, timeout_s=35)
+    if not resultats:
+        raise ProviderError("Aucun résultat Web exploitable n'a été retourné.")
+    answer = next((r.answer for r in resultats if r.answer), "").strip()
+    sources = []
+    vus = set()
+    for item in resultats:
+        if item.url and item.url not in vus:
+            vus.add(item.url)
+            sources.append({
+                "title": item.title,
+                "url": item.url,
+                "source": item.source,
+                "snippet": item.snippet,
+            })
+    return answer, sources
+
+
 @app.route("/repondre", methods=["POST"])
 def repondre():
     """Endpoint JSON synchrone, avec génération de fichiers et d'images."""
@@ -5837,17 +5861,35 @@ def repondre():
     message = request.form.get("message", "").strip()
     if not message:
         return jsonify({"reponse": ""})
-    if detecter_demande_generation_video(message):
-        return jsonify({
-            "reponse": "La génération de vidéo n’est pas disponible : aucun fournisseur vidéo n’est connecté à DASHLE.",
-            "status": "provider_unavailable",
-        }), 501
-    if detecter_demande_recherche_web(message):
-        return jsonify({
-            "reponse": "La recherche Web générale n’est pas disponible : aucun fournisseur de navigation Web n’est connecté à DASHLE.",
-            "status": "provider_unavailable",
-        }), 501
-    if detecter_demande_image(message):
+    intention = detect_tool_intent(message)
+    if intention.name == "video_generation":
+        provider = PROVIDER_REGISTRY.get("video_generation")
+        if provider is None or not PROVIDER_REGISTRY.available("video_generation"):
+            return jsonify({"reponse": "La génération vidéo n'est pas encore configurée sur DASHLE.",
+                            "status": "provider_unavailable"}), 501
+        try:
+            job = provider.create(message, timeout_s=30)
+            return jsonify({"reponse": "Génération vidéo lancée.", "status": job.status,
+                            "job_id": job.job_id, "progress": job.progress}), 202
+        except ProviderUnavailable as exc:
+            return jsonify({"reponse": str(exc), "status": "provider_unavailable"}), 501
+        except ProviderTimeout:
+            return jsonify({"reponse": "Le fournisseur vidéo n'a pas répondu à temps.", "status": "timeout"}), 504
+        except ProviderError as exc:
+            app.logger.warning("tool=video_generation provider=gemini status=error type=%s", type(exc).__name__)
+            return jsonify({"reponse": "La génération vidéo a échoué.", "status": "error"}), 502
+    if intention.name == "web_search":
+        try:
+            answer, sources = _executer_recherche_web(message)
+            return jsonify({"reponse": answer, "status": "web_search", "sources": sources})
+        except ProviderUnavailable as exc:
+            return jsonify({"reponse": str(exc), "status": "provider_unavailable"}), 501
+        except ProviderTimeout:
+            return jsonify({"reponse": "La recherche Web a dépassé le délai autorisé.", "status": "timeout"}), 504
+        except ProviderError as exc:
+            app.logger.warning("tool=web_search provider=gemini status=error type=%s", type(exc).__name__)
+            return jsonify({"reponse": "La recherche Web a échoué.", "status": "error"}), 502
+    if intention.name == "image_generation" or detecter_demande_image(message):
         bloque, quota = _quota_image_bloque(user_id)
         if bloque:
             return jsonify({"reponse": quota["message"], "quota": quota}), 429
@@ -6416,13 +6458,41 @@ def repondre_image():
         }), 400
 
     if mime_type.startswith("image/") and detecter_demande_modification_image(message):
-        return jsonify({
-            "reponse": (
-                "Je peux analyser cette image, mais sa modification directe n’est pas "
-                "disponible : aucun outil d’édition d’image n’est connecté à DASHLE."
-            ),
-            "status": "provider_unavailable",
-        }), 501
+        provider = PROVIDER_REGISTRY.get("image_editing")
+        if provider is None or not PROVIDER_REGISTRY.available("image_editing"):
+            return jsonify({
+                "reponse": "L'édition d'image n'est pas encore configurée sur DASHLE.",
+                "status": "provider_unavailable",
+            }), 501
+        if _quota_image_bloque(user_id)[0]:
+            bloque, quota = _quota_image_bloque(user_id)
+            return jsonify({"reponse": quota["message"], "quota": quota}), 429
+        try:
+            edited = provider.edit(image_bytes, mime_type, message, timeout_s=90)
+            if not _consommer_quota_image(user_id):
+                bloque, quota = _quota_image_bloque(user_id)
+                return jsonify({"reponse": quota["message"], "quota": quota}), 429
+            saved = _enregistrer_element_bibliotheque(
+                user_id, "image", "image-dashle-modifiee", edited.mime_type,
+                edited.data, conversation_id
+            ) if user_id else False
+            return jsonify({
+                "reponse": "Image modifiée par DASHLE.",
+                "status": "success",
+                "artifact": {
+                    "type": "image", "mime_type": edited.mime_type,
+                    "filename": edited.filename,
+                    "data": base64.b64encode(edited.data).decode("ascii"),
+                    "saved": saved,
+                },
+            })
+        except ProviderUnavailable as exc:
+            return jsonify({"reponse": str(exc), "status": "provider_unavailable"}), 501
+        except ProviderTimeout:
+            return jsonify({"reponse": "L'édition d'image a dépassé le délai autorisé.", "status": "timeout"}), 504
+        except ProviderError:
+            app.logger.warning("tool=image_editing provider=gemini status=error")
+            return jsonify({"reponse": "Je n'ai pas pu modifier cette image pour le moment.", "status": "error"}), 502
 
     if mime_type.startswith("image/") and PIL_DISPONIBLE:
         try:
