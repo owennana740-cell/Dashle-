@@ -6391,6 +6391,10 @@ def repondre_flux():
                         "action_progress", action_id, "image", "generation",
                         "Ton idée prend forme…"
                     )
+                    yield _evenement_action(
+                        "action_progress", action_id, "image", "generation",
+                        "Création d'une première ébauche…"
+                    )
                     debut_image = perf_counter()
                     try:
                         image_provider = PROVIDER_REGISTRY.get("image_generation")
@@ -6411,7 +6415,7 @@ def repondre_flux():
                     _journaliser_image(observabilite, debut_image, "success")
                     yield _evenement_action(
                         "action_progress", action_id, "image", "finalisation",
-                        "Finalisation…"
+                        "Finitions…"
                     )
                     if not _consommer_quota_image(user_id):
                         bloque, quota = _quota_image_bloque(user_id)

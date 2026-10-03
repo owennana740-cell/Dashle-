@@ -288,12 +288,12 @@ class ArtifactToolsTests(unittest.TestCase):
         image.assert_not_called()
 
     def test_sse_video_generation_emits_provider_unavailable_state(self):
-        with patch.object(web.PROVIDER_REGISTRY, "available", return_value=False), patch.object(web, "streamer_message") as texte, patch.object(web, "generer_image") as image:
+        with patch.object(web.PROVIDER_REGISTRY, "available", return_value=False), patch.object(web.PROVIDER_REGISTRY, "get", return_value=None), patch.object(web, "streamer_message") as texte, patch.object(web, "generer_image") as image:
             response = self.client.post(
                 "/repondre_flux", data={"message": "Génère une vidéo futuriste."},
                 headers={"X-CSRF-Token": "artifact-token"},
             )
-        body = response.get_data(as_text=True)
+            body = response.get_data(as_text=True)
         self.assertEqual(response.status_code, 200)
         self.assertIn('"status": "provider_unavailable"', body)
         self.assertIn('"step": "provider_unavailable"', body)
@@ -322,7 +322,7 @@ class ArtifactToolsTests(unittest.TestCase):
                 "/repondre_flux", data={"message": "Cherche sur le Web les sources officielles."},
                 headers={"X-CSRF-Token": "artifact-token"},
             )
-        body = response.get_data(as_text=True)
+            body = response.get_data(as_text=True)
         self.assertEqual(response.status_code, 200)
         self.assertIn('"type": "recherche_web"', body)
         self.assertIn('"status": "provider_unavailable"', body)
