@@ -81,6 +81,12 @@ class WebSearchProvider(ABC):
         raise NotImplementedError
 
 
+class ImageGenerationProvider(ABC):
+    @abstractmethod
+    def generate(self, prompt: str, context: str = "", *, timeout_s: float) -> ImageArtifact:
+        raise NotImplementedError
+
+
 class ImageEditingProvider(ABC):
     @abstractmethod
     def edit(self, image_bytes: bytes, mime_type: str, prompt: str, *, timeout_s: float) -> ImageArtifact:
@@ -119,6 +125,18 @@ def _request_json(method: str, url: str, *, api_key: str, timeout_s: float, **kw
         return response.json()
     except ValueError as exc:
         raise ProviderError("Réponse JSON invalide du fournisseur Gemini.") from exc
+
+
+class ExistingGeminiImageGenerationProvider(ImageGenerationProvider):
+    """Adaptateur du pipeline Gemini image existant, sans le réécrire."""
+    def __init__(self, generator):
+        self._generator = generator
+
+    def generate(self, prompt: str, context: str = "", *, timeout_s: float = 90) -> ImageArtifact:
+        raw, mime = self._generator(prompt, context)
+        if not raw or len(raw) > 8 * 1024 * 1024 or not str(mime).startswith("image/"):
+            raise ProviderError("Le pipeline image a retourné un artefact invalide.")
+        return ImageArtifact(data=raw, mime_type=mime, filename="image-dashle.png")
 
 
 class GeminiWebSearchProvider(WebSearchProvider):
@@ -328,8 +346,9 @@ class GeminiVideoGenerationProvider(VideoGenerationProvider):
 class ProviderRegistry:
     """Registre unique : disponibilité et contrats sont centralisés côté serveur."""
 
-    def __init__(self, api_key_getter: Callable[[], str | None]):
+    def __init__(self, api_key_getter: Callable[[], str | None], image_generator=None):
         self._providers = {
+            "image_generation": ExistingGeminiImageGenerationProvider(image_generator) if image_generator else None,
             "web_search": GeminiWebSearchProvider(api_key_getter),
             "image_editing": GeminiImageEditingProvider(api_key_getter),
             "video_generation": GeminiVideoGenerationProvider(api_key_getter),
