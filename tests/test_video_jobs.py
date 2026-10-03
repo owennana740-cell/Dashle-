@@ -1,4 +1,6 @@
 """Tests isolés de la persistance PostgreSQL des jobs vidéo."""
+import os
+import tempfile
 import time
 import threading
 import unittest
@@ -7,7 +9,6 @@ from datetime import datetime, timedelta
 from unittest.mock import Mock, patch
 
 from sqlalchemy import create_engine
-from sqlalchemy.pool import StaticPool
 from sqlalchemy.orm import sessionmaker
 
 import video_jobs
@@ -35,10 +36,11 @@ class FakeVideoProvider:
 
 class VideoJobPersistenceTests(unittest.TestCase):
     def setUp(self):
+        handle, self.db_path = tempfile.mkstemp(suffix=".db")
+        os.close(handle)
         self.engine = create_engine(
-            "sqlite+pysqlite:///:memory:",
+            "sqlite+pysqlite:///" + self.db_path,
             connect_args={"check_same_thread": False},
-            poolclass=StaticPool,
         )
         Base.metadata.create_all(self.engine)
         self.Session = sessionmaker(bind=self.engine, expire_on_commit=False)
@@ -64,6 +66,10 @@ class VideoJobPersistenceTests(unittest.TestCase):
         self.monitor_patch.stop()
         self.session_patch.stop()
         self.engine.dispose()
+        try:
+            os.unlink(self.db_path)
+        except FileNotFoundError:
+            pass
 
     def test_create_job_is_idempotent_and_persists(self):
         provider = FakeVideoProvider()
@@ -97,6 +103,10 @@ class VideoJobPersistenceTests(unittest.TestCase):
             conversation_id=None, idempotency_key="same-action"
         )
         self.assertNotEqual(first, second)
+        deadline = time.monotonic() + 2
+        while provider.create_calls < 2 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertEqual(provider.create_calls, 2)
 
     def test_creation_returns_without_waiting_for_provider(self):
         started = threading.Event()
