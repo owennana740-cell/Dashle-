@@ -242,7 +242,7 @@ def resume_active_jobs(provider):
     with session_base() as db:
         ids = [x.id for x in db.query(VideoGenerationJob).filter(VideoGenerationJob.status.in_(ACTIVE_STATUSES)).all()]
     for job_id in ids:
-        _spawn_monitor(job_id, provider)
+        _spawn_active_job(job_id, provider)
     return len(ids)
 
 def _owned(job, user_id, owner_token_hash):
