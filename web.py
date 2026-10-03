@@ -2637,8 +2637,12 @@ async function reprendreJobsVideo() {
       const bloc = creerSuiviAction({id: job.job_id, type:'video', cancelable:false});
       bloc.dataset.toolJobId = job.job_id; bloc.dataset.prompt = job.prompt || '';
       mettreAJourSuiviAction(bloc, {id: job.job_id, type:'video', step:job.status, message:job.message || 'Génération en cours…', result:{progress:job.progress}});
-      bloc.dataset.toolJobFollowed = 'true';
-      suivreJobOutil(bloc, job.job_id);
+      if (job.status === 'completed') {
+        finaliserSuiviAction(bloc, {artifact:{type:'video', mime_type:'video/mp4', filename:'video-dashle.mp4', url:'/api/outils/jobs/' + encodeURIComponent(job.job_id) + '/result'}});
+      } else {
+        bloc.dataset.toolJobFollowed = 'true';
+        suivreJobOutil(bloc, job.job_id);
+      }
     });
   } catch (e) { console.warn('[DASHLE] Reprise des jobs vidéo indisponible', e); }
 }
