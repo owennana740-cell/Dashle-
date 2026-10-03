@@ -2630,7 +2630,7 @@ function afficherMarkdownStreaming(message, texte) { message.dataset.markdownSou
 
 function afficherMarkdownInitial() { document.querySelectorAll('#chat .msg.bot').forEach(function(message) { afficherMarkdown(message, message.textContent); }); }
 document.addEventListener('DOMContentLoaded', afficherMarkdownInitial);
-document.addEventListener('DOMContentLoaded', restaurerJobsOutils);
+document.addEventListener('DOMContentLoaded', function(){ restaurerJobsOutils(); });
 function ajouterMessage(texte, classe) {
   const accueil = document.querySelector('.accueil-vide');
   if (accueil) accueil.remove();
