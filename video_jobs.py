@@ -163,7 +163,7 @@ def _persist_remote(job_id, worker, remote):
             return False
         job.status = "processing"
         job.status_message = f"Génération en cours… {remote.progress:g} %" if isinstance(remote.progress, (int, float)) else "Génération en cours…"
-        job.lease_until = now + timedelta(seconds=LEASE_SECONDS)
+        job.lease_until = now + timedelta(seconds=max(LEASE_SECONDS, 90))
     return False
 
 def _store_artifact(job_id, worker, artifact):
