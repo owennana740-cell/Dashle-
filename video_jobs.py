@@ -1,16 +1,14 @@
-"""Persistance et reprise des générations vidéo asynchrones.
-
-La base PostgreSQL est la source de vérité. Aucun état de job n'est conservé
-uniquement en mémoire et aucun secret fournisseur n'est persisté.
-"""
+"""Persistance PostgreSQL et reprise des générations vidéo asynchrones."""
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
 import uuid
-from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
+
+from sqlalchemy import and_, or_
 
 from database import VideoGenerationJob, session_base
 from tool_providers import ProviderError, ProviderUnavailable, ProviderTimeout
@@ -34,8 +32,7 @@ def _now() -> datetime:
 def _owner_matches(job: VideoGenerationJob, user_id: int | None, visitor_key_hash: str | None) -> bool:
     if job.user_id is not None:
         return user_id is not None and job.user_id == user_id
-    return bool(visitor_key_hash and job.visitor_key_hash and
-                visitor_key_hash == job.visitor_key_hash)
+    return bool(visitor_key_hash and job.visitor_key_hash and visitor_key_hash == job.visitor_key_hash)
 
 
 class VideoJobStore:
@@ -52,6 +49,8 @@ class VideoJobStore:
 
     def create(self, prompt: str, *, user_id: int | None,
                visitor_key_hash: str | None, conversation_id: int | None) -> str:
+        # Refuser immédiatement un provider absent, sans créer un job fantôme.
+        self._provider()
         job_id = uuid.uuid4().hex
         now = _now()
         with session_base() as db:
@@ -65,6 +64,7 @@ class VideoJobStore:
                 progress=None,
                 message="Préparation de la génération…",
                 provider_job_id=None,
+                prompt=str(prompt or "")[:24000],
                 error_code=None,
                 error_message=None,
                 result_data=None,
@@ -114,13 +114,7 @@ class VideoJobStore:
             if job.lease_until and job.lease_until > now:
                 return False
             if job.expires_at <= now:
-                job.status = "expired"
-                job.progress = None
-                job.message = "La génération a expiré."
-                job.error_code = "expired"
-                job.error_message = "Le délai maximal de génération a été dépassé."
-                job.completed_at = now
-                job.lease_until = None
+                self._mark_expired_locked(job, now)
                 return False
             job.status = "processing"
             job.message = "Génération en cours…"
@@ -129,6 +123,18 @@ class VideoJobStore:
             job.updated_at = now
             return True
 
+    @staticmethod
+    def _mark_expired_locked(job: VideoGenerationJob, now: datetime) -> None:
+        job.status = "expired"
+        job.progress = None
+        job.message = "La génération a expiré."
+        job.error_code = "expired"
+        job.error_message = "Le délai maximal de génération a été dépassé."
+        job.completed_at = now
+        job.lease_until = None
+        job.expires_at = now + TERMINAL_TTL
+        job.updated_at = now
+
     def _renew_lease(self, job_id: str) -> bool:
         now = _now()
         with session_base() as db:
@@ -136,43 +142,22 @@ class VideoJobStore:
             if job is None or job.status != "processing":
                 return False
             if job.expires_at <= now:
-                job.status = "expired"
-                job.progress = None
-                job.message = "La génération a expiré."
-                job.error_code = "expired"
-                job.error_message = "Le délai maximal de génération a été dépassé."
-                job.completed_at = now
-                job.lease_until = None
-                job.updated_at = now
+                self._mark_expired_locked(job, now)
                 return False
             job.lease_until = now + LEASE_DURATION
             job.last_checked_at = now
             job.updated_at = now
             return True
 
-    def _fail(self, job_id: str, code: str, message: str) -> None:
-        now = _now()
-        with session_base() as db:
-            job = db.query(VideoGenerationJob).filter_by(id=job_id).one_or_none()
-            if job is None or job.status in TERMINAL_STATUSES:
-                return
-            job.status = "failed"
-            job.progress = None
-            job.message = message[:300]
-            job.error_code = code[:60]
-            job.error_message = message[:500]
-            job.completed_at = now
-            job.lease_until = None
-            job.expires_at = now + TERMINAL_TTL
-            job.updated_at = now
-
-    def _save_provider_job(self, job_id: str, provider_job_id: str) -> None:
+    def _save_provider_job(self, job_id: str, provider_job_id: str, progress: float | None = None) -> None:
         with session_base() as db:
             job = db.query(VideoGenerationJob).filter_by(id=job_id).one_or_none()
             if job is None or job.status != "processing":
                 return
             job.provider_job_id = provider_job_id[:500]
-            job.message = "En attente du fournisseur…"
+            job.prompt = None
+            job.progress = progress
+            job.message = "En attente du fournisseur…" if progress is None else f"Génération en cours… {progress:g} %"
             job.updated_at = _now()
 
     def _update_progress(self, job_id: str, progress: float | None) -> bool:
@@ -190,6 +175,49 @@ class VideoJobStore:
             job.last_checked_at = now
             job.lease_until = now + LEASE_DURATION
             return True
+
+    def _fail(self, job_id: str, code: str, message: str) -> None:
+        now = _now()
+        with session_base() as db:
+            job = db.query(VideoGenerationJob).filter_by(id=job_id).one_or_none()
+            if job is None or job.status in TERMINAL_STATUSES:
+                return
+            job.status = "failed"
+            job.progress = None
+            job.message = message[:300]
+            job.error_code = code[:60]
+            job.error_message = message[:500]
+            job.prompt = None
+            job.completed_at = now
+            job.lease_until = None
+            job.expires_at = now + TERMINAL_TTL
+            job.updated_at = now
+
+    def _expire(self, job_id: str) -> None:
+        now = _now()
+        with session_base() as db:
+            job = db.query(VideoGenerationJob).filter_by(id=job_id).one_or_none()
+            if job is None or job.status in TERMINAL_STATUSES:
+                return
+            self._mark_expired_locked(job, now)
+            job.prompt = None
+
+    def _cancel_local(self, job_id: str, message: str) -> None:
+        now = _now()
+        with session_base() as db:
+            job = db.query(VideoGenerationJob).filter_by(id=job_id).one_or_none()
+            if job is None or job.status in TERMINAL_STATUSES:
+                return
+            job.status = "cancelled"
+            job.progress = None
+            job.message = message[:300]
+            job.error_code = "cancelled"
+            job.error_message = None
+            job.prompt = None
+            job.completed_at = now
+            job.lease_until = None
+            job.expires_at = now + TERMINAL_TTL
+            job.updated_at = now
 
     def _complete(self, job_id: str, artifact) -> None:
         data = bytes(artifact.data or b"")
@@ -209,6 +237,7 @@ class VideoJobStore:
             job.result_size_bytes = len(data)
             job.error_code = None
             job.error_message = None
+            job.prompt = None
             job.completed_at = now
             job.lease_until = None
             job.expires_at = now + TERMINAL_TTL
@@ -217,7 +246,6 @@ class VideoJobStore:
     def _process_job(self, job_id: str) -> None:
         if not self._claim(job_id):
             return
-        provider = None
         try:
             provider = self._provider()
             with session_base() as db:
@@ -225,32 +253,43 @@ class VideoJobStore:
                 if job is None or job.status != "processing":
                     return
                 provider_job_id = job.provider_job_id
+                prompt = job.prompt
 
             if not provider_job_id:
-                # Le job DB est déjà marqué processing avant l'appel externe.
-                # En cas de crash après création distante mais avant la sauvegarde
-                # de provider_job_id, on refuse toute nouvelle création au restart
-                # afin de garantir l'absence de double génération.
-                with session_base() as db:
-                    job = db.query(VideoGenerationJob).filter_by(id=job_id).one_or_none()
-                    if job is None or job.status != "processing":
-                        return
-                    provider_job_id = None
-                if provider_job_id is None:
-                    # Création externe unique pour ce job. Le provider id est
-                    # persisté immédiatement avant tout polling.
-                    created = provider.create(self._prompt_placeholder(job_id), timeout_s=30)
-                    self._save_provider_job(job_id, created.job_id)
-                    provider_job_id = created.job_id
+                if not prompt:
+                    # Crash window après création distante et avant sauvegarde de
+                    # provider_job_id : ne jamais recréer une génération à l'aveugle.
+                    self._fail(
+                        job_id, "recovery_interrupted",
+                        "La génération a été interrompue avant la sauvegarde de son identifiant fournisseur.",
+                    )
+                    return
+                created = provider.create(prompt, timeout_s=30)
+                self._save_provider_job(job_id, created.job_id, created.progress)
+                provider_job_id = created.job_id
 
             while True:
                 if not self._renew_lease(job_id):
                     return
-                current = provider.status(provider_job_id, timeout_s=20)
+                try:
+                    current = provider.status(provider_job_id, timeout_s=20)
+                except ProviderTimeout:
+                    # Timeout réseau : le job distant reste potentiellement actif.
+                    # On conserve son identifiant et on reprend le suivi.
+                    time.sleep(POLL_INTERVAL)
+                    continue
+
                 if current.status == "succeeded":
-                    artifact = provider.retrieve(provider_job_id, timeout_s=60)
+                    try:
+                        artifact = provider.retrieve(provider_job_id, timeout_s=60)
+                    except ProviderTimeout:
+                        time.sleep(POLL_INTERVAL)
+                        continue
                     self._complete(job_id, artifact)
-                    logger.info("tool=video_generation provider=gemini job_id=%s status=success", job_id)
+                    logger.info(
+                        "tool=video_generation provider=gemini job_id=%s status=success",
+                        job_id,
+                    )
                     return
                 if current.status == "failed":
                     self._fail(job_id, "provider_error", "La génération vidéo a échoué.")
@@ -262,62 +301,17 @@ class VideoJobStore:
                     return
                 time.sleep(POLL_INTERVAL)
         except ProviderUnavailable:
-            self._fail(job_id, "provider_unavailable", "La génération vidéo n'est pas encore configurée sur DASHLE.")
+            self._fail(
+                job_id, "provider_unavailable",
+                "La génération vidéo n'est pas encore configurée sur DASHLE.",
+            )
         except ProviderTimeout:
-            # Un timeout réseau n'est pas assimilé à un échec du job distant.
-            # Le worker reprend le suivi tant que le job n'est pas expiré.
-            while True:
-                with session_base() as db:
-                    job = db.query(VideoGenerationJob).filter_by(id=job_id).one_or_none()
-                    if job is None or job.status != "processing":
-                        return
-                    if job.expires_at <= _now():
-                        break
-                time.sleep(POLL_INTERVAL)
             self._expire(job_id)
         except ProviderError:
             self._fail(job_id, "provider_error", "La génération vidéo a échoué.")
         except Exception:
             logger.exception("video_job unexpected error job_id=%s", job_id)
             self._fail(job_id, "internal_error", "Le suivi de la génération vidéo a échoué.")
-
-    @staticmethod
-    def _prompt_placeholder(job_id: str) -> str:
-        # Le prompt n'est volontairement pas stocké en base. Cette méthode est
-        # remplacée par le worker wrapper lors de la création du job.
-        raise ProviderError("Le prompt de génération n'est plus disponible.")
-
-    def _expire(self, job_id: str) -> None:
-        now = _now()
-        with session_base() as db:
-            job = db.query(VideoGenerationJob).filter_by(id=job_id).one_or_none()
-            if job is None or job.status in TERMINAL_STATUSES:
-                return
-            job.status = "expired"
-            job.progress = None
-            job.message = "La génération a expiré."
-            job.error_code = "expired"
-            job.error_message = "Le délai maximal de génération a été dépassé."
-            job.completed_at = now
-            job.lease_until = None
-            job.expires_at = now + TERMINAL_TTL
-            job.updated_at = now
-
-    def _cancel_local(self, job_id: str, message: str) -> None:
-        now = _now()
-        with session_base() as db:
-            job = db.query(VideoGenerationJob).filter_by(id=job_id).one_or_none()
-            if job is None or job.status in TERMINAL_STATUSES:
-                return
-            job.status = "cancelled"
-            job.progress = None
-            job.message = message[:300]
-            job.error_code = "cancelled"
-            job.error_message = message[:500]
-            job.completed_at = now
-            job.lease_until = None
-            job.expires_at = now + TERMINAL_TTL
-            job.updated_at = now
 
     def cancel(self, job_id: str, *, user_id: int | None, visitor_key_hash: str | None) -> dict:
         now = _now()
@@ -327,10 +321,8 @@ class VideoJobStore:
                 return {"status": "not_found"}
             if job.status in TERMINAL_STATUSES:
                 return self._snapshot_dict(job)
-            provider = None
-            if job.provider_job_id:
-                provider = self.registry.get("video_generation")
             remote_cancelled = False
+            provider = self.registry.get("video_generation") if job.provider_job_id else None
             if provider is not None and job.provider_job_id:
                 try:
                     remote_cancelled = bool(provider.cancel(job.provider_job_id, timeout_s=15))
@@ -339,12 +331,12 @@ class VideoJobStore:
             job.status = "cancelled"
             job.progress = None
             job.message = (
-                "Génération annulée."
-                if remote_cancelled else
-                "Suivi arrêté. Le fournisseur peut poursuivre la génération distante."
+                "Génération annulée." if remote_cancelled
+                else "Suivi arrêté. Le fournisseur peut poursuivre la génération distante."
             )
             job.error_code = "cancelled"
             job.error_message = None
+            job.prompt = None
             job.completed_at = now
             job.lease_until = None
             job.expires_at = now + TERMINAL_TTL
@@ -370,15 +362,13 @@ class VideoJobStore:
     def _result_dict(self, job: VideoGenerationJob) -> dict | None:
         if job.status != "completed" or not job.result_data:
             return None
-        return {
-            "artifact": {
-                "type": "video",
-                "mime_type": job.result_mime_type or "video/mp4",
-                "filename": job.result_filename or "video-dashle.mp4",
-                "url": f"/api/outils/jobs/{job.id}/resultat",
-                "size_bytes": job.result_size_bytes or len(job.result_data),
-            }
-        }
+        return {"artifact": {
+            "type": "video",
+            "mime_type": job.result_mime_type or "video/mp4",
+            "filename": job.result_filename or "video-dashle.mp4",
+            "url": f"/api/outils/jobs/{job.id}/resultat",
+            "size_bytes": job.result_size_bytes or len(job.result_data),
+        }}
 
     def get(self, job_id: str, *, user_id: int | None, visitor_key_hash: str | None) -> dict | None:
         self.cleanup()
@@ -390,40 +380,39 @@ class VideoJobStore:
 
     def list_for_owner(self, *, user_id: int | None, visitor_key_hash: str | None) -> list[dict]:
         self.cleanup()
-        now = _now()
-        since = now - TERMINAL_TTL
+        since = _now() - TERMINAL_TTL
         with session_base() as db:
             query = db.query(VideoGenerationJob)
             if user_id is not None:
                 query = query.filter(VideoGenerationJob.user_id == user_id)
             else:
                 query = query.filter(VideoGenerationJob.visitor_key_hash == visitor_key_hash)
-            jobs = (
-                query.filter(
-                    (VideoGenerationJob.status.in_(ACTIVE_STATUSES)) |
-                    (VideoGenerationJob.status.in_(TERMINAL_STATUSES),
-                     VideoGenerationJob.updated_at >= since)
-                )
-                .order_by(VideoGenerationJob.created_at.desc())
-                .limit(20)
-                .all()
+            active = VideoGenerationJob.status.in_(ACTIVE_STATUSES)
+            recent_terminal = and_(
+                VideoGenerationJob.status.in_(TERMINAL_STATUSES),
+                VideoGenerationJob.updated_at >= since,
             )
+            jobs = query.filter(or_(active, recent_terminal)).order_by(
+                VideoGenerationJob.created_at.desc()
+            ).limit(20).all()
             return [self._snapshot_dict(job) for job in jobs]
 
     def stream(self, job_id: str, *, user_id: int | None, visitor_key_hash: str | None):
-        self.cleanup()
-        with session_base() as db:
-            job = db.query(VideoGenerationJob).filter_by(id=job_id).one_or_none()
-            if job is None or not _owner_matches(job, user_id, visitor_key_hash):
-                return None
+        if self.get(job_id, user_id=user_id, visitor_key_hash=visitor_key_hash) is None:
+            return None
 
         def generate():
             last = None
             heartbeat_at = time.monotonic()
             while True:
-                snapshot = self.get(job_id, user_id=user_id, visitor_key_hash=visitor_key_hash)
+                snapshot = self.get(
+                    job_id, user_id=user_id, visitor_key_hash=visitor_key_hash
+                )
                 if snapshot is None:
-                    yield self._sse("action_failed", job_id, "expired", "Ce suivi de génération n'est plus disponible.")
+                    yield self._sse(
+                        "action_failed", job_id, "expired",
+                        "Ce suivi de génération n'est plus disponible.",
+                    )
                     return
                 state = (
                     snapshot["status"], snapshot["progress"], snapshot["message"],
@@ -435,7 +424,7 @@ class VideoJobStore:
                 if snapshot["status"] in TERMINAL_STATUSES:
                     return
                 if time.monotonic() - heartbeat_at >= 15:
-                    yield ": heartbeat\n\n"
+                    yield ": heartbeat\\n\\n"
                     heartbeat_at = time.monotonic()
                 time.sleep(2)
 
@@ -443,17 +432,15 @@ class VideoJobStore:
 
     @staticmethod
     def _sse(event: str, job_id: str, step: str, message: str) -> str:
-        import json
         return "data: " + json.dumps({
             "event": event,
             "action": {
                 "id": job_id, "type": "video", "step": step,
                 "message": message, "cancelable": True,
             },
-        }, ensure_ascii=False) + "\n\n"
+        }, ensure_ascii=False) + "\\n\\n"
 
     def _event_for_snapshot(self, snapshot: dict) -> str:
-        import json
         status = snapshot["status"]
         if status == "completed":
             action = {
@@ -461,20 +448,19 @@ class VideoJobStore:
                 "message": snapshot["message"], "cancelable": False,
                 "result": snapshot["result"] or {},
             }
-            return "data: " + json.dumps({"event": "action_completed", "action": action}, ensure_ascii=False) + "\n\n"
+            return "data: " + json.dumps({"event": "action_completed", "action": action}, ensure_ascii=False) + "\\n\\n"
         if status in {"failed", "expired", "cancelled"}:
             message = snapshot["message"]
             if status == "expired":
                 message = "La génération vidéo a expiré."
             action = {
                 "id": snapshot["id"], "type": "video", "step": status,
-                "message": message, "status": (
-                    "provider_unavailable" if snapshot["error_code"] == "provider_unavailable" else status
-                ),
+                "message": message,
+                "status": "provider_unavailable" if snapshot["error_code"] == "provider_unavailable" else status,
                 "cancelable": False,
             }
-            return "data: " + json.dumps({"event": "action_failed" if status != "cancelled" else "action_cancelled",
-                                          "action": action}, ensure_ascii=False) + "\n\n"
+            event = "action_cancelled" if status == "cancelled" else "action_failed"
+            return "data: " + json.dumps({"event": event, "action": action}, ensure_ascii=False) + "\\n\\n"
         action = {
             "id": snapshot["id"], "type": "video",
             "step": "generation" if status == "processing" else "preparation",
@@ -482,7 +468,7 @@ class VideoJobStore:
             "cancelable": True,
             "result": {"progress": snapshot["progress"]},
         }
-        return "data: " + json.dumps({"event": "action_progress", "action": action}, ensure_ascii=False) + "\n\n"
+        return "data: " + json.dumps({"event": "action_progress", "action": action}, ensure_ascii=False) + "\\n\\n"
 
     def result(self, job_id: str, *, user_id: int | None, visitor_key_hash: str | None):
         with session_base() as db:
@@ -491,7 +477,11 @@ class VideoJobStore:
                 return None
             if job.status != "completed" or not job.result_data:
                 return None
-            return bytes(job.result_data), job.result_mime_type or "video/mp4", job.result_filename or "video-dashle.mp4"
+            return (
+                bytes(job.result_data),
+                job.result_mime_type or "video/mp4",
+                job.result_filename or "video-dashle.mp4",
+            )
 
     def cleanup(self) -> None:
         now = _now()
