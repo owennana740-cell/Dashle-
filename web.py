@@ -6069,44 +6069,141 @@ def repondre_flux():
             if action_type:
                 yield _evenement_action(
                     "action_started", action_id, action_type, "preparation",
-                    "Ton idée prend forme..." if action_type == "image" else (
-                        "Vérification du fournisseur vidéo..." if action_type == "video"
-                        else "Vérification du fournisseur Web..." if action_type == "recherche_web"
-                        else "Préparation du document..."
+                    "Analyse de votre demande…" if action_type in {"video", "recherche_web"} else (
+                        "Préparation de la génération…" if action_type == "image" else "Préparation du document…"
                     ),
                 )
-                if action_type in {"video", "recherche_web"}:
-                    if action_type == "video":
-                        message_indisponible = (
-                            "La génération de vidéo n’est pas disponible : "
-                            "aucun fournisseur vidéo n’est connecté à DASHLE."
+
+                if action_type == "video":
+                    provider = PROVIDER_REGISTRY.get("video_generation")
+                    if provider is None or not PROVIDER_REGISTRY.available("video_generation"):
+                        message_indisponible = "La génération vidéo n'est pas encore configurée sur DASHLE."
+                        yield _evenement_action("action_failed", action_id, "video", "provider_unavailable",
+                                                 message_indisponible, erreur=message_indisponible,
+                                                 statut="provider_unavailable")
+                        if not user_id:
+                            yield "data: " + json.dumps({"termine": True, "reponse": message_indisponible}, ensure_ascii=False) + "\n\n"
+                        else:
+                            yield "data: " + json.dumps({"termine": True}, ensure_ascii=False) + "\n\n"
+                        return
+                    try:
+                        debut_outil = perf_counter()
+                        job = provider.create(message, timeout_s=30)
+                        yield _evenement_action(
+                            "action_progress", action_id, "video", "en_attente",
+                            "En attente du fournisseur…", resultats={"job_id": job.job_id}
                         )
-                    else:
-                        message_indisponible = (
-                            "La recherche Web générale n’est pas disponible : "
-                            "aucun fournisseur de navigation Web n’est connecté à DASHLE."
+                        polls = 0
+                        while job.status not in {"succeeded", "failed", "cancelled"} and polls < 108:
+                            time.sleep(5)
+                            job = provider.status(job.job_id, timeout_s=20)
+                            polls += 1
+                            message_progress = "Génération en cours…"
+                            if job.progress is not None:
+                                message_progress = f"Génération en cours… {job.progress:g} %"
+                            yield _evenement_action(
+                                "action_progress", action_id, "video", "generation",
+                                message_progress,
+                                resultats={"job_id": job.job_id, "progress": job.progress}
+                            )
+                        if job.status != "succeeded":
+                            if polls >= 108:
+                                raise ProviderTimeout("La génération vidéo a dépassé le délai maximal de suivi.")
+                            raise ProviderError(job.error or "La génération vidéo a échoué.")
+                        artifact_video = provider.retrieve(job.job_id, timeout_s=60)
+                        app.logger.info(
+                            "tool=video_generation provider=gemini job_id=%s duration_ms=%s status=success",
+                            job.job_id, round((perf_counter() - debut_outil) * 1000, 1),
                         )
-                    message_id_indisponible = None
+                        saved = _enregistrer_element_bibliotheque(
+                            user_id, "video", "video-dashle", artifact_video.mime_type,
+                            artifact_video.data, conversation_id
+                        ) if user_id else False
+                        artifact = {
+                            "type": "video",
+                            "mime_type": artifact_video.mime_type,
+                            "filename": artifact_video.filename or "video-dashle.mp4",
+                            "data": base64.b64encode(artifact_video.data).decode("ascii"),
+                            "saved": saved,
+                        }
+                        message_action = "Génération vidéo terminée."
+                    except ProviderUnavailable as exc:
+                        yield _evenement_action("action_failed", action_id, "video", "provider_unavailable",
+                                                 str(exc), erreur=str(exc), statut="provider_unavailable")
+                        return
+                    except ProviderTimeout as exc:
+                        app.logger.warning("tool=video_generation provider=gemini status=timeout")
+                        yield _evenement_action("action_failed", action_id, "video", "erreur",
+                                                 "La génération vidéo a dépassé le délai autorisé.",
+                                                 erreur=type(exc).__name__, statut="timeout")
+                        return
+                    except ProviderError:
+                        app.logger.warning("tool=video_generation provider=gemini status=error")
+                        yield _evenement_action("action_failed", action_id, "video", "erreur",
+                                                 "La génération vidéo a échoué.",
+                                                 erreur="ProviderError", statut="error")
+                        return
+                    message_id_action = None
                     if user_id and conserver and conversation_id:
-                        message_id_indisponible = ajouter_message(
-                            user_id, conversation_id, message_indisponible, "bot"
-                        )
+                        message_id_action = ajouter_message(user_id, conversation_id, message_action, "bot")
                     yield _evenement_action(
-                        "action_failed", action_id, action_type, "provider_unavailable",
-                        message_indisponible, erreur=message_indisponible,
-                        statut="provider_unavailable",
+                        "action_completed", action_id, "video", "termine", message_action,
+                        resultats={"artifact": artifact, "message_id": message_id_action,
+                                   "conversation_id": conversation_id}
                     )
+                    payload_fin = {"termine": True, "message_id": message_id_action, "action_id": action_id}
                     if not user_id:
-                        yield "data: " + json.dumps(
-                            {"termine": True, "reponse": message_indisponible},
-                            ensure_ascii=False,
-                        ) + "\n\n"
-                    else:
-                        yield "data: " + json.dumps(
-                            {"termine": True, "message_id": message_id_indisponible},
-                            ensure_ascii=False,
-                        ) + "\n\n"
+                        payload_fin["reponse"] = message_action
+                    yield "data: " + json.dumps(payload_fin, ensure_ascii=False) + "\n\n"
                     return
+
+                if action_type == "recherche_web":
+                    try:
+                        debut_outil = perf_counter()
+                        answer, sources = _executer_recherche_web(message)
+                        app.logger.info(
+                            "tool=web_search provider=gemini duration_ms=%s status=success sources=%s",
+                            round((perf_counter() - debut_outil) * 1000, 1), len(sources),
+                        )
+                        message_action = answer or "Recherche Web effectuée."
+                        message_id_action = None
+                        if user_id and conserver and conversation_id:
+                            message_id_action = ajouter_message(user_id, conversation_id, message_action, "bot")
+                        yield _evenement_action(
+                            "action_completed", action_id, "recherche_web", "termine",
+                            message_action,
+                            resultats={"web_search": {"answer": message_action, "sources": sources},
+                                       "message_id": message_id_action, "conversation_id": conversation_id}
+                        )
+                        payload_fin = {"termine": True, "message_id": message_id_action, "action_id": action_id}
+                        if not user_id:
+                            payload_fin["reponse"] = message_action
+                        yield "data: " + json.dumps(payload_fin, ensure_ascii=False) + "\n\n"
+                        return
+                    except ProviderUnavailable as exc:
+                        yield _evenement_action("action_failed", action_id, "recherche_web",
+                                                 "provider_unavailable", str(exc), erreur=str(exc),
+                                                 statut="provider_unavailable")
+                        return
+                    except ProviderTimeout:
+                        yield _evenement_action("action_failed", action_id, "recherche_web", "erreur",
+                                                 "La recherche Web a dépassé le délai autorisé.",
+                                                 erreur="ProviderTimeout", statut="timeout")
+                        return
+                    except ProviderError:
+                        app.logger.warning("tool=web_search provider=gemini status=error")
+                        yield _evenement_action("action_failed", action_id, "recherche_web", "erreur",
+                                                 "La recherche Web a échoué.",
+                                                 erreur="ProviderError", statut="error")
+                        return
+
+                conversation_id_action = conversation_id
+                historique_action = (
+                    _messages_conversation(user_id, conversation_id_action, limite=MAX_MESSAGES_CONTEXTE)
+                    if user_id and conversation_id_action else []
+                )
+                contexte_action = "\n".join(str(x.get("texte", "")) for x in historique_action[-12:])
+
                 if action_type == "image":
                     bloque, quota = _quota_image_bloque(user_id)
                     if bloque:
@@ -6115,16 +6212,9 @@ def repondre_flux():
                             resultats={"quota": quota}, erreur=quota["message"]
                         )
                         return
-                conversation_id_action = conversation_id
-                historique_action = (
-                    _messages_conversation(user_id, conversation_id_action, limite=MAX_MESSAGES_CONTEXTE)
-                    if user_id and conversation_id_action else []
-                )
-                contexte_action = "\n".join(str(x.get("texte", "")) for x in historique_action[-12:])
-                if action_type == "image":
                     yield _evenement_action(
                         "action_progress", action_id, "image", "generation",
-                        "Création d'une première ébauche…",
+                        "Génération en cours…"
                     )
                     debut_image = perf_counter()
                     try:
@@ -6135,7 +6225,7 @@ def repondre_flux():
                     _journaliser_image(observabilite, debut_image, "success")
                     yield _evenement_action(
                         "action_progress", action_id, "image", "finalisation",
-                        "Finitions…",
+                        "Finalisation…"
                     )
                     if not _consommer_quota_image(user_id):
                         bloque, quota = _quota_image_bloque(user_id)
@@ -6148,70 +6238,54 @@ def repondre_flux():
                         user_id, "image", "image-dashle", mime, raw, conversation_id_action
                     ) if user_id else False
                     artifact = {
-                        "type": "image",
-                        "mime_type": mime,
-                        "filename": "image-dashle.png",
-                        "data": base64.b64encode(raw).decode("ascii"),
-                        "saved": saved,
+                        "type": "image", "mime_type": mime, "filename": "image-dashle.png",
+                        "data": base64.b64encode(raw).decode("ascii"), "saved": saved,
                     }
+                    message_action = "Image générée par DASHLE."
                 else:
                     yield _evenement_action(
                         "action_progress", action_id, "pdf", "contenu",
-                        "Génération du contenu…",
+                        "Génération du contenu…"
                     )
                     structure = structurer_document(
                         message, contexte_action, extraire_contenu_fourni(message)
                     )
                     yield _evenement_action(
                         "action_progress", action_id, "pdf", "mise_en_page",
-                        "Mise en page du PDF…",
+                        "Mise en page du PDF…"
                     )
                     raw = rendre_pdf(structure)
                     yield _evenement_action(
                         "action_progress", action_id, "pdf", "generation",
-                        "Génération du PDF…",
+                        "Génération du PDF…"
                     )
                     titre = secure_filename(structure["title"])[:120] or "dashle-document"
                     yield _evenement_action(
                         "action_progress", action_id, "pdf", "finalisation",
-                        "Finalisation du document…",
+                        "Finalisation du document…"
                     )
                     saved = _enregistrer_element_bibliotheque(
                         user_id, "pdf", structure["title"], "application/pdf",
                         raw, conversation_id_action
                     ) if user_id else False
                     artifact = {
-                        "type": "pdf",
-                        "mime_type": "application/pdf",
-                        "filename": titre + ".pdf",
-                        "data": base64.b64encode(raw).decode("ascii"),
-                        "saved": saved,
+                        "type": "pdf", "mime_type": "application/pdf", "filename": titre + ".pdf",
+                        "data": base64.b64encode(raw).decode("ascii"), "saved": saved,
                     }
+                    message_action = "Voici le document PDF demandé."
 
-                message_action = (
-                    "Image générée par DASHLE."
-                    if action_type == "image"
-                    else "Voici le document PDF demandé."
-                )
                 message_id_action = None
                 if user_id and conserver and conversation_id:
-                    message_id_action = ajouter_message(
-                        user_id, conversation_id, message_action, "bot"
-                    )
+                    message_id_action = ajouter_message(user_id, conversation_id, message_action, "bot")
                 yield _evenement_action(
                     "action_completed", action_id, action_type, "termine",
                     message_action,
                     resultats={
-                        "artifact": artifact,
-                        "message_id": message_id_action,
+                        "artifact": artifact, "message_id": message_id_action,
                         "conversation_id": conversation_id_action,
                     },
                 )
-                payload_fin = {
-                    "termine": True,
-                    "message_id": message_id_action,
-                    "action_id": action_id,
-                }
+                payload_fin = {"termine": True, "message_id": message_id_action, "action_id": action_id}
                 if not user_id:
                     payload_fin["reponse"] = message_action
                 yield "data: " + json.dumps(payload_fin, ensure_ascii=False) + "\n\n"
