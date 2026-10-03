@@ -160,24 +160,23 @@ class ProviderRouteTests(unittest.TestCase):
         self.assertIn('"tool_job_id": "job-test-123"', body)
 
     def test_video_job_flux_renders_completed_artifact(self):
-        from web import _OUTIL_JOBS, _OUTIL_JOBS_LOCK
-        with _OUTIL_JOBS_LOCK:
-            _OUTIL_JOBS["job-progress-test"] = {
-                "id":"job-progress-test","type":"video","status":"succeeded","progress":100.0,
-                "provider_job_id":"operations/test","result":{"artifact":{
-                    "type":"video","mime_type":"video/mp4","filename":"video.mp4","data":"dm"
-                }}, "error":None, "user_id":None, "conversation_id":None,
-                "updated_at": web.perf_counter()
-            }
-        try:
+        completed = {
+            "id": "job-progress-test", "type": "video", "status": "completed",
+            "progress": 100.0, "message": "Génération terminée.", "error": None,
+            "conversation_id": None, "filename": "video.mp4", "mime_type": "video/mp4",
+            "updated_at": 1,
+        }
+        artifact = {
+            "type": "video", "mime_type": "video/mp4",
+            "filename": "video.mp4", "url": "/api/outils/jobs/job-progress-test/result",
+        }
+        with patch.object(web, "snapshot_for_owner", return_value=completed),              patch.object(web, "result_metadata", return_value=artifact):
             response = self.client.get("/api/outils/jobs/job-progress-test/flux")
-            body = response.get_data(as_text=True)
-            self.assertEqual(response.status_code, 200)
-            self.assertIn('"event": "action_completed"', body)
-            self.assertIn('"mime_type": "video/mp4"', body)
-        finally:
-            with _OUTIL_JOBS_LOCK:
-                _OUTIL_JOBS.pop("job-progress-test", None)
+        body = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('"event": "action_completed"', body)
+        self.assertIn('"mime_type": "video/mp4"', body)
+        self.assertIn('"url": "/api/outils/jobs/job-progress-test/result"', body)
 
     def test_image_edit_route_passes_source_image_to_provider(self):
         from tool_providers import ImageArtifact
