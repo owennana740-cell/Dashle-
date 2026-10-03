@@ -130,6 +130,10 @@ class VideoJobPersistenceTests(unittest.TestCase):
         self.assertLess(elapsed, 0.5)
         self.assertTrue(started.wait(1))
         release.set()
+        deadline = time.monotonic() + 2
+        while not self.monitor_mock.called and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertTrue(self.monitor_mock.called)
 
     def test_restart_resume_recreates_queued_job_with_persisted_prompt(self):
         now = datetime.utcnow()
@@ -148,6 +152,10 @@ class VideoJobPersistenceTests(unittest.TestCase):
         while provider.create_calls < 1 and time.monotonic() < deadline:
             time.sleep(0.01)
         self.assertEqual(provider.create_calls, 1)
+        deadline = time.monotonic() + 2
+        while not self.monitor_mock.called and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertTrue(self.monitor_mock.called)
         with self.Session() as db:
             job = db.get(VideoGenerationJob, "queued-restart")
             self.assertEqual(job.provider_job_id, "operations/fake-1")
