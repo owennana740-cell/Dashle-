@@ -4,6 +4,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 
 from sqlalchemy import create_engine
+from sqlalchemy.pool import StaticPool
 from sqlalchemy.orm import sessionmaker
 
 import video_jobs
@@ -55,7 +56,7 @@ class FakeRegistry:
 class VideoJobPersistenceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+        cls.engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool)
         Base.metadata.create_all(cls.engine)
         cls.Session = sessionmaker(bind=cls.engine, expire_on_commit=False)
 
