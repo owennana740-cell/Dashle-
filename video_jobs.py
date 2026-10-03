@@ -41,34 +41,81 @@ def create_job(provider, *, prompt, user_id, owner_token_hash, conversation_id, 
     with session_base() as db:
         existing = db.query(VideoGenerationJob).filter_by(idempotency_key=idempotency_key).with_for_update().one_or_none()
         if existing:
-            return existing.id
-        job_id = secrets.token_urlsafe(24)
-        db.add(VideoGenerationJob(
-            id=job_id, user_id=user_id, owner_token_hash=owner_token_hash,
-            conversation_id=conversation_id, provider="veo", tool="video_generation",
-            status="queued", progress=None, status_message="Préparation de la génération…",
-            provider_job_id=None, idempotency_key=idempotency_key, created_at=now,
-            updated_at=now, expires_at=now + timedelta(minutes=MAX_RUNTIME_MINUTES),
-        ))
-    try:
-        remote = provider.create(prompt, timeout_s=30)
-    except (ProviderUnavailable, ProviderTimeout, ProviderError) as exc:
-        _mark_creation_failed(job_id, str(exc))
-        raise
+            job_id = existing.id
+        else:
+            job_id = secrets.token_urlsafe(24)
+            db.add(VideoGenerationJob(
+                id=job_id, user_id=user_id, owner_token_hash=owner_token_hash,
+                conversation_id=conversation_id, provider="veo", tool="video_generation",
+                status="queued", progress=None, status_message="Préparation de la génération…",
+                provider_job_id=None, idempotency_key=idempotency_key,
+                prompt=str(prompt)[:24000], created_at=now, updated_at=now,
+                expires_at=now + timedelta(minutes=MAX_RUNTIME_MINUTES),
+            ))
+    _spawn_active_job(job_id, provider)
+    LOGGER.info("tool=video_generation provider=veo job_id=%s status=queued", job_id)
+    return job_id
+
+def _persist_creation(job_id, worker, remote):
+    now = datetime.utcnow()
     with session_base() as db:
         job = db.query(VideoGenerationJob).filter_by(id=job_id).with_for_update().one_or_none()
-        if not job:
-            raise ProviderError("Job vidéo introuvable après sa création.")
-        job.provider_job_id, job.progress = remote.job_id, remote.progress
+        if not job or job.lease_owner != worker:
+            return False
+        job.provider_job_id = remote.job_id
+        job.progress = remote.progress
+        job.prompt = None
         job.status = "processing" if remote.status == "running" else "queued"
         job.status_message = (
             f"Génération en cours… {remote.progress:g} %" if isinstance(remote.progress, (int, float))
             else "En attente du fournisseur…"
         )
-        job.updated_at = datetime.utcnow()
-    _spawn_monitor(job_id, provider)
-    LOGGER.info("tool=video_generation provider=veo job_id=%s status=queued", job_id)
-    return job_id
+        job.updated_at = now
+        job.lease_owner = job.lease_until = None
+    return True
+
+def _create_remote(job_id, provider):
+    worker = _claim(job_id)
+    if worker is None:
+        return
+    try:
+        with session_base() as db:
+            job = db.get(VideoGenerationJob, job_id)
+            prompt = job.prompt if job else None
+            if job and job.lease_owner == worker:
+                job.lease_until = datetime.utcnow() + timedelta(seconds=max(LEASE_SECONDS, 60))
+        if not prompt:
+            _release(job_id, worker)
+            return
+        try:
+            remote = provider.create(prompt, timeout_s=30)
+            if _persist_creation(job_id, worker, remote):
+                _spawn_monitor(job_id, provider)
+        except (ProviderTimeout, ProviderUnavailable):
+            _release(job_id, worker)
+            LOGGER.warning("tool=video_generation provider=veo job_id=%s status=retryable_creation_error", job_id)
+        except ProviderError as exc:
+            _mark_creation_failed(job_id, str(exc))
+            LOGGER.warning("tool=video_generation provider=veo job_id=%s status=creation_error", job_id)
+    except Exception:
+        _release(job_id, worker)
+        LOGGER.exception("tool=video_generation provider=veo job_id=%s status=unexpected_creation_error", job_id)
+
+def _spawn_active_job(job_id, provider):
+    if provider is None:
+        return
+    with session_base() as db:
+        job = db.get(VideoGenerationJob, job_id)
+        if not job or job.status not in ACTIVE_STATUSES:
+            return
+        has_remote = bool(job.provider_job_id)
+    if has_remote:
+        _spawn_monitor(job_id, provider)
+    else:
+        threading.Thread(
+            target=_create_remote, args=(job_id, provider),
+            name=f"dashle-video-create-{job_id[:8]}", daemon=True
+        ).start()
 
 def _claim(job_id):
     worker, now = secrets.token_hex(16), datetime.utcnow()
