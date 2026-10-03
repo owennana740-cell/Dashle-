@@ -51,7 +51,7 @@ class VideoJobPersistenceTests(unittest.TestCase):
         self.session_patch = patch.object(video_jobs, "session_base", isolated_session)
         self.session_patch.start()
         self.monitor_patch = patch.object(video_jobs, "_spawn_monitor")
-        self.monitor_patch.start()
+        self.monitor_mock = self.monitor_patch.start()
 
     def tearDown(self):
         self.monitor_patch.stop()
@@ -88,7 +88,7 @@ class VideoJobPersistenceTests(unittest.TestCase):
         provider = FakeVideoProvider()
         count = video_jobs.resume_active_jobs(provider)
         self.assertEqual(count, 1)
-        self.monitor_patch.assert_called_once_with("restart-job", provider)
+        self.monitor_mock.assert_called_once_with("restart-job", provider)
 
     def test_provider_progress_is_persisted_without_fabrication(self):
         now = datetime.utcnow()
